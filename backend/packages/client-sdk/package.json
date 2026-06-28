@@ -1,0 +1,8 @@
+{
+  "name": "@pluto/client",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "description": "Pluto BaaS JavaScript / TypeScript client. Works in browsers, Node, React Native."
+}
