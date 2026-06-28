@@ -1,0 +1,28 @@
+# Production overlay. Use:
+#   DOMAIN=api.example.com docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+version: "3.9"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  api:
+    environment:
+      NODE_ENV: production
+    # Do not expose api directly; Caddy proxies it.
+    ports: []
+
+volumes:
+  caddy_data:
+  caddy_config:
