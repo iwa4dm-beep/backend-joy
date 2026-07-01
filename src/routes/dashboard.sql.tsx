@@ -2,13 +2,15 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Clock, History, Lock, Play, RotateCcw, Unlock } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
+import { RequireWorkspace } from "@/components/pluto/RequireWorkspace";
+import { useWorkspace } from "@/lib/pluto/workspace-context";
 import { isLive, live, type SqlHistoryEntry, type SqlResult, type SqlRunResponse } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/sql")({
-  component: SqlRunnerPage,
+  component: () => <RequireWorkspace><SqlRunnerPage /></RequireWorkspace>,
 });
 
-const SAMPLE = "-- Ctrl/⌘+Enter to run\nselect table_schema, table_name\n  from information_schema.tables\n where table_schema = 'public'\n order by table_name;";
+const SAMPLE = "-- Ctrl/⌘+Enter to run. Use $1, $2 … with the Params box for bind variables.\nselect table_schema, table_name\n  from information_schema.tables\n where table_schema = 'public'\n order by table_name;";
 
 function SqlRunnerPage() {
   const [sql, setSql] = useState(SAMPLE);
