@@ -59,29 +59,33 @@ const READ_ONLY_VERBS = new Set([
   "SELECT", "WITH", "EXPLAIN", "SHOW", "VALUES", "TABLE",
 ]);
 
-// Strip comments (-- to EOL, /* ... */) and single-quoted / dollar-quoted
-// string bodies so we can safely search for semicolons and keywords.
+// Position-preserving strip: every replaced character becomes a space
+// so that offsets into the returned string match offsets into the
+// original. This lets splitStatements slice the original sql safely.
 export function stripLiterals(sql: string): string {
-  let out = "";
+  const out: string[] = new Array(sql.length);
   let i = 0;
+  const pad = (from: number, to: number) => { for (let k = from; k < to; k++) out[k] = " "; };
   while (i < sql.length) {
     const ch = sql[i];
     const next = sql[i + 1];
 
     if (ch === "-" && next === "-") {
       const nl = sql.indexOf("\n", i);
-      out += " ";
-      i = nl < 0 ? sql.length : nl;
+      const end = nl < 0 ? sql.length : nl;
+      pad(i, end);
+      i = end;
       continue;
     }
     if (ch === "/" && next === "*") {
       const end = sql.indexOf("*/", i + 2);
-      out += " ";
-      i = end < 0 ? sql.length : end + 2;
+      const stop = end < 0 ? sql.length : end + 2;
+      pad(i, stop);
+      i = stop;
       continue;
     }
     if (ch === "'") {
-      out += "''";                  // preserve as an empty literal
+      const start = i;
       i++;
       while (i < sql.length) {
         if (sql[i] === "'") {
@@ -91,30 +95,36 @@ export function stripLiterals(sql: string): string {
         }
         i++;
       }
+      pad(start, i);
       continue;
     }
     if (ch === '"') {
-      out += ch;                    // keep identifiers intact
+      // Keep quoted identifiers intact (needed for `"user"` etc.).
+      const start = i;
+      out[i] = ch;
       i++;
-      while (i < sql.length && sql[i] !== '"') { out += sql[i]; i++; }
-      if (i < sql.length) { out += sql[i]; i++; }
+      while (i < sql.length && sql[i] !== '"') { out[i] = sql[i]; i++; }
+      if (i < sql.length) { out[i] = sql[i]; i++; }
+      void start;
       continue;
     }
     if (ch === "$") {
-      // Dollar-quoted: $tag$...$tag$
-      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i));
+      const rest = sql.slice(i);
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(rest);
       if (m) {
         const tag = m[0];
         const end = sql.indexOf(tag, i + tag.length);
-        out += " ";
-        i = end < 0 ? sql.length : end + tag.length;
+        const stop = end < 0 ? sql.length : end + tag.length;
+        pad(i, stop);
+        i = stop;
         continue;
       }
     }
-    out += ch;
+    out[i] = ch;
     i++;
   }
-  return out;
+  for (let k = 0; k < out.length; k++) if (out[k] === undefined) out[k] = " ";
+  return out.join("");
 }
 
 export function splitStatements(sql: string): Classified[] {
