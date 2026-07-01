@@ -277,6 +277,30 @@ export type SqlHistoryQuery = {
   read_only?: boolean; q?: string; limit?: number; offset?: number;
 };
 
+// ---- Schema (auto REST) ----
+export type SchemaColumn = {
+  name: string; data_type: string; udt_name: string;
+  is_nullable: boolean; has_default: boolean;
+  is_primary_key: boolean; is_unique: boolean;
+  references: { table: string; column: string } | null;
+};
+export type SchemaTable = {
+  schema: string; name: string; comment: string | null;
+  columns: SchemaColumn[]; primary_key: string[];
+  rls_enabled: boolean; policies: string[];
+  workspace_scoped: boolean;
+  privileges: { anon: string[]; authenticated: string[]; service_role: string[] };
+};
+export type SchemaEndpoint = {
+  table: string; workspace_scoped: boolean; rls_enabled: boolean;
+  primary_key: string[]; columns: string[]; methods: string[]; base: string;
+};
+export type SchemaSummary = {
+  workspace_id: string | null;
+  role: "service_role" | "authenticated";
+  endpoints: SchemaEndpoint[];
+};
+
 
 // -------- Realtime helper (WebSocket wrapper) --------
 //
