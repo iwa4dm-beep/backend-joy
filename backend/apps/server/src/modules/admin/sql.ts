@@ -25,12 +25,14 @@ import pg from "pg";
 import { z } from "zod";
 import { env } from "../../config.js";
 import { requireApiKey, requireAdmin } from "../../lib/apikey.js";
-import { logAudit } from "../../lib/audit.js";
+import { audit as logAudit } from "../../lib/audit.js";
+import { validateSql } from "../../lib/sql-validator.js";
 
 const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 5 });
 const STATEMENT_TIMEOUT_MS = 30_000;
 const MAX_ROWS_RETURNED = 5_000;
 const MAX_SQL_BYTES = 100_000;
+const MAX_BIND_PARAMS = 64;
 
 type RunResult = {
   command: string | null;
