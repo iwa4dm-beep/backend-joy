@@ -81,6 +81,23 @@ function JobsPage() {
         description="Server-side workers run as the dedicated pluto_jobs Postgres role (BYPASSRLS). Mint scoped, expiring tokens instead of sharing the service-role key."
       />
 
+      {isLive() && (
+        <div className="mb-3 text-xs inline-flex items-center gap-1.5">
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${liveConn ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`} />
+          <span className={liveConn ? "text-emerald-500" : "text-muted-foreground"}>{liveConn ? "live audit stream" : "connecting…"}</span>
+        </div>
+      )}
+      {toasts.length > 0 && (
+        <div className="mb-4 space-y-1.5">
+          {toasts.map((t) => (
+            <div key={t.id} className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400 flex items-center justify-between gap-2">
+              <span><AlertTriangle className="inline h-3 w-3 mr-1" />{t.text}</span>
+              <button onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} className="text-muted-foreground hover:text-foreground">×</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="mb-6 rounded-lg border border-border bg-card p-5">
         <div className="flex items-center gap-2 mb-1">
           <ShieldCheck className="h-4 w-4 text-primary" />
