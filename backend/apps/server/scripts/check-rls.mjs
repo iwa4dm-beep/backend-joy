@@ -30,21 +30,14 @@ const combined = perFile.map((p) => p.sql).join("\n\n");
 
 // --- Discover tables created in public with their column list --------
 const CREATE_RE = /create\s+table(?:\s+if\s+not\s+exists)?\s+public\.([a-z_][a-z0-9_]*)\s*\(([\s\S]*?)^\s*\)\s*;/gim;
-type TableFacts = {
-  name: string;
-  file: string;
-  columns: string[];
-  exempt: string | null;
-};
-const tables: TableFacts[] = [];
+const tables = [];
 for (const p of perFile) {
   CREATE_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
+  let m;
   while ((m = CREATE_RE.exec(p.sql)) !== null) {
     const name = m[1];
     const body = m[2];
     const columns = [...body.matchAll(/^\s*([a-z_][a-z0-9_]*)\s+[a-z]/gmi)].map((x) => x[1].toLowerCase());
-    // Look back a few lines for an exemption marker.
     const preceding = p.sql.slice(Math.max(0, m.index - 400), m.index);
     const ex = /--\s*@rls-exempt:\s*(.+)$/im.exec(preceding);
     tables.push({ name, file: p.file, columns, exempt: ex ? ex[1].trim() : null });
