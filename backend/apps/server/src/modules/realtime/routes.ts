@@ -18,7 +18,12 @@ import { env } from "../../config.js";
 import { verifyAccessToken } from "../../lib/jwt.js";
 
 type Sub = { channel: string; filter?: { col: string; value: string } };
-type Client = { send: (data: string) => void; subs: Sub[]; userId: string | null };
+type Client = {
+  send: (data: string) => void;
+  subs: Sub[];
+  userId: string | null;
+  isAdmin: boolean;          // service_role key + JWT with role=admin
+};
 
 const clients = new Set<Client>();
 
