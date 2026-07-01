@@ -48,7 +48,7 @@ function JobsPage() {
       const p = (e.payload ?? {}) as { actor_email?: string; target?: string; metadata?: { name?: string } };
       const label = e.event === "job_token.mint" ? "minted" : "revoked";
       const text = `${p.actor_email ?? "admin"} ${label} ${p.metadata?.name ?? p.target ?? "token"}`;
-      setToasts((prev) => [{ id: Math.random().toString(36).slice(2), text, kind: "warn" }, ...prev].slice(0, 5));
+      setToasts((prev) => [{ id: Math.random().toString(36).slice(2), text, kind: "warn" as const }, ...prev].slice(0, 5));
       void load();
     });
     return () => { off(); setLiveConn(false); };
