@@ -15,6 +15,7 @@ import { migrationRoutes } from "./modules/admin/migrations.js";
 import { jobsRoutes } from "./modules/jobs/routes.js";
 import { workspacesRoutes } from "./modules/admin/workspaces.js";
 import { sqlRunnerRoutes } from "./modules/admin/sql.js";
+import { schemaRoutes } from "./modules/admin/schema.js";
 import { env } from "./config.js";
 
 async function main() {
