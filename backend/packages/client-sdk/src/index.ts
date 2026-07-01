@@ -207,29 +207,85 @@ class Storage {
   }
 }
 
+type ChannelEvent =
+  | { type: "change"; channel: string; event: "INSERT" | "UPDATE" | "DELETE"; record: Record<string, unknown> }
+  | { type: "broadcast"; channel: string; event: string; payload: unknown };
+
+class RealtimeChannel {
+  private handlers: ((e: ChannelEvent) => void)[] = [];
+  constructor(private topic: string, private socket: RealtimeSocket) {}
+  on(cb: (e: ChannelEvent) => void) { this.handlers.push(cb); return this; }
+  subscribe() { this.socket.send({ type: "subscribe", channel: this.topic }); return this; }
+  unsubscribe() { this.socket.send({ type: "unsubscribe", channel: this.topic }); }
+  send(event: string, payload: unknown) { this.socket.send({ type: "broadcast", channel: this.topic, event, payload }); }
+  _dispatch(e: ChannelEvent) { for (const h of this.handlers) h(e); }
+  matches(chan: string) { return this.topic === chan || this.topic.startsWith(`${chan}:`); }
+}
+
+class RealtimeSocket {
+  private ws: WebSocket | null = null;
+  private queue: unknown[] = [];
+  private channels: RealtimeChannel[] = [];
+  constructor(private base: string, private anonKey: string, private token: () => string | undefined) {}
+  private ensure() {
+    if (this.ws && this.ws.readyState <= 1) return;
+    const url = this.base.replace(/^http/, "ws") + `/realtime/v1?apikey=${encodeURIComponent(this.anonKey)}` +
+      (this.token() ? `&access_token=${encodeURIComponent(this.token()!)}` : "");
+    this.ws = new WebSocket(url);
+    this.ws.onopen = () => { for (const m of this.queue.splice(0)) this.ws!.send(JSON.stringify(m)); };
+    this.ws.onmessage = (ev) => {
+      let msg: ChannelEvent; try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === "change" || msg.type === "broadcast") {
+        for (const c of this.channels) if (c.matches(msg.channel)) c._dispatch(msg);
+      }
+    };
+  }
+  send(msg: unknown) { this.ensure(); if (this.ws!.readyState === 1) this.ws!.send(JSON.stringify(msg)); else this.queue.push(msg); }
+  channel(topic: string) { const c = new RealtimeChannel(topic, this); this.channels.push(c); return c; }
+}
+
+class Functions {
+  constructor(private base: string, private headers: () => Record<string, string>) {}
+  async invoke<T = unknown>(slug: string, opts?: { body?: unknown; method?: string }) {
+    const res = await fetch(`${this.base}/functions/v1/invoke/${slug}`, {
+      method: opts?.method ?? "POST",
+      headers: { ...this.headers(), ...(opts?.body ? { "content-type": "application/json" } : {}) },
+      body: opts?.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const data = (await res.json().catch(() => null)) as T | { error: string } | null;
+    if (!res.ok) return { data: null, error: new Error((data as { error?: string })?.error ?? res.statusText) };
+    return { data: data as T, error: null };
+  }
+}
+
 export class PlutoClient {
   auth: Auth;
   storage: Storage;
+  functions: Functions;
+  realtime: RealtimeSocket;
   private base: string;
   constructor(private opts: PlutoClientOptions) {
     this.base = opts.url.replace(/\/+$/, "");
     this.auth = new Auth({
-      url: this.base,
-      anonKey: opts.anonKey,
+      url: this.base, anonKey: opts.anonKey,
       storageKey: opts.storageKey ?? "pluto.session",
       persist: opts.persistSession ?? isBrowser,
     });
-    this.storage = new Storage(this.base, () => ({ apikey: opts.anonKey, ...this.auth.authHeader() }));
+    const headers = () => ({ apikey: opts.anonKey, ...this.auth.authHeader() });
+    this.storage = new Storage(this.base, headers);
+    this.functions = new Functions(this.base, headers);
+    this.realtime = new RealtimeSocket(this.base, opts.anonKey, () => this.auth.getSession()?.access_token);
   }
   from<T = Record<string, unknown>>(table: string) {
     return new QueryBuilder<T>(this.base, table, () => ({
-      apikey: this.opts.anonKey,
-      ...this.auth.authHeader(),
+      apikey: this.opts.anonKey, ...this.auth.authHeader(),
     }));
   }
+  channel(topic: string) { return this.realtime.channel(topic); }
 }
 
 export function createPlutoClient(opts: PlutoClientOptions) {
   return new PlutoClient(opts);
 }
+
 
