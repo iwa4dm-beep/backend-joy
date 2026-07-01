@@ -53,7 +53,7 @@ type AuditCall = { action: string; status: string; target?: string | null; metad
 const auditCalls: AuditCall[] = [];
 const emitCalls: Array<{ channel: string; event: string }> = [];
 vi.mock("../lib/audit.js", () => ({
-  audit: vi.fn(async (_req: unknown, input: AuditCall) => { auditCalls.push({ status: "ok", ...input }); }),
+  audit: vi.fn(async (_req: unknown, input: AuditCall) => { auditCalls.push({ status: input.status ?? "ok", action: input.action, target: input.target, metadata: input.metadata }); }),
   emit:  vi.fn(async (channel: string, event: string) => { emitCalls.push({ channel, event }); }),
 }));
 
