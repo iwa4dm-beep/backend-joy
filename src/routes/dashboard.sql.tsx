@@ -153,6 +153,30 @@ function SqlRunnerPage() {
             className="w-full min-h-[240px] px-3 py-2 bg-background text-foreground font-mono text-[13px] leading-5 outline-none resize-vertical"
           />
 
+          <div className="border-t border-border px-3 py-2 bg-muted/20">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Bind params (JSON array — $1, $2, …)
+              </label>
+              <span className="text-[11px] text-muted-foreground">
+                Workspace: <span className="font-mono">{active.slug}</span>
+              </span>
+            </div>
+            <textarea
+              value={paramsText}
+              onChange={(e) => setParamsText(e.target.value)}
+              placeholder='e.g. [42, "hello", null]'
+              spellCheck={false}
+              className={
+                "w-full min-h-[52px] px-2 py-1.5 bg-background rounded border font-mono text-[12px] leading-4 outline-none resize-vertical " +
+                (parsedParams.ok ? "border-border" : "border-red-500/50")
+              }
+            />
+            {!parsedParams.ok && (
+              <div className="mt-1 text-[11px] text-red-400">{parsedParams.error}</div>
+            )}
+          </div>
+
           {error && (
             <div className="border-t border-border bg-red-500/5 px-3 py-2 text-sm text-red-300 flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 mt-0.5" />
