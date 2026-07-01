@@ -26,22 +26,16 @@ alter table public.schema_migrations enable row level security;
 -- service_role bypasses RLS so backend code is unaffected; authenticated
 -- callers now cannot read/write these tables even if a stray grant
 -- appears.
-do $$
-declare
-  t text;
-begin
-  for t in
-    select unnest(array[
-      'users','refresh_tokens','api_logs','oauth_accounts','schema_migrations'
-    ])
-  loop
-    execute format('drop policy if exists %I_service_only on public.%I', t, t);
-    execute format(
-      'create policy %I_service_only on public.%I for all to authenticated using (false) with check (false)',
-      t, t
-    );
-  end loop;
-end $$;
+drop policy if exists users_service_only             on public.users;
+create policy users_service_only              on public.users             for all to authenticated using (false) with check (false);
+drop policy if exists refresh_tokens_service_only    on public.refresh_tokens;
+create policy refresh_tokens_service_only     on public.refresh_tokens    for all to authenticated using (false) with check (false);
+drop policy if exists api_logs_service_only          on public.api_logs;
+create policy api_logs_service_only           on public.api_logs          for all to authenticated using (false) with check (false);
+drop policy if exists oauth_accounts_service_only    on public.oauth_accounts;
+create policy oauth_accounts_service_only     on public.oauth_accounts    for all to authenticated using (false) with check (false);
+drop policy if exists schema_migrations_service_only on public.schema_migrations;
+create policy schema_migrations_service_only  on public.schema_migrations for all to authenticated using (false) with check (false);
 
 -- edge_functions is workspace-scoped; add the missing workspace policy.
 drop policy if exists edge_functions_workspace_scope on public.edge_functions;
