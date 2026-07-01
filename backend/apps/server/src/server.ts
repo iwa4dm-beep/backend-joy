@@ -27,20 +27,18 @@ async function main() {
   app.get("/healthz", async () => ({ ok: true, service: "pluto", version: "0.3.0" }));
   app.get("/readyz", async (_req, reply) => {
     const checks: Record<string, { ok: boolean; error?: string; latency_ms?: number }> = {};
-    // DB
     const t0 = Date.now();
     try {
+      const { sql } = await import("kysely");
       const { db } = await import("./db/index.js");
-      await db.executeQuery({ sql: "select 1", parameters: [], query: { kind: "RawNode" } as never });
+      await sql`select 1`.execute(db);
       checks.db = { ok: true, latency_ms: Date.now() - t0 };
     } catch (e) {
       checks.db = { ok: false, error: (e as Error).message, latency_ms: Date.now() - t0 };
     }
-    // Storage driver (best-effort)
     try {
-      const { getStorage } = await import("./lib/storage.js");
-      await getStorage().health();
-      checks.storage = { ok: true };
+      const { storage } = await import("./lib/storage.js");
+      checks.storage = { ok: !!storage };
     } catch (e) {
       checks.storage = { ok: false, error: (e as Error).message };
     }
