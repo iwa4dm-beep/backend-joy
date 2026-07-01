@@ -204,7 +204,7 @@ export async function sqlRunnerRoutes(app: FastifyInstance) {
     const body = z.object({ sql: z.string().min(1).max(MAX_SQL_BYTES) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "invalid_body" });
     try {
-      const [res] = await runQuery(`explain (format json) ${body.data.sql}`, true);
+      const [res] = await runQuery(`explain (format json) ${body.data.sql}`, [], true);
       return { plan: res.rows[0] };
     } catch (e) {
       return reply.code(400).send({ error: "sql_error", message: e instanceof Error ? e.message : String(e) });
