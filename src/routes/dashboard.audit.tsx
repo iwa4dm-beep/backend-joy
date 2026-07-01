@@ -1,14 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Circle, Eye, RefreshCw, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Circle, Eye, RefreshCw, Search, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, live, subscribe, type AuditEvent, type RealtimeEvent } from "@/lib/pluto/live";
+import { isLive, live, subscribe, type AuditEvent, type AuditPage, type AuditQuery, type RealtimeEvent } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/audit")({
   component: AuditPage,
 });
 
-const ACTION_FILTERS = [
+const ACTION_PRESETS = [
   { label: "All actions", value: "" },
   { label: "Migrations", value: "migration.*" },
   { label: "Job tokens", value: "job_token.*" },
@@ -20,21 +20,38 @@ const STATUS_ICON = {
   dry_run: <Eye className="h-3.5 w-3.5 text-sky-500" />,
 } as const;
 
+const PAGE_SIZE = 50;
+
 function AuditPage() {
-  const [events, setEvents] = useState<AuditEvent[] | null>(null);
-  const [filter, setFilter] = useState("");
+  const [page, setPage] = useState<AuditPage | null>(null);
+  const [action, setAction] = useState("");
+  const [actor, setActor] = useState("");
+  const [status, setStatus] = useState<"" | "ok" | "error" | "dry_run">("");
+  const [text, setText] = useState("");
+  const [offset, setOffset] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [liveConn, setLiveConn] = useState(false);
 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      if (!isLive()) { setEvents(mockEvents); return; }
-      setEvents(await live.audit.list({ action: filter || undefined, limit: 200 }));
+      if (!isLive()) {
+        setPage({ items: mockEvents, total: mockEvents.length, limit: PAGE_SIZE, offset: 0, next_offset: null });
+        return;
+      }
+      const q: AuditQuery = { limit: PAGE_SIZE, offset };
+      if (action) q.action = action;
+      if (actor) q.actor = actor;
+      if (status) q.status = status;
+      if (text) q.q = text;
+      setPage(await live.audit.list(q));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-  }, [filter]);
+  }, [action, actor, status, text, offset]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Reset to first page when any filter changes.
+  useEffect(() => { setOffset(0); }, [action, actor, status, text]);
 
   useEffect(() => {
     if (!isLive()) return;
@@ -42,15 +59,34 @@ function AuditPage() {
     const off = subscribe("system:audit", (e: RealtimeEvent) => {
       const p = e.payload as unknown as AuditEvent & { ts: string };
       if (!p) return;
-      // Client-side action filter (server already filters on load).
-      if (filter) {
-        const prefix = filter.replace(/\*$/, "");
+      // Only prepend live events when viewing the first page with no filters that would exclude them.
+      if (offset !== 0) return;
+      if (action) {
+        const prefix = action.replace(/\*$/, "");
         if (!p.action.startsWith(prefix)) return;
       }
-      setEvents((prev) => [{ ...p, id: p.id ?? Math.random().toString(36).slice(2) }, ...(prev ?? [])].slice(0, 200));
+      if (status && p.status !== status) return;
+      if (actor && !(p.actor_email ?? "").toLowerCase().includes(actor.toLowerCase())) return;
+      if (text) {
+        const t = text.toLowerCase();
+        const hit = p.action.toLowerCase().includes(t)
+                 || (p.target ?? "").toLowerCase().includes(t)
+                 || (p.actor_email ?? "").toLowerCase().includes(t);
+        if (!hit) return;
+      }
+      setPage((prev) => prev ? {
+        ...prev,
+        items: [{ ...p, id: p.id ?? Math.random().toString(36).slice(2) }, ...prev.items].slice(0, PAGE_SIZE),
+        total: prev.total + 1,
+      } : prev);
     });
     return () => { off(); setLiveConn(false); };
-  }, [filter]);
+  }, [action, actor, status, text, offset]);
+
+  const items = page?.items ?? [];
+  const total = page?.total ?? 0;
+  const pageIdx = Math.floor(offset / PAGE_SIZE) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div>
@@ -59,16 +95,30 @@ function AuditPage() {
         description="Every privileged dashboard action: migration runs, rollbacks, and job-token mint / revoke, streamed live."
       />
 
-      <div className="flex items-center gap-3 mb-4">
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <select value={action} onChange={(e) => setAction(e.target.value)}
           className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
-          {ACTION_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+          {ACTION_PRESETS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
         </select>
+        <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}
+          className="rounded-md border border-input bg-background px-3 py-1.5 text-sm">
+          <option value="">Any status</option>
+          <option value="ok">ok</option>
+          <option value="error">error</option>
+          <option value="dry_run">dry_run</option>
+        </select>
+        <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder="Actor email…"
+          className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-48" />
+        <div className="relative">
+          <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search action / target…"
+            className="rounded-md border border-input bg-background pl-7 pr-3 py-1.5 text-sm w-64" />
+        </div>
         <button onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent">
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
         </button>
         {isLive() && (
-          <span className="text-xs inline-flex items-center gap-1.5">
+          <span className="text-xs inline-flex items-center gap-1.5 ml-auto">
             <span className={`inline-block h-1.5 w-1.5 rounded-full ${liveConn ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`} />
             <span className={liveConn ? "text-emerald-500" : "text-muted-foreground"}>{liveConn ? "live" : "connecting…"}</span>
           </span>
@@ -89,7 +139,7 @@ function AuditPage() {
             </tr>
           </thead>
           <tbody>
-            {(events ?? []).map((e) => (
+            {items.map((e) => (
               <tr key={e.id} className="border-t border-border align-top">
                 <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{new Date(e.ts).toLocaleString()}</td>
                 <td className="px-3 py-2">
@@ -110,11 +160,27 @@ function AuditPage() {
                 </td>
               </tr>
             ))}
-            {events && events.length === 0 && (
-              <tr><td className="px-3 py-6 text-center text-xs text-muted-foreground" colSpan={5}>No events yet.</td></tr>
+            {page && items.length === 0 && (
+              <tr><td className="px-3 py-6 text-center text-xs text-muted-foreground" colSpan={5}>No events match these filters.</td></tr>
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between mt-3 text-xs text-muted-foreground">
+        <div>{total.toLocaleString()} event{total === 1 ? "" : "s"} · page {pageIdx} / {pageCount}</div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+            disabled={offset === 0}
+            className="inline-flex items-center gap-1 rounded-md border border-input px-2 py-1 hover:bg-accent disabled:opacity-40"
+          ><ChevronLeft className="h-3 w-3" /> Prev</button>
+          <button
+            onClick={() => setOffset(offset + PAGE_SIZE)}
+            disabled={!page?.next_offset}
+            className="inline-flex items-center gap-1 rounded-md border border-input px-2 py-1 hover:bg-accent disabled:opacity-40"
+          >Next <ChevronRight className="h-3 w-3" /></button>
+        </div>
       </div>
     </div>
   );
