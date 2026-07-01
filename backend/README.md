@@ -58,9 +58,11 @@ host — postgres, minio, and the api sit on the internal docker network.
 - [x] Auth module — argon2id + JWT + rotating refresh tokens (Phase 2)
 - [x] REST auto-generator — PostgREST-style, RLS via `pluto.user_id` GUC (Phase 2)
 - [x] `@pluto/client` SDK — fetch-based, browser/node/edge (Phase 2)
-- [x] Storage module — local + S3 drivers, buckets, signed URLs, public objects (Phase 3)
+- [x] Storage module — local + S3 drivers, buckets, signed URLs (Phase 3)
 - [x] Admin API — users, tables, SQL runner, logs, stats (Phase 3)
-- [ ] Realtime, Edge Functions, OAuth (Phase 5+)
+- [x] Realtime — WebSocket + Postgres LISTEN/NOTIFY, table changes + broadcast (Phase 5)
+- [x] Edge Functions — deploy JS, invoke via HTTP, public or api-key gated (Phase 5)
+- [x] OAuth — Google + GitHub sign-in (Phase 5)
 
 ## Using `@pluto/client`
 
