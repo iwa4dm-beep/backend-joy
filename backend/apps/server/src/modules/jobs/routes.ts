@@ -26,7 +26,8 @@ import pg from "pg";
 import { z } from "zod";
 import { env } from "../../config.js";
 import { db } from "../../db/index.js";
-import { requireApiKey, requireServiceRole } from "../../lib/apikey.js";
+import { requireApiKey, requireAdmin } from "../../lib/apikey.js";
+import { audit } from "../../lib/audit.js";
 import { log } from "../../lib/logs.js";
 
 // Dedicated low-privilege pool. Credentials come from env; if unset we
@@ -59,10 +60,10 @@ async function loadTokenFromHeader(req: { headers: Record<string, unknown> }) {
 }
 
 export async function jobsRoutes(app: FastifyInstance) {
-  // --- admin surface ---
+  // --- admin surface (strict: service role + active admin session) ---
   app.register(async (scoped) => {
     scoped.addHook("preHandler", requireApiKey);
-    scoped.addHook("preHandler", async (req, reply) => { requireServiceRole(req, reply); });
+    scoped.addHook("preHandler", async (req, reply) => { requireAdmin(req, reply); });
 
     scoped.post("/tokens", async (req, reply) => {
       const body = z.object({
@@ -81,9 +82,14 @@ export async function jobsRoutes(app: FastifyInstance) {
         created_by: req.auth?.user?.sub ?? null,
         expires_at: expiresAt,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any).returning(["id", "name", "expires_at"] as never).executeTakeFirst();
+      } as any).returning(["id", "name", "expires_at"] as never).executeTakeFirst() as unknown as { id: string; name: string; expires_at: string };
 
       await log("admin", "warn", `minted job token ${body.data.name}`, req.auth?.user?.sub ?? null);
+      await audit(req, {
+        action: "job_token.mint",
+        target: inserted?.id ?? null,
+        metadata: { name: body.data.name, scope: body.data.scope, expires_at: inserted?.expires_at },
+      });
       // Plaintext is shown ONCE — the dashboard must warn the operator.
       return { ...inserted, token: plaintext };
     });
@@ -102,6 +108,7 @@ export async function jobsRoutes(app: FastifyInstance) {
         .set({ revoked_at: new Date() } as any)
         .where("id" as never, "=", id).execute();
       await log("admin", "warn", `revoked job token ${id}`, req.auth?.user?.sub ?? null);
+      await audit(req, { action: "job_token.revoke", target: id });
       return { ok: true };
     });
   });

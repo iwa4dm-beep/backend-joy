@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Copy, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, live, type JobToken } from "@/lib/pluto/live";
+import { isLive, live, subscribe, type JobToken, type RealtimeEvent } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/jobs")({
   component: JobsPage,
@@ -15,6 +15,8 @@ const TTL_PRESETS = [
   { label: "90 days", value: 86400 * 90 },
 ];
 
+type Toast = { id: string; text: string; kind: "info" | "warn" };
+
 function JobsPage() {
   const [tokens, setTokens] = useState<JobToken[] | null>(null);
   const [name, setName] = useState("");
@@ -23,6 +25,8 @@ function JobsPage() {
   const [newSecret, setNewSecret] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [liveConn, setLiveConn] = useState(false);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -33,6 +37,22 @@ function JobsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Live: react to job_token.* audit events so revocations from other
+  // admin sessions surface immediately.
+  useEffect(() => {
+    if (!isLive()) return;
+    setLiveConn(true);
+    const off = subscribe("system:audit", (e: RealtimeEvent) => {
+      if (!e.event.startsWith("job_token.")) return;
+      const p = (e.payload ?? {}) as { actor_email?: string; target?: string; metadata?: { name?: string } };
+      const label = e.event === "job_token.mint" ? "minted" : "revoked";
+      const text = `${p.actor_email ?? "admin"} ${label} ${p.metadata?.name ?? p.target ?? "token"}`;
+      setToasts((prev) => [{ id: Math.random().toString(36).slice(2), text, kind: "warn" as const }, ...prev].slice(0, 5));
+      void load();
+    });
+    return () => { off(); setLiveConn(false); };
+  }, [load]);
 
   async function mint() {
     if (!name.trim()) return;
@@ -60,6 +80,23 @@ function JobsPage() {
         title="Pool user & job tokens"
         description="Server-side workers run as the dedicated pluto_jobs Postgres role (BYPASSRLS). Mint scoped, expiring tokens instead of sharing the service-role key."
       />
+
+      {isLive() && (
+        <div className="mb-3 text-xs inline-flex items-center gap-1.5">
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${liveConn ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`} />
+          <span className={liveConn ? "text-emerald-500" : "text-muted-foreground"}>{liveConn ? "live audit stream" : "connecting…"}</span>
+        </div>
+      )}
+      {toasts.length > 0 && (
+        <div className="mb-4 space-y-1.5">
+          {toasts.map((t) => (
+            <div key={t.id} className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400 flex items-center justify-between gap-2">
+              <span><AlertTriangle className="inline h-3 w-3 mr-1" />{t.text}</span>
+              <button onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))} className="text-muted-foreground hover:text-foreground">×</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="mb-6 rounded-lg border border-border bg-card p-5">
         <div className="flex items-center gap-2 mb-1">
