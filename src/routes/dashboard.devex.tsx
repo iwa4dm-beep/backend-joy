@@ -68,8 +68,7 @@ function DevexPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Developer Experience"
-        description="Project templates, personal access tokens, outbound webhooks and installed plugins (Phase 19)"
-        icon={KeyRound} />
+        description="Project templates, personal access tokens, outbound webhooks and installed plugins (Phase 19)" />
       <div className="flex justify-end">
         <button onClick={() => void load()}
           className="inline-flex items-center gap-2 text-sm rounded-md border border-border px-3 py-1.5 hover:bg-accent">
