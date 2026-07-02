@@ -16,6 +16,32 @@ export async function adminRoutes(app: FastifyInstance) {
   // an admin JWT. A leaked API key alone cannot mutate anything.
   app.addHook("preHandler", async (req, reply) => { requireAdmin(req, reply); });
 
+  // Blanket audit hook: every admin request (GET included) is recorded
+  // so that read access to sensitive endpoints (users list, audit trail,
+  // key list, settings) is traceable, not just the mutations. Handler-
+  // level `logAudit(...)` calls layer richer metadata on top.
+  app.addHook("onResponse", async (req, reply) => {
+    // Skip when auth failed — requireAdmin already returned 401/403 and
+    // we don't want to spam audit_events with rejected preflights.
+    if (!req.auth || reply.statusCode >= 400 && reply.statusCode < 500 && !req.auth.user) return;
+    const method = req.method.toLowerCase();
+    if (method === "options" || method === "head") return;
+    await logAudit(req, {
+      action: `admin.${method}`,
+      target: req.routeOptions?.url ?? req.url,
+      status: reply.statusCode >= 400 ? "error" : "ok",
+      metadata: {
+        method: req.method,
+        path: req.url,
+        status: reply.statusCode,
+        workspace_id: req.auth.workspaceId,
+        response_ms: reply.elapsedTime ? Math.round(reply.elapsedTime) : undefined,
+      },
+    });
+  });
+
+
+
   app.get("/users", async () => {
     return db.selectFrom("users")
       .select(["id", "email", "role", "email_verified", "created_at"])
@@ -63,17 +89,44 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/sql", async (req, reply) => {
     const body = z.object({ sql: z.string().min(1).max(50000) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "invalid_body" });
+    const started = Date.now();
+    // Extract leading verb for audit metadata without storing the
+    // full statement (which could contain sensitive data).
+    const verb = (body.data.sql.trim().match(/^[A-Za-z]+/)?.[0] ?? "unknown").toLowerCase();
     const client = await adminPool.connect();
     try {
       const res = await client.query(body.data.sql);
       const arr = Array.isArray(res) ? res : [res];
+      const rowCount = arr.reduce((n, r) => n + (r.rowCount ?? 0), 0);
+      await logAudit(req, {
+        action: "sql_runner.execute",
+        status: "ok",
+        metadata: {
+          verb, statements: arr.length, row_count: rowCount,
+          sql_length: body.data.sql.length,
+          duration_ms: Date.now() - started,
+          workspace_id: req.auth?.workspaceId,
+          ip: req.ip, user_agent: req.headers["user-agent"],
+        },
+      });
       return arr.map((r) => ({ rowCount: r.rowCount, rows: r.rows ?? [], command: r.command }));
     } catch (e) {
-      return reply.code(400).send({ error: "sql_error", message: e instanceof Error ? e.message : String(e) });
+      const message = e instanceof Error ? e.message : String(e);
+      await logAudit(req, {
+        action: "sql_runner.execute",
+        status: "error",
+        metadata: {
+          verb, sql_length: body.data.sql.length, duration_ms: Date.now() - started,
+          workspace_id: req.auth?.workspaceId, error: message,
+          ip: req.ip, user_agent: req.headers["user-agent"],
+        },
+      });
+      return reply.code(400).send({ error: "sql_error", message });
     } finally {
       client.release();
     }
   });
+
 
   app.get("/logs", async (req) => {
     const q = (req.query ?? {}) as { source?: string; level?: string; limit?: string };
@@ -201,7 +254,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.delete("/workspaces/:id/keys/:keyId", async (req, reply) => {
     const { id, keyId } = req.params as { id: string; keyId: string };
     const r = await adminPool.query(
-      `update public.workspace_api_keys set revoked_at = now()
+      `update public.workspace_api_keys set revoked_at = now(), status = 'revoked'
         where id = $1 and workspace_id = $2 and revoked_at is null
        returning id`,
       [keyId, id],
@@ -266,5 +319,102 @@ export async function adminRoutes(app: FastifyInstance) {
     await logAudit(req, { action: "settings.delete", target: key, status: "ok", metadata: { workspace_id: wsId } });
     return { ok: true };
   });
+
+  // ============================================================
+  // API key ROTATION w/ grace period
+  //
+  // POST /workspaces/:id/keys/:keyId/rotate { grace_seconds?: number }
+  //   → mints a NEW key of the same kind, links it via rotated_from_id,
+  //     marks the OLD key as `status = 'rotating'` with a
+  //     `grace_expires_at` in the future. During the grace window,
+  //     apikey.ts accepts BOTH keys so clients can swap credentials
+  //     without downtime. When the window elapses the old key stops
+  //     resolving on the next request (cache bust below is immediate;
+  //     natural expiry is enforced by resolveKey()).
+  //
+  // POST /workspaces/:id/keys/:keyId/finalize
+  //   → immediately revokes the predecessor of a rotation, ending
+  //     the grace window early.
+  // ============================================================
+  app.post("/workspaces/:id/keys/:keyId/rotate", async (req, reply) => {
+    const { id, keyId } = req.params as { id: string; keyId: string };
+    const body = z.object({
+      grace_seconds: z.number().int().min(0).max(7 * 86400).optional().default(86400),
+      name:          z.string().min(1).max(80).optional(),
+    }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: "invalid_body", issues: body.error.issues });
+
+    const client = await adminPool.connect();
+    try {
+      await client.query("begin");
+      const src = await client.query<{ id: string; kind: "anon" | "service_role"; name: string; status: string }>(
+        `select id, kind, name, status from public.workspace_api_keys
+          where id = $1 and workspace_id = $2 for update`,
+        [keyId, id],
+      );
+      if (src.rowCount === 0) { await client.query("rollback"); return reply.code(404).send({ error: "not_found" }); }
+      if (src.rows[0].status !== "active") {
+        await client.query("rollback");
+        return reply.code(409).send({ error: "not_rotatable", status: src.rows[0].status });
+      }
+      const kind = src.rows[0].kind;
+      const secret = randomBytes(32).toString("base64url");
+      const plaintext = `pk_${kind === "service_role" ? "svc" : "anon"}_${secret}`;
+      const prefix    = plaintext.slice(0, 12);
+      const newId     = crypto.randomUUID();
+      const grace     = new Date(Date.now() + body.data.grace_seconds * 1000);
+
+      await client.query(
+        `insert into public.workspace_api_keys
+           (id, workspace_id, kind, name, key_prefix, key_hash, created_by, status, rotated_from_id)
+         values ($1,$2,$3,$4,$5,$6,$7,'active',$8)`,
+        [newId, id, kind, body.data.name ?? `${src.rows[0].name} (rotated)`, prefix,
+         sha256(plaintext), req.auth?.user?.sub ?? null, keyId],
+      );
+      await client.query(
+        `update public.workspace_api_keys
+            set status = 'rotating', grace_expires_at = $1, rotated_to_id = $2
+          where id = $3`,
+        [grace, newId, keyId],
+      );
+      await client.query("commit");
+      bustKeyCache();
+      await logAudit(req, {
+        action: "api_key.rotate", target: keyId, status: "ok",
+        metadata: {
+          workspace_id: id, kind, new_key_id: newId,
+          grace_expires_at: grace.toISOString(),
+          grace_seconds: body.data.grace_seconds,
+        },
+      });
+      return reply.code(201).send({
+        rotated_from: keyId,
+        new_key: { id: newId, kind, name: body.data.name ?? `${src.rows[0].name} (rotated)`, key_prefix: prefix, plaintext },
+        grace_expires_at: grace.toISOString(),
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => undefined);
+      throw e;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post("/workspaces/:id/keys/:keyId/finalize", async (req, reply) => {
+    const { id, keyId } = req.params as { id: string; keyId: string };
+    const r = await adminPool.query(
+      `update public.workspace_api_keys
+          set status = 'revoked', revoked_at = coalesce(revoked_at, now()),
+              grace_expires_at = now()
+        where id = $1 and workspace_id = $2 and status = 'rotating'
+       returning id`,
+      [keyId, id],
+    );
+    if (r.rowCount === 0) return reply.code(404).send({ error: "not_rotating_or_not_found" });
+    bustKeyCache();
+    await logAudit(req, { action: "api_key.finalize_rotation", target: keyId, status: "ok", metadata: { workspace_id: id } });
+    return { ok: true };
+  });
 }
+
 

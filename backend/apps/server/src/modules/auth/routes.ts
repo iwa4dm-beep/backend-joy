@@ -1,12 +1,19 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import argon2 from "argon2";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import { env } from "../../config.js";
-import { signAccessToken, verifyAccessToken } from "../../lib/jwt.js";
+import { signAccessToken } from "../../lib/jwt.js";
 import { requireApiKey } from "../../lib/apikey.js";
 import { log } from "../../lib/logs.js";
+import { preCheck, recordFailure, recordSuccess } from "../../lib/ratelimit.js";
+
+function limited(reply: FastifyReply, retryAfterSec: number, reason: string) {
+  reply.header("Retry-After", String(retryAfterSec));
+  return reply.code(429).send({ error: "rate_limited", reason, retry_after_sec: retryAfterSec });
+}
+type Req = FastifyRequest;
 
 const credsSchema = z.object({
   email: z.string().email().max(255),
@@ -67,18 +74,30 @@ export async function authRoutes(app: FastifyInstance) {
     return { user: { ...user, email_verified: false }, session };
   });
 
-  app.post("/sign-in", async (req, reply) => {
+  app.post("/sign-in", async (req: Req, reply) => {
     const parsed = credsSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
     const { email, password } = parsed.data;
 
+    // Brute-force gate: per-IP + per-email sliding windows w/ lockout.
+    const gate = preCheck(req, "sign_in", email);
+    if (!gate.ok) {
+      await recordFailure(req, "sign_in", email, "rate_limited");
+      return limited(reply, gate.retryAfterSec, gate.reason);
+    }
+
     const row = await db.selectFrom("users").selectAll().where("email", "=", email).executeTakeFirst();
-    if (!row) return reply.code(401).send({ error: "invalid_credentials" });
+    if (!row) {
+      await recordFailure(req, "sign_in", email, "bad_credentials");
+      return reply.code(401).send({ error: "invalid_credentials" });
+    }
     const ok = await argon2.verify(row.password_hash, password);
     if (!ok) {
+      await recordFailure(req, "sign_in", email, "bad_credentials");
       await log("auth", "warn", `failed sign-in ${email}`);
       return reply.code(401).send({ error: "invalid_credentials" });
     }
+    await recordSuccess(req, "sign_in", email);
     const session = await issueSession({ id: row.id, email: row.email, role: row.role });
     await log("auth", "info", `sign-in ${email}`, row.id);
     return {
@@ -87,22 +106,37 @@ export async function authRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/refresh", async (req, reply) => {
+  app.post("/refresh", async (req: Req, reply) => {
     const body = z.object({ refresh_token: z.string() }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "invalid_body" });
     const hashed = hashToken(body.data.refresh_token);
+
+    // Rate-limit by IP + by token hash (which is stable across retries
+    // of the same stolen token — attacker can't spray many IPs to bypass).
+    const gate = preCheck(req, "refresh", hashed);
+    if (!gate.ok) {
+      await recordFailure(req, "refresh", hashed, "rate_limited");
+      return limited(reply, gate.retryAfterSec, gate.reason);
+    }
+
     const row = await db.selectFrom("refresh_tokens")
       .selectAll()
       .where("token_hash", "=", hashed)
       .executeTakeFirst();
     if (!row || row.revoked_at || row.expires_at < new Date()) {
+      await recordFailure(req, "refresh", hashed, "invalid_token");
       return reply.code(401).send({ error: "invalid_refresh_token" });
     }
     const user = await db.selectFrom("users").selectAll().where("id", "=", row.user_id).executeTakeFirst();
-    if (!user) return reply.code(401).send({ error: "invalid_refresh_token" });
+    if (!user) {
+      await recordFailure(req, "refresh", hashed, "invalid_token");
+      return reply.code(401).send({ error: "invalid_refresh_token" });
+    }
 
-    // rotate
+    // rotate — a rotated token that's later replayed hits the revoked_at
+    // branch above and increments the failure counter.
     await db.updateTable("refresh_tokens").set({ revoked_at: new Date() }).where("id", "=", row.id).execute();
+    await recordSuccess(req, "refresh", hashed);
     const session = await issueSession({ id: user.id, email: user.email, role: user.role });
     return { session };
   });
