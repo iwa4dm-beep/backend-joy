@@ -826,3 +826,19 @@ export const ai = {
     return api<{ rows: unknown[]; total: number }>(`/ai/v1/usage${qs.toString() ? "?" + qs.toString() : ""}`);
   },
 };
+
+// ---- Integration health (Phase 15/16) ----
+export type IntegrationCheck = { name: string; ok: boolean; detail?: string };
+export type IntegrationModule = {
+  module: string; enabled: boolean; env_flag: string; ready: boolean;
+  checks: IntegrationCheck[]; endpoints: string[];
+};
+export type IntegrationHealth = {
+  ok: boolean; generated_at: string; modules: IntegrationModule[];
+};
+export const integrations = {
+  health: () => api<IntegrationHealth>("/admin/v1/integrations/health", { service: true }),
+};
+
+// The chat return shape from the backend is { content, model, usage }.
+export type ChatCompletion = { content: string; model: string; usage: { prompt_tokens: number; completion_tokens: number } };
