@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Clock, History, Lock, Play, RotateCcw, Unlock } from "lucide-react";
+import { AlertTriangle, Clock, History, Lock, Play, RotateCcw, ShieldAlert, Unlock } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { RequireWorkspace } from "@/components/pluto/RequireWorkspace";
 import { useWorkspace } from "@/lib/pluto/workspace-context";
 import { isLive, live, type SqlHistoryEntry, type SqlResult, type SqlRunResponse } from "@/lib/pluto/live";
+import { validateClientSql } from "@/lib/pluto/sql-client-validator";
 
 export const Route = createFileRoute("/dashboard/sql")({
   component: () => <RequireWorkspace><SqlRunnerPage /></RequireWorkspace>,
