@@ -203,7 +203,7 @@ export function createPlutoClient(opts: PlutoClientOptions) {
       /**
        * Resumable / multipart upload for large files. Splits the file
        * into 5 MiB chunks (configurable) and PUTs them individually,
-       * then finalizes with `/upload/:id/complete`. Server re-checks
+       * then finalizes with /upload/:id/complete. Server re-checks
        * RLS on every part so a revoked grant kills the session.
        */
       uploadLarge: async (
