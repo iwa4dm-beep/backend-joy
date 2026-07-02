@@ -73,6 +73,73 @@ function ScalingPage() {
         </button>} />
 
       {err && <div className="rounded-md border border-rose-500/40 bg-rose-500/5 px-4 py-3 text-sm text-rose-500">{err}</div>}
+      {msg && <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-500">{msg}</div>}
+
+      <section className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <div className="font-semibold">Test the durable queue worker</div>
+        <div className="text-xs text-muted-foreground">
+          Enqueues a job on <code>pluto.test</code>. The in-process worker (PLUTO_QUEUE_WORKER=1) will echo it back and mark it done — refresh to see it appear below.
+        </div>
+        <div className="flex flex-wrap gap-2 items-end">
+          <label className="text-xs flex-1 min-w-[16rem]"><div className="text-muted-foreground">Echo payload (optional)</div>
+            <input value={echo} onChange={(e) => setEcho(e.target.value)} placeholder="hello from dashboard"
+              className="mt-0.5 w-full rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          </label>
+          <button onClick={() => void enqueueTest()}
+            className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm">
+            <PlayCircle className="h-4 w-4" /> Enqueue test job
+          </button>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <div className="font-semibold">Test a rate-limit policy</div>
+        <div className="text-xs text-muted-foreground">
+          Increments the in-memory bucket for (route, identity) against the saved policy. Use it to verify a policy will actually throttle before shipping traffic.
+        </div>
+        <div className="flex flex-wrap gap-2 items-end">
+          <label className="text-xs"><div className="text-muted-foreground">Route</div>
+            <input value={testForm.route} onChange={(e) => setTestForm({ ...testForm, route: e.target.value })}
+              placeholder="/auth/v1/token"
+              className="mt-0.5 rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          </label>
+          <label className="text-xs"><div className="text-muted-foreground">Identity</div>
+            <input value={testForm.identity} onChange={(e) => setTestForm({ ...testForm, identity: e.target.value })}
+              className="mt-0.5 rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          </label>
+          <label className="text-xs"><div className="text-muted-foreground">Hits</div>
+            <input type="number" min={1} value={testForm.hits}
+              onChange={(e) => setTestForm({ ...testForm, hits: Number(e.target.value) })}
+              className="mt-0.5 w-20 rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          </label>
+          <button onClick={() => void testPolicy()}
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm hover:bg-accent">
+            <Send className="h-4 w-4" /> Run
+          </button>
+        </div>
+        {snapshot.length > 0 && (
+          <div className="overflow-x-auto">
+            <div className="text-xs text-muted-foreground mb-1">Live throttle buckets ({snapshot.length})</div>
+            <table className="w-full text-xs">
+              <thead className="text-left text-muted-foreground">
+                <tr><th className="py-1 pr-2">Key</th><th>Hits</th><th>Remaining</th><th>Blocked</th><th>Resets</th></tr>
+              </thead>
+              <tbody>
+                {snapshot.map((t) => (
+                  <tr key={t.key} className="border-t border-border/60">
+                    <td className="py-1 pr-2 font-mono truncate max-w-[24rem]">{t.key}</td>
+                    <td>{t.hits}/{t.max}</td>
+                    <td className={t.remaining === 0 ? "text-rose-500" : ""}>{t.remaining}</td>
+                    <td className={t.blocked > 0 ? "text-rose-500" : "text-muted-foreground"}>{t.blocked}</td>
+                    <td className="text-muted-foreground">{t.reset_in_sec}s</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
 
       <section className="rounded-lg border border-border bg-card p-4">
         <div className="font-semibold mb-3">Queue stats</div>
