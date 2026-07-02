@@ -933,7 +933,9 @@ export const observability = {
 export type ProjectTemplate = { id: string; slug: string; name: string; description: string; category: string; published: boolean; created_at: string };
 export type PersonalToken = { id: string; name: string; scopes: string[]; last_used_at: string | null; expires_at: string | null; revoked_at: string | null; created_at: string };
 export type WebhookSub = { id: string; target_url: string; event_types: string[]; active: boolean; failure_count: number; created_at: string };
-export type WebhookDelivery = { id: number; event_type: string; status_code: number | null; response_ms: number | null; error: string | null; attempted_at: string };
+export type WebhookDelivery = { id: number; event_type: string; status_code: number | null; response_ms: number | null; error: string | null; attempted_at: string; payload?: unknown; headers?: Record<string, string> };
+export const DEVEX_TOKEN_SCOPES = ["read", "write", "admin", "storage:read", "storage:write", "functions:invoke", "realtime:subscribe"] as const;
+export type DevexTokenScope = typeof DEVEX_TOKEN_SCOPES[number];
 export type InstalledPlugin = { id: string; plugin_slug: string; version: string; config: Record<string, unknown>; enabled: boolean; installed_at: string };
 
 export const devex = {
