@@ -1,8 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, Circle, Eye, RefreshCw, Search, XCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Circle, Eye, RefreshCw, Search, ShieldAlert, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, live, subscribe, type AuditEvent, type AuditPage, type AuditQuery, type RealtimeEvent } from "@/lib/pluto/live";
+import {
+  isLive, live, subscribe,
+  type AuditEvent, type AuditPage, type AuditQuery,
+  type RealtimeAuthError, type RealtimeEvent, type RealtimeStatus,
+} from "@/lib/pluto/live";
+
+// Small debounce hook — audit filter inputs use it so we don't refetch
+// (and re-run the ILIKE query on the server) on every keystroke. The
+// server still enforces its own limits via zod max lengths.
+function useDebounced<T>(value: T, ms = 300): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
 
 export const Route = createFileRoute("/dashboard/audit")({
   component: AuditPage,
@@ -28,43 +45,50 @@ const STATUS_ICON = {
 const PAGE_SIZE = 50;
 
 function AuditPage() {
-  const [page, setPage] = useState<AuditPage | null>(null);
+  const [pageData, setPageData] = useState<AuditPage | null>(null);
+  // Raw inputs (change on every keystroke) …
   const [action, setAction] = useState("");
   const [actor, setActor] = useState("");
   const [actorId, setActorId] = useState("");
   const [status, setStatus] = useState<"" | "ok" | "error" | "dry_run">("");
   const [text, setText] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
+  // … debounced values feed the actual fetch. Fast typing does NOT
+  // trigger a burst of /admin/v1/audit calls.
+  const dActor       = useDebounced(actor);
+  const dActorId     = useDebounced(actorId);
+  const dText        = useDebounced(text);
+  const dWorkspaceId = useDebounced(workspaceId);
   const [offset, setOffset] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [liveConn, setLiveConn] = useState(false);
+  const [authErr, setAuthErr] = useState<{ code: RealtimeAuthError; message: string } | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
     try {
       if (!isLive()) {
-        setPage({ items: mockEvents, total: mockEvents.length, limit: PAGE_SIZE, offset: 0, next_offset: null });
+        setPageData({ items: mockEvents, total: mockEvents.length, limit: PAGE_SIZE, offset: 0, next_offset: null });
         return;
       }
       const q: AuditQuery = { limit: PAGE_SIZE, offset };
       if (action) q.action = action;
-      if (actor) q.actor = actor;
-      if (actorId) q.actor_id = actorId;
+      if (dActor) q.actor = dActor;
+      if (dActorId) q.actor_id = dActorId;
       if (status) q.status = status;
-      if (text) q.q = text;
-      if (workspaceId) q.workspace_id = workspaceId;
-      setPage(await live.audit.list(q));
+      if (dText) q.q = dText;
+      if (dWorkspaceId) q.workspace_id = dWorkspaceId;
+      setPageData(await live.audit.list(q));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-  }, [action, actor, actorId, status, text, workspaceId, offset]);
+  }, [action, dActor, dActorId, status, dText, dWorkspaceId, offset]);
 
   useEffect(() => { void load(); }, [load]);
 
   // Reset to first page when any filter changes.
-  useEffect(() => { setOffset(0); }, [action, actor, actorId, status, text, workspaceId]);
+  useEffect(() => { setOffset(0); }, [action, dActor, dActorId, status, dText, dWorkspaceId]);
 
   useEffect(() => {
     if (!isLive()) return;
-    setLiveConn(true);
     const off = subscribe("system:audit", (e: RealtimeEvent) => {
       const p = e.payload as unknown as AuditEvent & { ts: string };
       if (!p) return;
@@ -75,32 +99,41 @@ function AuditPage() {
         if (!p.action.startsWith(prefix)) return;
       }
       if (status && p.status !== status) return;
-      if (actor && !(p.actor_email ?? "").toLowerCase().includes(actor.toLowerCase())) return;
-      if (actorId && p.actor_id !== actorId) return;
-      if (workspaceId) {
+      if (dActor && !(p.actor_email ?? "").toLowerCase().includes(dActor.toLowerCase())) return;
+      if (dActorId && p.actor_id !== dActorId) return;
+      if (dWorkspaceId) {
         const md = (p.metadata ?? {}) as { workspace_id?: string };
-        if (md.workspace_id !== workspaceId) return;
+        if (md.workspace_id !== dWorkspaceId) return;
       }
-      if (text) {
-        const t = text.toLowerCase();
+      if (dText) {
+        const t = dText.toLowerCase();
         const hit = p.action.toLowerCase().includes(t)
                  || (p.target ?? "").toLowerCase().includes(t)
                  || (p.actor_email ?? "").toLowerCase().includes(t);
         if (!hit) return;
       }
-      setPage((prev) => prev ? {
+      setPageData((prev) => prev ? {
         ...prev,
         items: [{ ...p, id: p.id ?? Math.random().toString(36).slice(2) }, ...prev.items].slice(0, PAGE_SIZE),
         total: prev.total + 1,
       } : prev);
+    }, {
+      onStatus: (s: RealtimeStatus) => {
+        if (s.kind === "open") { setLiveConn(true); setAuthErr(null); }
+        else if (s.kind === "auth_error") { setLiveConn(false); setAuthErr({ code: s.error, message: s.message }); }
+        else setLiveConn(false);
+      },
     });
     return () => { off(); setLiveConn(false); };
-  }, [action, actor, actorId, status, text, workspaceId, offset]);
+  }, [action, dActor, dActorId, status, dText, dWorkspaceId, offset]);
 
-  const items = page?.items ?? [];
-  const total = page?.total ?? 0;
+  const items = pageData?.items ?? [];
+  const total = pageData?.total ?? 0;
   const pageIdx = Math.floor(offset / PAGE_SIZE) + 1;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Silence unused-var warning if downstream doesn't use it.
+  useMemo(() => pageCount, [pageCount]);
+
 
   return (
     <div>
@@ -144,6 +177,15 @@ function AuditPage() {
         )}
       </div>
 
+      {authErr && (
+        <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500 flex items-start gap-2">
+          <ShieldAlert className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-semibold">Realtime paused — {authErr.code}</div>
+            <div className="text-amber-500/80 mt-0.5">{authErr.message} Reconnect attempts have stopped until you refresh with valid credentials.</div>
+          </div>
+        </div>
+      )}
       {err && <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-500">{err}</div>}
 
       <div className="rounded-lg border border-border overflow-hidden">
@@ -191,7 +233,7 @@ function AuditPage() {
                 </td>
               </tr>
             ))}
-            {page && items.length === 0 && (
+            {pageData && items.length === 0 && (
               <tr><td className="px-3 py-6 text-center text-xs text-muted-foreground" colSpan={5}>No events match these filters.</td></tr>
             )}
           </tbody>
@@ -208,7 +250,7 @@ function AuditPage() {
           ><ChevronLeft className="h-3 w-3" /> Prev</button>
           <button
             onClick={() => setOffset(offset + PAGE_SIZE)}
-            disabled={!page?.next_offset}
+            disabled={!pageData?.next_offset}
             className="inline-flex items-center gap-1 rounded-md border border-input px-2 py-1 hover:bg-accent disabled:opacity-40"
           >Next <ChevronRight className="h-3 w-3" /></button>
         </div>

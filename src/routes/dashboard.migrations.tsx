@@ -1,12 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Eye, Play, RotateCcw, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Download, Eye, Play, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, live, subscribe, type DryRunEntry, type MigrationEntry, type RealtimeEvent } from "@/lib/pluto/live";
+import {
+  isLive, live, subscribe,
+  type BootRun, type DryRunEntry, type MigrationEntry,
+  type RealtimeAuthError, type RealtimeEvent, type RealtimeStatus,
+} from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/migrations")({
   component: MigrationsPage,
 });
+
 
 const STATUS_COLOR: Record<MigrationEntry["status"], string> = {
   applied: "text-emerald-500 bg-emerald-500/10 border-emerald-500/30",
@@ -27,6 +32,8 @@ function MigrationsPage() {
   const [plan, setPlan] = useState<DryRunEntry[] | null>(null);
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
   const [liveConn, setLiveConn] = useState(false);
+  const [authErr, setAuthErr] = useState<{ code: RealtimeAuthError; message: string } | null>(null);
+  const [bootRun, setBootRun] = useState<BootRun | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -36,8 +43,12 @@ function MigrationsPage() {
         setNote("Showing sample data — configure VITE_PLUTO_URL & VITE_PLUTO_ANON_KEY to run against a live Pluto instance.");
         return;
       }
-      const { migrations } = await live.migrations.list();
+      const [{ migrations }, boot] = await Promise.all([
+        live.migrations.list(),
+        live.migrations.lastBoot().catch(() => ({ run: null as BootRun | null })),
+      ]);
       setEntries(migrations);
+      setBootRun(boot.run);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -48,7 +59,6 @@ function MigrationsPage() {
   // Live progress: subscribe to the migrations broadcast channel.
   useEffect(() => {
     if (!isLive()) return;
-    setLiveConn(true);
     const push = (e: RealtimeEvent) => {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const bits: string[] = [];
@@ -62,9 +72,16 @@ function MigrationsPage() {
       // Any run.done / rollback.done event should refresh the list.
       if (e.event === "run.done" || e.event.endsWith(".done") || e.event === "step") void load();
     };
-    const off = subscribe("system:migrations", push);
+    const off = subscribe("system:migrations", push, {
+      onStatus: (s: RealtimeStatus) => {
+        if (s.kind === "open") { setLiveConn(true); setAuthErr(null); }
+        else if (s.kind === "auth_error") { setLiveConn(false); setAuthErr({ code: s.error, message: s.message }); }
+        else setLiveConn(false);
+      },
+    });
     return () => { off(); setLiveConn(false); };
   }, [load]);
+
 
   async function guard<T>(key: string, fn: () => Promise<T>) {
     setBusy(key); setErr(null); setNote(null);
@@ -83,7 +100,40 @@ function MigrationsPage() {
     finally { setBusy(null); }
   }
 
+  // Export the dry-run plan as either JSON (structured) or plain text
+  // (SQL preview + statement/diff summary). Downloaded to the browser
+  // so it can be attached to a change ticket / PR review.
+  function exportPlan(kind: "json" | "text") {
+    if (!plan) return;
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    if (kind === "json") {
+      const blob = new Blob([JSON.stringify({ generated_at: new Date().toISOString(), plan }, null, 2)], { type: "application/json" });
+      triggerDownload(blob, `pluto-dryrun-${ts}.json`);
+      return;
+    }
+    const lines: string[] = [];
+    lines.push(`Pluto migration dry-run · ${new Date().toISOString()}`);
+    lines.push(`${plan.length} migration(s) would run.`);
+    lines.push("");
+    for (const p of plan) {
+      lines.push(`── ${p.version} (${p.name}) ─────────────────────────────`);
+      lines.push(`reason=${p.reason}  statements=${p.statement_count}  bytes=${p.bytes}  down=${p.has_down}`);
+      lines.push(`schema before=${p.before_snapshot_size} after=${p.after_snapshot_size}`);
+      if (p.simulation_error) lines.push(`SIMULATION ERROR: ${p.simulation_error}`);
+      lines.push(`+added   (${p.diff.added.length}): ${p.diff.added.join(", ") || "—"}`);
+      lines.push(`-removed (${p.diff.removed.length}): ${p.diff.removed.join(", ") || "—"}`);
+      lines.push(`~changed (${p.diff.changed.length}): ${p.diff.changed.join(", ") || "—"}`);
+      lines.push("Statements:");
+      for (const s of p.statements) lines.push(`  [${s.index}] ${s.kind}  ${s.target ?? ""}`);
+      lines.push("--- SQL preview ---");
+      lines.push(p.preview);
+      lines.push("");
+    }
+    triggerDownload(new Blob([lines.join("\n")], { type: "text/plain" }), `pluto-dryrun-${ts}.txt`);
+  }
+
   const pendingCount = (entries ?? []).filter((e) => e.status === "pending" || e.status === "failed" || e.status === "rolled_back").length;
+
 
   return (
     <div>
@@ -124,17 +174,49 @@ function MigrationsPage() {
         )}
       </div>
 
+      {/* Realtime authorization failure — surfaced by openSocket. Retries
+          are suspended until the operator updates credentials. */}
+      {authErr && (
+        <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200 flex items-start gap-2">
+          <ShieldAlert className="h-4 w-4 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-medium">Realtime disabled — {authErr.code}</div>
+            <div className="text-xs mt-0.5">{authErr.message} Live progress will resume after you refresh with updated credentials.</div>
+          </div>
+        </div>
+      )}
+
+      {/* Last container-boot migration run — see src/db/migrate.ts */}
+      {bootRun && <BootRunCard run={bootRun} />}
+
       {plan && (
         <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/5 p-4">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
             <div className="text-sm font-medium">
               Dry-run plan · {plan.length} migration{plan.length === 1 ? "" : "s"} would run
               <span className="ml-2 text-xs text-muted-foreground">
                 (simulated in a transaction; nothing was written)
               </span>
             </div>
-            <button onClick={() => setPlan(null)} className="text-xs text-muted-foreground hover:text-foreground">Dismiss</button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => exportPlan("json")}
+                disabled={plan.length === 0}
+                className="inline-flex items-center gap-1 text-xs rounded-md border border-input px-2 py-1 hover:bg-accent disabled:opacity-40"
+              >
+                <Download className="h-3 w-3" /> JSON
+              </button>
+              <button
+                onClick={() => exportPlan("text")}
+                disabled={plan.length === 0}
+                className="inline-flex items-center gap-1 text-xs rounded-md border border-input px-2 py-1 hover:bg-accent disabled:opacity-40"
+              >
+                <Download className="h-3 w-3" /> Text
+              </button>
+              <button onClick={() => setPlan(null)} className="text-xs text-muted-foreground hover:text-foreground">Dismiss</button>
+            </div>
           </div>
+
           {plan.length === 0 ? (
             <div className="text-xs text-muted-foreground">Nothing pending — schema is up to date.</div>
           ) : (
@@ -309,6 +391,61 @@ function DiffColumn({ title, items, className, prefix }: { title: string; items:
     </div>
   );
 }
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// "Last boot" widget: renders the most recent container-startup
+// migration attempt as recorded by src/db/migrate.ts under
+// PLUTO_BOOT_ACTOR=boot. Useful for post-deploy verification.
+function BootRunCard({ run }: { run: BootRun }) {
+  const ok = run.status === "ok";
+  return (
+    <div className={`mb-4 rounded-lg border p-4 ${ok ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">Last boot run</span>
+        <span className={`text-xs px-1.5 py-0.5 rounded ${ok ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"}`}>{run.status}</span>
+        <span className="text-xs text-muted-foreground">mode={run.mode}</span>
+        <span className="text-xs text-muted-foreground">host={run.host ?? "—"}</span>
+        <span className="text-xs text-muted-foreground">{run.duration_ms}ms</span>
+        {!run.lock_acquired && <span className="text-xs text-amber-500">no lock</span>}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {new Date(run.started_at).toLocaleString()}
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-4 mt-3 text-xs">
+        <BootStat label="Pending"  items={run.pending} tone="text-muted-foreground" />
+        <BootStat label="Drift"    items={run.drift}   tone="text-amber-500" />
+        <BootStat label="Applied"  items={run.applied} tone="text-emerald-500" />
+        <BootStat label="Failed"   items={run.failed.map(f => `${f.version}: ${f.error}`)} tone="text-red-500" />
+      </div>
+      {run.error && (
+        <div className="mt-2 text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded p-2 whitespace-pre-wrap">{run.error}</div>
+      )}
+    </div>
+  );
+}
+
+function BootStat({ label, items, tone }: { label: string; items: string[]; tone: string }) {
+  return (
+    <div className="rounded border border-border bg-card p-2">
+      <div className="text-[11px] font-medium mb-1">{label} ({items.length})</div>
+      {items.length === 0 ? (
+        <div className="text-[11px] opacity-60">—</div>
+      ) : (
+        <ul className={`text-[11px] font-mono space-y-0.5 max-h-24 overflow-y-auto ${tone}`}>
+          {items.map((v, i) => <li key={i} className="truncate" title={v}>{v}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 
 const mockEntries: MigrationEntry[] = [
   { version: "0001_init", name: "init", status: "applied", file_checksum: "abc", db_checksum: "abc", applied_at: new Date(Date.now() - 86400000 * 30).toISOString(), duration_ms: 240, has_down: false, error: null },
