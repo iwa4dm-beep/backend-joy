@@ -952,6 +952,11 @@ export const devex = {
   deleteWebhook: (id: string) => api<{ ok: boolean }>(`/devex/v1/webhooks/${id}`, { method: "DELETE" }),
   testWebhook: (id: string) => api<{ status_code: number | null; response_ms: number; error: string | null }>(`/devex/v1/webhooks/${id}/test`, { method: "POST" }),
   deliveries: (id: string) => api<{ deliveries: WebhookDelivery[] }>(`/devex/v1/webhooks/${id}/deliveries`),
+  replayDelivery: (hookId: string, deliveryId: number) =>
+    api<{ status_code: number | null; response_ms: number; error: string | null; replayed: true }>(
+      `/devex/v1/webhooks/${hookId}/deliveries/${deliveryId}/replay`,
+      { method: "POST" },
+    ),
   plugins: () => api<{ installed: InstalledPlugin[] }>("/devex/v1/plugins"),
   installPlugin: (body: { plugin_slug: string; version: string; config?: Record<string, unknown>; enabled?: boolean }) =>
     api<InstalledPlugin>("/devex/v1/plugins", { method: "POST", body: JSON.stringify(body) }),
