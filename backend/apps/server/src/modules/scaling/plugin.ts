@@ -12,6 +12,41 @@ import { z } from "zod";
 import { q } from "../../lib/pgraw.js";
 import { requireApiKey, requireAdmin } from "../../lib/apikey.js";
 
+// In-memory throttle tracker keyed by `${scope}:${route}:${identity}`.
+// Exposed via getRateLimitSnapshot() so integration health can surface
+// per-key throttle status without hitting the database.
+type Bucket = { hits: number; resetAt: number; max: number; window_sec: number; blocked: number };
+const throttleBuckets = new Map<string, Bucket>();
+
+export function getRateLimitSnapshot(): Array<{
+  key: string; hits: number; max: number; remaining: number;
+  window_sec: number; reset_in_sec: number; blocked: number;
+}> {
+  const now = Date.now();
+  const out: ReturnType<typeof getRateLimitSnapshot> = [];
+  for (const [key, b] of throttleBuckets.entries()) {
+    if (b.resetAt < now) { throttleBuckets.delete(key); continue; }
+    out.push({
+      key, hits: b.hits, max: b.max, remaining: Math.max(0, b.max - b.hits),
+      window_sec: b.window_sec, reset_in_sec: Math.max(0, Math.round((b.resetAt - now) / 1000)),
+      blocked: b.blocked,
+    });
+  }
+  return out.sort((a, b) => b.hits - a.hits).slice(0, 50);
+}
+
+function bump(key: string, max: number, window_sec: number) {
+  const now = Date.now();
+  let b = throttleBuckets.get(key);
+  if (!b || b.resetAt < now) b = { hits: 0, resetAt: now + window_sec * 1000, max, window_sec, blocked: 0 };
+  b.hits += 1;
+  const allowed = b.hits <= max;
+  if (!allowed) b.blocked += 1;
+  throttleBuckets.set(key, b);
+  return { allowed, ...b, remaining: Math.max(0, max - b.hits), reset_in_sec: Math.max(0, Math.round((b.resetAt - now) / 1000)) };
+}
+
+
 const enqueueBody = z.object({
   payload: z.record(z.unknown()).default({}),
   run_at: z.string().datetime().optional(),
