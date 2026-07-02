@@ -149,6 +149,7 @@ export type AuditPage = {
 export type AuditQuery = {
   action?: string;
   actor?: string;
+  actor_id?: string;
   status?: "ok" | "error" | "dry_run";
   q?: string;
   workspace_id?: string;
@@ -185,6 +186,7 @@ export const live = {
       const qs = new URLSearchParams();
       if (params.action)       qs.set("action",       params.action);
       if (params.actor)        qs.set("actor",        params.actor);
+      if (params.actor_id)     qs.set("actor_id",     params.actor_id);
       if (params.status)       qs.set("status",       params.status);
       if (params.q)            qs.set("q",            params.q);
       if (params.workspace_id) qs.set("workspace_id", params.workspace_id);

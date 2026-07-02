@@ -156,6 +156,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const q = z.object({
       action:       z.string().max(120).optional(),
       actor:        z.string().max(200).optional(),
+      actor_id:     z.string().uuid().optional(),
       status:       z.enum(["ok", "error", "dry_run"]).optional(),
       q:            z.string().max(200).optional(),
       workspace_id: z.string().uuid().optional(),
@@ -165,13 +166,14 @@ export async function adminRoutes(app: FastifyInstance) {
       offset:       z.coerce.number().int().min(0).default(0),
     }).safeParse(req.query ?? {});
     if (!q.success) return reply.code(400).send({ error: "invalid_query", issues: q.error.issues });
-    const { action, actor, status, q: text, workspace_id, since, until, limit, offset } = q.data;
+    const { action, actor, actor_id, status, q: text, workspace_id, since, until, limit, offset } = q.data;
 
     const parts: string[] = [];
     const args: unknown[] = [];
     const add = (sql: string, val: unknown) => { args.push(val); parts.push(sql.replace("$?", `$${args.length}`)); };
     if (action) add(action.endsWith("*") ? "action like $?" : "action = $?", action.endsWith("*") ? action.replace(/\*$/, "%") : action);
     if (actor)  add("actor_email ilike $?", `%${actor}%`);
+    if (actor_id) add("actor_id = $?", actor_id);
     if (status) add("status = $?", status);
     if (workspace_id) add("metadata->>'workspace_id' = $?", workspace_id);
     if (since)  add("ts >= $?", since);

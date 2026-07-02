@@ -31,6 +31,7 @@ function AuditPage() {
   const [page, setPage] = useState<AuditPage | null>(null);
   const [action, setAction] = useState("");
   const [actor, setActor] = useState("");
+  const [actorId, setActorId] = useState("");
   const [status, setStatus] = useState<"" | "ok" | "error" | "dry_run">("");
   const [text, setText] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
@@ -48,17 +49,18 @@ function AuditPage() {
       const q: AuditQuery = { limit: PAGE_SIZE, offset };
       if (action) q.action = action;
       if (actor) q.actor = actor;
+      if (actorId) q.actor_id = actorId;
       if (status) q.status = status;
       if (text) q.q = text;
       if (workspaceId) q.workspace_id = workspaceId;
       setPage(await live.audit.list(q));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-  }, [action, actor, status, text, workspaceId, offset]);
+  }, [action, actor, actorId, status, text, workspaceId, offset]);
 
   useEffect(() => { void load(); }, [load]);
 
   // Reset to first page when any filter changes.
-  useEffect(() => { setOffset(0); }, [action, actor, status, text, workspaceId]);
+  useEffect(() => { setOffset(0); }, [action, actor, actorId, status, text, workspaceId]);
 
   useEffect(() => {
     if (!isLive()) return;
@@ -74,6 +76,7 @@ function AuditPage() {
       }
       if (status && p.status !== status) return;
       if (actor && !(p.actor_email ?? "").toLowerCase().includes(actor.toLowerCase())) return;
+      if (actorId && p.actor_id !== actorId) return;
       if (workspaceId) {
         const md = (p.metadata ?? {}) as { workspace_id?: string };
         if (md.workspace_id !== workspaceId) return;
@@ -92,7 +95,7 @@ function AuditPage() {
       } : prev);
     });
     return () => { off(); setLiveConn(false); };
-  }, [action, actor, status, text, workspaceId, offset]);
+  }, [action, actor, actorId, status, text, workspaceId, offset]);
 
   const items = page?.items ?? [];
   const total = page?.total ?? 0;
@@ -120,6 +123,8 @@ function AuditPage() {
         </select>
         <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder="User email…"
           className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-44" />
+        <input value={actorId} onChange={(e) => setActorId(e.target.value.trim())} placeholder="User ID (UUID)…"
+          className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-56 font-mono" />
         <input value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value.trim())}
           placeholder="Workspace UUID…"
           className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-64 font-mono" />
@@ -163,14 +168,26 @@ function AuditPage() {
                   </div>
                 </td>
                 <td className="px-3 py-2 text-xs">
-                  <div>{e.actor_email ?? <span className="text-muted-foreground">—</span>}</div>
-                  <div className="text-muted-foreground">{e.actor_role ?? ""}{e.ip ? ` · ${e.ip}` : ""}</div>
+                  <div>
+                    {e.actor_email ?? <span className="text-muted-foreground">—</span>}
+                    {e.actor_id && (
+                      <button
+                        type="button"
+                        onClick={() => setActorId(e.actor_id ?? "")}
+                        title="Filter by this user"
+                        className="ml-1 text-[10px] text-muted-foreground hover:text-foreground underline decoration-dotted"
+                      >filter</button>
+                    )}
+                  </div>
+                  <div className="text-muted-foreground">
+                    {e.actor_role ?? ""}
+                    {e.actor_id ? ` · ${e.actor_id.slice(0, 8)}…` : ""}
+                    {e.ip ? ` · ${e.ip}` : ""}
+                  </div>
                 </td>
                 <td className="px-3 py-2 text-xs font-mono">{e.target ?? "—"}</td>
                 <td className="px-3 py-2 text-xs">
-                  {e.metadata && Object.keys(e.metadata).length > 0 ? (
-                    <pre className="bg-muted/40 rounded p-1.5 text-[11px] whitespace-pre-wrap max-w-md">{JSON.stringify(e.metadata, null, 0)}</pre>
-                  ) : <span className="text-muted-foreground">—</span>}
+                  <AuditDetails ev={e} onFilterWorkspace={setWorkspaceId} />
                 </td>
               </tr>
             ))}
@@ -198,6 +215,100 @@ function AuditPage() {
       </div>
     </div>
   );
+}
+
+// Storage-aware detail renderer. Extracts common fields
+// (bucket / key / grant / upload / workspace / part / size / mime)
+// from event metadata and renders them as chips instead of a raw JSON
+// blob. Falls back to a compact JSON pre for unknown shapes.
+function AuditDetails({ ev, onFilterWorkspace }: {
+  ev: AuditEvent;
+  onFilterWorkspace: (id: string) => void;
+}) {
+  const md = (ev.metadata ?? {}) as Record<string, unknown>;
+  if (!md || Object.keys(md).length === 0) return <span className="text-muted-foreground">—</span>;
+
+  const isStorage = ev.action.startsWith("storage.");
+  const str = (v: unknown) => typeof v === "string" ? v : undefined;
+  const num = (v: unknown) => typeof v === "number" ? v : undefined;
+
+  // Storage action classifier — verb after "storage."
+  // e.g. "storage.upload.complete" → "upload.complete"
+  const storageKind = isStorage ? ev.action.slice("storage.".length) : null;
+
+  const bucket    = str(md.bucket);
+  const objectKey = str(md.key) ?? str(md.object_key) ?? str(md.path);
+  const grantId   = str(md.grant_id) ?? str(md.signed_grant_id) ?? str(md.token_id);
+  const uploadId  = str(md.upload_id);
+  const partNo    = num(md.part_number) ?? num(md.part);
+  const size      = num(md.size) ?? num(md.content_length);
+  const mime      = str(md.content_type) ?? str(md.mime);
+  const oneTime   = md.one_time === true;
+  const expiresIn = num(md.expires_in);
+  const wsId      = str(md.workspace_id);
+  const err       = str(md.error);
+
+  const chips: { label: string; value: string; mono?: boolean; onClick?: () => void; title?: string }[] = [];
+  if (isStorage && storageKind) chips.push({ label: "op", value: storageKind });
+  if (bucket)    chips.push({ label: "bucket", value: bucket, mono: true });
+  if (objectKey) chips.push({ label: "key",    value: objectKey, mono: true });
+  if (grantId)   chips.push({ label: "grant",  value: grantId, mono: true, title: grantId });
+  if (uploadId)  chips.push({ label: "upload", value: uploadId, mono: true, title: uploadId });
+  if (partNo != null) chips.push({ label: "part", value: `#${partNo}` });
+  if (size != null)   chips.push({ label: "size", value: formatBytes(size) });
+  if (mime)     chips.push({ label: "mime", value: mime });
+  if (oneTime)  chips.push({ label: "one-time", value: "yes" });
+  if (expiresIn != null) chips.push({ label: "ttl", value: `${expiresIn}s` });
+  if (wsId) chips.push({
+    label: "workspace", value: `${wsId.slice(0, 8)}…`, mono: true,
+    title: wsId, onClick: () => onFilterWorkspace(wsId),
+  });
+
+  // Known-key set we already surfaced as chips — remaining go into "extras".
+  const consumed = new Set([
+    "bucket", "key", "object_key", "path", "grant_id", "signed_grant_id",
+    "token_id", "upload_id", "part_number", "part", "size", "content_length",
+    "content_type", "mime", "one_time", "expires_in", "workspace_id", "error",
+  ]);
+  const extras: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(md)) if (!consumed.has(k)) extras[k] = v;
+
+  return (
+    <div className="space-y-1 max-w-md">
+      {chips.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {chips.map((c, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={c.onClick}
+              disabled={!c.onClick}
+              title={c.title ?? (c.onClick ? "Click to filter" : undefined)}
+              className={`inline-flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] leading-none ${c.onClick ? "hover:bg-accent cursor-pointer" : "cursor-default"}`}
+            >
+              <span className="text-muted-foreground">{c.label}</span>
+              <span className={c.mono ? "font-mono" : ""}>{c.value}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {err && (
+        <div className="text-[11px] text-red-500 break-words">error: {err}</div>
+      )}
+      {Object.keys(extras).length > 0 && (
+        <pre className="bg-muted/40 rounded p-1.5 text-[11px] whitespace-pre-wrap break-all">
+          {JSON.stringify(extras, null, 0)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 const mockEvents: AuditEvent[] = [
