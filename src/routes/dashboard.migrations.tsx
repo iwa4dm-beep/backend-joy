@@ -392,6 +392,61 @@ function DiffColumn({ title, items, className, prefix }: { title: string; items:
   );
 }
 
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// "Last boot" widget: renders the most recent container-startup
+// migration attempt as recorded by src/db/migrate.ts under
+// PLUTO_BOOT_ACTOR=boot. Useful for post-deploy verification.
+function BootRunCard({ run }: { run: BootRun }) {
+  const ok = run.status === "ok";
+  return (
+    <div className={`mb-4 rounded-lg border p-4 ${ok ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">Last boot run</span>
+        <span className={`text-xs px-1.5 py-0.5 rounded ${ok ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"}`}>{run.status}</span>
+        <span className="text-xs text-muted-foreground">mode={run.mode}</span>
+        <span className="text-xs text-muted-foreground">host={run.host ?? "—"}</span>
+        <span className="text-xs text-muted-foreground">{run.duration_ms}ms</span>
+        {!run.lock_acquired && <span className="text-xs text-amber-500">no lock</span>}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {new Date(run.started_at).toLocaleString()}
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-4 mt-3 text-xs">
+        <BootStat label="Pending"  items={run.pending} tone="text-muted-foreground" />
+        <BootStat label="Drift"    items={run.drift}   tone="text-amber-500" />
+        <BootStat label="Applied"  items={run.applied} tone="text-emerald-500" />
+        <BootStat label="Failed"   items={run.failed.map(f => `${f.version}: ${f.error}`)} tone="text-red-500" />
+      </div>
+      {run.error && (
+        <div className="mt-2 text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded p-2 whitespace-pre-wrap">{run.error}</div>
+      )}
+    </div>
+  );
+}
+
+function BootStat({ label, items, tone }: { label: string; items: string[]; tone: string }) {
+  return (
+    <div className="rounded border border-border bg-card p-2">
+      <div className="text-[11px] font-medium mb-1">{label} ({items.length})</div>
+      {items.length === 0 ? (
+        <div className="text-[11px] opacity-60">—</div>
+      ) : (
+        <ul className={`text-[11px] font-mono space-y-0.5 max-h-24 overflow-y-auto ${tone}`}>
+          {items.map((v, i) => <li key={i} className="truncate" title={v}>{v}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
 const mockEntries: MigrationEntry[] = [
   { version: "0001_init", name: "init", status: "applied", file_checksum: "abc", db_checksum: "abc", applied_at: new Date(Date.now() - 86400000 * 30).toISOString(), duration_ms: 240, has_down: false, error: null },
   { version: "0002_rls_helpers", name: "rls_helpers", status: "applied", file_checksum: "def", db_checksum: "def", applied_at: new Date(Date.now() - 86400000 * 20).toISOString(), duration_ms: 88, has_down: false, error: null },
