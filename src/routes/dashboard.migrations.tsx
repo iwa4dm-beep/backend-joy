@@ -100,7 +100,40 @@ function MigrationsPage() {
     finally { setBusy(null); }
   }
 
+  // Export the dry-run plan as either JSON (structured) or plain text
+  // (SQL preview + statement/diff summary). Downloaded to the browser
+  // so it can be attached to a change ticket / PR review.
+  function exportPlan(kind: "json" | "text") {
+    if (!plan) return;
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    if (kind === "json") {
+      const blob = new Blob([JSON.stringify({ generated_at: new Date().toISOString(), plan }, null, 2)], { type: "application/json" });
+      triggerDownload(blob, `pluto-dryrun-${ts}.json`);
+      return;
+    }
+    const lines: string[] = [];
+    lines.push(`Pluto migration dry-run · ${new Date().toISOString()}`);
+    lines.push(`${plan.length} migration(s) would run.`);
+    lines.push("");
+    for (const p of plan) {
+      lines.push(`── ${p.version} (${p.name}) ─────────────────────────────`);
+      lines.push(`reason=${p.reason}  statements=${p.statement_count}  bytes=${p.bytes}  down=${p.has_down}`);
+      lines.push(`schema before=${p.before_snapshot_size} after=${p.after_snapshot_size}`);
+      if (p.simulation_error) lines.push(`SIMULATION ERROR: ${p.simulation_error}`);
+      lines.push(`+added   (${p.diff.added.length}): ${p.diff.added.join(", ") || "—"}`);
+      lines.push(`-removed (${p.diff.removed.length}): ${p.diff.removed.join(", ") || "—"}`);
+      lines.push(`~changed (${p.diff.changed.length}): ${p.diff.changed.join(", ") || "—"}`);
+      lines.push("Statements:");
+      for (const s of p.statements) lines.push(`  [${s.index}] ${s.kind}  ${s.target ?? ""}`);
+      lines.push("--- SQL preview ---");
+      lines.push(p.preview);
+      lines.push("");
+    }
+    triggerDownload(new Blob([lines.join("\n")], { type: "text/plain" }), `pluto-dryrun-${ts}.txt`);
+  }
+
   const pendingCount = (entries ?? []).filter((e) => e.status === "pending" || e.status === "failed" || e.status === "rolled_back").length;
+
 
   return (
     <div>
