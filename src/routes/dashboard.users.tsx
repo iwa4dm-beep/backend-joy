@@ -3,23 +3,50 @@ import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { pluto, type PlutoUser } from "@/lib/pluto/client";
+import { isLive, live, type AdminUser } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/users")({
   component: UsersPage,
 });
 
-function UsersPage() {
-  const [users, setUsers] = useState<PlutoUser[]>([]);
+type Row = PlutoUser | (AdminUser & { email_verified: boolean; created_at: string });
 
-  async function refresh() { setUsers(await pluto.users.list()); }
+function UsersPage() {
+  const [users, setUsers] = useState<Row[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function refresh() {
+    setErr(null);
+    try {
+      if (isLive()) {
+        const rows = await live.admin.users.list();
+        setUsers(rows.map((r) => ({ ...r, email_verified: r.email_verified ?? false })));
+      } else {
+        setUsers(await pluto.users.list());
+      }
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  }
   useEffect(() => { refresh(); }, []);
 
-  async function setRole(id: string, role: "admin" | "user") { await pluto.users.setRole(id, role); refresh(); }
-  async function remove(id: string) { await pluto.users.remove(id); refresh(); }
+  async function setRole(id: string, role: "admin" | "user") {
+    if (isLive()) await live.admin.users.update(id, { role });
+    else await pluto.users.setRole(id, role);
+    refresh();
+  }
+  async function remove(id: string) {
+    if (isLive()) await live.admin.users.remove(id);
+    else await pluto.users.remove(id);
+    refresh();
+  }
 
   return (
     <div>
-      <PageHeader title="Auth & Users" description="Sign-up, email verification, এবং role management।" />
+      <PageHeader
+        title="Auth & Users"
+        description={`Sign-up, email verification, এবং role management।${isLive() ? " (live)" : " (mock)"}`}
+      />
+      {err && <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
+
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
         <table className="w-full text-sm">

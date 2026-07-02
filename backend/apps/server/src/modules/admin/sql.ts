@@ -27,6 +27,7 @@ import { env } from "../../config.js";
 import { requireApiKey, requireAdmin } from "../../lib/apikey.js";
 import { audit as logAudit } from "../../lib/audit.js";
 import { validateSql } from "../../lib/sql-validator.js";
+import { coerceParams, type ParamInput } from "../../lib/sql-params.js";
 
 const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 5 });
 const STATEMENT_TIMEOUT_MS = 30_000;
@@ -84,6 +85,12 @@ async function runQuery(sql: string, params: unknown[], readOnly: boolean): Prom
       // strings when bind params are supplied. When params are present
       // we enforce single-statement execution; otherwise fall back to
       // simple-query mode (which supports multiple statements).
+      //
+      // NOTE: values were already coerced/validated by coerceParams() in
+      // the /run handler — so `params` here is either a JS scalar of the
+      // right shape, a string (for bigint/numeric/date/timestamp/bytea),
+      // or a JSON string (for json/jsonb). pg will send them as text and
+      // Postgres will cast to whatever the target column/expression is.
       const raw = params.length > 0
         ? await client.query(sql, params)
         : await client.query(sql);
@@ -156,9 +163,29 @@ export async function sqlRunnerRoutes(app: FastifyInstance) {
       });
     }
 
+    // Coerce + type-check bind params SERVER-SIDE. A modified client
+    // that skips the browser validator still cannot smuggle an unchecked
+    // value: coerceParams rejects unknown types, out-of-range integers,
+    // malformed UUIDs, non-ISO timestamps, non-JSON-serializable values,
+    // etc. — before the query ever hits Postgres.
+    const coerced = coerceParams(body.data.params as ParamInput[]);
+    if (!coerced.ok) {
+      await logAudit(req, {
+        action: body.data.read_only ? "sql.run_read_only" : "sql.run",
+        target: "bind_params", status: "error",
+        metadata: { rejected: coerced.error, index: coerced.index, details: coerced.details ?? null },
+      });
+      return reply.code(400).send({
+        error: "bind_param_rejected",
+        reason: coerced.error,
+        index: coerced.index,
+        details: coerced.details ?? null,
+      });
+    }
+
     const t0 = Date.now();
     try {
-      const results = await runQuery(body.data.sql, body.data.params, body.data.read_only);
+      const results = await runQuery(body.data.sql, coerced.values, body.data.read_only);
       const total = results.reduce((n, r) => n + (r.row_count ?? 0), 0);
       const historyId = await recordHistory(req, {
         sql: body.data.sql, readOnly: body.data.read_only,
@@ -171,6 +198,7 @@ export async function sqlRunnerRoutes(app: FastifyInstance) {
         metadata: {
           duration_ms: Date.now() - t0, statements: results.length, rows: total,
           param_count: body.data.params.length,
+          param_types: coerced.declared,
           verbs: check.statements.map((s) => s.verb),
         },
       });

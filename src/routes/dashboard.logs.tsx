@@ -2,31 +2,49 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { pluto, type PlutoLog } from "@/lib/pluto/client";
+import { isLive, live } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/logs")({
   component: LogsPage,
 });
 
-const levelClass: Record<PlutoLog["level"], string> = {
-  info: "bg-sky-500/15 text-sky-600",
-  warn: "bg-amber-500/15 text-amber-600",
+const levelClass: Record<string, string> = {
+  info:  "bg-sky-500/15 text-sky-600",
+  warn:  "bg-amber-500/15 text-amber-600",
   error: "bg-destructive/15 text-destructive",
+  debug: "bg-muted text-muted-foreground",
 };
 
 function LogsPage() {
   const [logs, setLogs] = useState<PlutoLog[]>([]);
   const [filter, setFilter] = useState<string>("all");
+  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { pluto.logs.list().then(setLogs); }, []);
-  const view = filter === "all" ? logs : logs.filter((l) => l.source === filter);
+  async function refresh() {
+    setErr(null);
+    try {
+      if (isLive()) {
+        const rows = await live.admin.logs({
+          source: filter === "all" ? undefined : filter,
+          limit: 200,
+        });
+        setLogs(rows as unknown as PlutoLog[]);
+      } else {
+        setLogs(await pluto.logs.list());
+      }
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  }
+  useEffect(() => { refresh(); }, [filter]);
+  const view = isLive() || filter === "all" ? logs : logs.filter((l) => l.source === filter);
 
   return (
     <div>
       <PageHeader
         title="Logs"
-        description="Auth, REST, Storage, এবং Admin API request log।"
+        description={`Auth, REST, Storage, এবং Admin API request log।${isLive() ? " (live)" : " (mock)"}`}
         actions={
           <select value={filter} onChange={(e) => setFilter(e.target.value)} className="rounded-md border border-input bg-background px-2 py-1 text-sm">
+
             <option value="all">All sources</option>
             <option value="auth">auth</option>
             <option value="rest">rest</option>
@@ -35,6 +53,9 @@ function LogsPage() {
           </select>
         }
       />
+      {err && <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
+
+
 
       <div className="rounded-lg border border-border bg-card overflow-hidden">
         <table className="w-full text-sm">

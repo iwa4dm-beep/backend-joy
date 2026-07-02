@@ -241,7 +241,102 @@ export const live = {
     summary:    () => api<SchemaSummary>("/admin/v1/schema/summary"),
     openapi:    () => api<Record<string, unknown>>("/admin/v1/schema/openapi.json"),
   },
+
+  // ---- Real auth (session / JWT / refresh / RBAC) ----
+  //
+  // These call the /auth/v1/* endpoints exposed by the server. The
+  // returned session is persisted to localStorage under SESSION_KEY so
+  // that subsequent `api()` calls forward the Bearer JWT.
+  auth: {
+    signUp: async (email: string, password: string) => {
+      const r = await api<{ user: AuthUser; session: AuthSession }>("/auth/v1/sign-up", {
+        method: "POST", body: JSON.stringify({ email, password }),
+      });
+      persistSession(r.session, r.user);
+      return r;
+    },
+    signIn: async (email: string, password: string) => {
+      const r = await api<{ user: AuthUser; session: AuthSession }>("/auth/v1/sign-in", {
+        method: "POST", body: JSON.stringify({ email, password }),
+      });
+      persistSession(r.session, r.user);
+      return r;
+    },
+    refresh: async () => {
+      const sess = readSession(); if (!sess) throw new Error("no_session");
+      const r = await api<{ session: AuthSession }>("/auth/v1/refresh", {
+        method: "POST", body: JSON.stringify({ refresh_token: sess.refresh_token }),
+      });
+      persistSession(r.session, sess.user as AuthUser);
+      return r.session;
+    },
+    signOut: async () => {
+      try { await api("/auth/v1/sign-out", { method: "POST" }); } catch { /* clear anyway */ }
+      localStorage.removeItem(SESSION_KEY);
+    },
+    me: () => api<{ user: AuthUser }>("/auth/v1/user"),
+    session: (): (AuthSession & { user: AuthUser }) | null => {
+      const s = readSession();
+      return s ? { ...s, user: s.user as AuthUser } : null;
+    },
+  },
+
+  // ---- Admin surfaces (used by dashboard pages) ----
+  admin: {
+    users: {
+      list:   () => api<AdminUser[]>("/admin/v1/users", { service: true }),
+      update: (id: string, patch: { role?: "admin" | "user"; email_verified?: boolean }) =>
+        api(`/admin/v1/users/${id}`, { method: "PATCH", service: true, body: JSON.stringify(patch) }),
+      remove: (id: string) => api(`/admin/v1/users/${id}`, { method: "DELETE", service: true }),
+    },
+    logs:  (params: { source?: string; level?: string; limit?: number } = {}) => {
+      const qs = new URLSearchParams();
+      if (params.source) qs.set("source", params.source);
+      if (params.level)  qs.set("level",  params.level);
+      qs.set("limit", String(params.limit ?? 100));
+      return api<LogEntry[]>(`/admin/v1/logs?${qs.toString()}`, { service: true });
+    },
+    stats: () => api<{ users: number; buckets: number; objects: number; storage_bytes: number }>(
+      "/admin/v1/stats", { service: true }
+    ),
+    apiKeys: {
+      list:   (wsId: string) => api<{ items: WorkspaceKey[] }>(`/admin/v1/workspaces/${wsId}/keys`, { service: true }),
+      mint:   (wsId: string, name: string, kind: "anon" | "service_role") =>
+        api<{ id: string; kind: string; name: string; key_prefix: string; plaintext: string }>(
+          `/admin/v1/workspaces/${wsId}/keys`,
+          { method: "POST", service: true, body: JSON.stringify({ name, kind }) },
+        ),
+      revoke: (wsId: string, keyId: string) =>
+        api(`/admin/v1/workspaces/${wsId}/keys/${keyId}`, { method: "DELETE", service: true }),
+    },
+    settings: {
+      list:   (wsId?: string) => {
+        const qs = wsId ? `?workspace_id=${wsId}` : "";
+        return api<{ items: SettingRow[] }>(`/admin/v1/settings${qs}`, { service: true });
+      },
+      upsert: (row: { key: string; value: unknown; is_secret?: boolean; workspace_id?: string }) =>
+        api("/admin/v1/settings", { method: "PUT", service: true, body: JSON.stringify(row) }),
+      remove: (key: string, wsId?: string) =>
+        api(`/admin/v1/settings/${encodeURIComponent(key)}${wsId ? `?workspace_id=${wsId}` : ""}`,
+            { method: "DELETE", service: true }),
+    },
+  },
 };
+
+// ---- Session persistence helpers (used by live.auth.*) ----
+function persistSession(s: AuthSession, u: AuthUser): void {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...s, user: u }));
+}
+
+// ---- Auth / admin type surface ----
+export type AuthUser = { id: string; email: string; role: "admin" | "user"; email_verified?: boolean };
+export type AuthSession = { access_token: string; refresh_token: string; expires_at: number; user?: AuthUser };
+export type AdminUser = AuthUser & { created_at: string };
+export type LogEntry = {
+  id: string; ts: string; source: string; level: string;
+  message: string; user_id: string | null; metadata: unknown;
+};
+export type SettingRow = { key: string; value: unknown; is_secret: boolean; updated_at: string };
 
 export type Workspace = {
   id: string; slug: string; name: string;
