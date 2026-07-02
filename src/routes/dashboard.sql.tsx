@@ -185,6 +185,41 @@ function SqlRunnerPage() {
             {!parsedParams.ok && (
               <div className="mt-1 text-[11px] text-red-400">{parsedParams.error}</div>
             )}
+
+            {parsedParams.ok && (clientCheck.maxIndex > 0 || clientCheck.issues.length > 0 || clientCheck.blocked.length > 0 || clientCheck.writeInReadOnly) && (
+              <div className="mt-2 space-y-1 text-[11px]">
+                {clientCheck.maxIndex > 0 && (
+                  <div className="text-muted-foreground">
+                    <span className="font-medium text-foreground">Bind slots:</span>{" "}
+                    {clientCheck.paramTypes.map((p) => (
+                      <code key={p.index} className="mr-1.5">${p.index}=<span className="text-primary">{p.type}</span></code>
+                    ))}
+                  </div>
+                )}
+                {clientCheck.issues.map((i, idx) => (
+                  <div key={idx} className={
+                    i.kind === "extra_param"
+                      ? "text-amber-300 inline-flex items-start gap-1"
+                      : "text-red-400 inline-flex items-start gap-1"
+                  }>
+                    <ShieldAlert className="h-3 w-3 mt-0.5 shrink-0" />
+                    <span>{i.message}</span>
+                  </div>
+                ))}
+                {clientCheck.writeInReadOnly && (
+                  <div className="text-red-400 inline-flex items-start gap-1">
+                    <ShieldAlert className="h-3 w-3 mt-0.5 shrink-0" />
+                    <span>Read-only is on but the SQL contains a write verb (INSERT/UPDATE/DELETE/DDL).</span>
+                  </div>
+                )}
+                {clientCheck.blocked.length > 0 && (
+                  <div className="text-red-400 inline-flex items-start gap-1">
+                    <ShieldAlert className="h-3 w-3 mt-0.5 shrink-0" />
+                    <span>Disallowed statement{clientCheck.blocked.length > 1 ? "s" : ""}: {clientCheck.blocked.join(", ")}. Server will reject.</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {error && (
