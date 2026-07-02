@@ -24,6 +24,7 @@ import { Route as DashboardMigrationsRouteImport } from './routes/dashboard.migr
 import { Route as DashboardMfaRouteImport } from './routes/dashboard.mfa'
 import { Route as DashboardLogsRouteImport } from './routes/dashboard.logs'
 import { Route as DashboardJobsRouteImport } from './routes/dashboard.jobs'
+import { Route as DashboardIntegrationsRouteImport } from './routes/dashboard.integrations'
 import { Route as DashboardDatabaseRouteImport } from './routes/dashboard.database'
 import { Route as DashboardAuditRouteImport } from './routes/dashboard.audit'
 import { Route as DashboardApiRouteImport } from './routes/dashboard.api'
@@ -104,6 +105,11 @@ const DashboardJobsRoute = DashboardJobsRouteImport.update({
   path: '/jobs',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardIntegrationsRoute = DashboardIntegrationsRouteImport.update({
+  id: '/integrations',
+  path: '/integrations',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardDatabaseRoute = DashboardDatabaseRouteImport.update({
   id: '/database',
   path: '/database',
@@ -133,6 +139,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/api': typeof DashboardApiRoute
   '/dashboard/audit': typeof DashboardAuditRoute
   '/dashboard/database': typeof DashboardDatabaseRoute
+  '/dashboard/integrations': typeof DashboardIntegrationsRoute
   '/dashboard/jobs': typeof DashboardJobsRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/mfa': typeof DashboardMfaRoute
@@ -153,6 +160,7 @@ export interface FileRoutesByTo {
   '/dashboard/api': typeof DashboardApiRoute
   '/dashboard/audit': typeof DashboardAuditRoute
   '/dashboard/database': typeof DashboardDatabaseRoute
+  '/dashboard/integrations': typeof DashboardIntegrationsRoute
   '/dashboard/jobs': typeof DashboardJobsRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/mfa': typeof DashboardMfaRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   '/dashboard/api': typeof DashboardApiRoute
   '/dashboard/audit': typeof DashboardAuditRoute
   '/dashboard/database': typeof DashboardDatabaseRoute
+  '/dashboard/integrations': typeof DashboardIntegrationsRoute
   '/dashboard/jobs': typeof DashboardJobsRoute
   '/dashboard/logs': typeof DashboardLogsRoute
   '/dashboard/mfa': typeof DashboardMfaRoute
@@ -198,6 +207,7 @@ export interface FileRouteTypes {
     | '/dashboard/api'
     | '/dashboard/audit'
     | '/dashboard/database'
+    | '/dashboard/integrations'
     | '/dashboard/jobs'
     | '/dashboard/logs'
     | '/dashboard/mfa'
@@ -218,6 +228,7 @@ export interface FileRouteTypes {
     | '/dashboard/api'
     | '/dashboard/audit'
     | '/dashboard/database'
+    | '/dashboard/integrations'
     | '/dashboard/jobs'
     | '/dashboard/logs'
     | '/dashboard/mfa'
@@ -239,6 +250,7 @@ export interface FileRouteTypes {
     | '/dashboard/api'
     | '/dashboard/audit'
     | '/dashboard/database'
+    | '/dashboard/integrations'
     | '/dashboard/jobs'
     | '/dashboard/logs'
     | '/dashboard/mfa'
@@ -366,6 +378,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardJobsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/integrations': {
+      id: '/dashboard/integrations'
+      path: '/integrations'
+      fullPath: '/dashboard/integrations'
+      preLoaderRoute: typeof DashboardIntegrationsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/database': {
       id: '/dashboard/database'
       path: '/database'
@@ -402,6 +421,7 @@ interface DashboardRouteChildren {
   DashboardApiRoute: typeof DashboardApiRoute
   DashboardAuditRoute: typeof DashboardAuditRoute
   DashboardDatabaseRoute: typeof DashboardDatabaseRoute
+  DashboardIntegrationsRoute: typeof DashboardIntegrationsRoute
   DashboardJobsRoute: typeof DashboardJobsRoute
   DashboardLogsRoute: typeof DashboardLogsRoute
   DashboardMfaRoute: typeof DashboardMfaRoute
@@ -421,6 +441,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardApiRoute: DashboardApiRoute,
   DashboardAuditRoute: DashboardAuditRoute,
   DashboardDatabaseRoute: DashboardDatabaseRoute,
+  DashboardIntegrationsRoute: DashboardIntegrationsRoute,
   DashboardJobsRoute: DashboardJobsRoute,
   DashboardLogsRoute: DashboardLogsRoute,
   DashboardMfaRoute: DashboardMfaRoute,

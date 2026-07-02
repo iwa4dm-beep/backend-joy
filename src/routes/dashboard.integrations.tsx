@@ -42,8 +42,7 @@ function IntegrationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Integration health"
-        subtitle="Live readiness for Phase 15 & 16 modules (MFA, SSO, Push, Templates, AI & Vector)"
-        icon={HeartPulse}
+        description="Live readiness for Phase 15 & 16 modules (MFA, SSO, Push, Templates, AI & Vector)"
         actions={
           <button onClick={() => void load()} disabled={loading}
             className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-60">
