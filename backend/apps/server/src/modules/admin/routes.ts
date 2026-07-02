@@ -1,15 +1,20 @@
+import { randomBytes, createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import { env } from "../../config.js";
-import { requireApiKey, requireServiceRole } from "../../lib/apikey.js";
+import { requireApiKey, requireAdmin, bustKeyCache } from "../../lib/apikey.js";
+import { audit as logAudit } from "../../lib/audit.js";
 
 const adminPool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 5 });
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export async function adminRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireApiKey);
-  app.addHook("preHandler", async (req, reply) => { requireServiceRole(req, reply); });
+  // Every /admin/v1/* endpoint requires BOTH the service_role key AND
+  // an admin JWT. A leaked API key alone cannot mutate anything.
+  app.addHook("preHandler", async (req, reply) => { requireAdmin(req, reply); });
 
   app.get("/users", async () => {
     return db.selectFrom("users")
@@ -143,4 +148,123 @@ export async function adminRoutes(app: FastifyInstance) {
       next_offset: rows.rows.length === limit ? offset + limit : null,
     };
   });
+
+  // ============================================================
+  // API keys — list / mint / revoke (per-workspace)
+  //
+  // Mint returns the plaintext EXACTLY ONCE. We only ever store
+  // sha256(plaintext) so a compromised DB dump cannot be replayed.
+  // ============================================================
+  app.get("/workspaces/:id/keys", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ error: "bad_workspace_id" });
+    const { rows } = await adminPool.query(
+      `select id, kind, name, key_prefix, created_at, revoked_at, last_used_at, use_count
+         from public.workspace_api_keys where workspace_id = $1 order by created_at desc`,
+      [id],
+    );
+    return { items: rows };
+  });
+
+  app.post("/workspaces/:id/keys", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      name: z.string().min(1).max(80),
+      kind: z.enum(["anon", "service_role"]),
+    }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "invalid_body", issues: body.success });
+
+    // 32 random bytes → 43-char base64url. Prefix identifies the key
+    // kind at a glance in logs without revealing entropy.
+    const secret = randomBytes(32).toString("base64url");
+    const plaintext = `pk_${body.data.kind === "service_role" ? "svc" : "anon"}_${secret}`;
+    const prefix = plaintext.slice(0, 12);
+    const keyId = crypto.randomUUID();
+
+    await adminPool.query(
+      `insert into public.workspace_api_keys
+         (id, workspace_id, kind, name, key_prefix, key_hash, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [keyId, id, body.data.kind, body.data.name, prefix, sha256(plaintext), req.auth?.user?.sub ?? null],
+    );
+    await logAudit(req, {
+      action: "api_key.mint", target: keyId, status: "ok",
+      metadata: { workspace_id: id, kind: body.data.kind, name: body.data.name, prefix },
+    });
+    return reply.code(201).send({
+      id: keyId, kind: body.data.kind, name: body.data.name, key_prefix: prefix,
+      // ⚠️ shown once — the client must persist it now.
+      plaintext,
+    });
+  });
+
+  app.delete("/workspaces/:id/keys/:keyId", async (req, reply) => {
+    const { id, keyId } = req.params as { id: string; keyId: string };
+    const r = await adminPool.query(
+      `update public.workspace_api_keys set revoked_at = now()
+        where id = $1 and workspace_id = $2 and revoked_at is null
+       returning id`,
+      [keyId, id],
+    );
+    if (r.rowCount === 0) return reply.code(404).send({ error: "not_found_or_already_revoked" });
+    bustKeyCache();
+    await logAudit(req, { action: "api_key.revoke", target: keyId, status: "ok", metadata: { workspace_id: id } });
+    return { ok: true };
+  });
+
+  // ============================================================
+  // Service settings — key/value store scoped to a workspace
+  // ============================================================
+  const settingsRow = z.object({
+    key:       z.string().min(1).max(120).regex(/^[a-z0-9_.-]+$/i),
+    value:     z.unknown(),
+    is_secret: z.boolean().optional().default(false),
+  });
+
+  app.get("/settings", async (req) => {
+    const q = (req.query ?? {}) as { workspace_id?: string };
+    const wsId = q.workspace_id ?? req.auth?.workspaceId ?? null;
+    if (!wsId) return { items: [] };
+    const { rows } = await adminPool.query(
+      `select key, value, is_secret, updated_at from public.service_settings
+        where workspace_id = $1 order by key`,
+      [wsId],
+    );
+    // Redact secrets on read; the dashboard shows "•••••" and offers
+    // a "reveal" action that goes through a separate audited endpoint.
+    return {
+      items: rows.map((r) => ({ ...r, value: r.is_secret ? null : r.value })),
+    };
+  });
+
+  app.put("/settings", async (req, reply) => {
+    const body = settingsRow.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "invalid_body", issues: body.error.issues });
+    const wsId = (req.body as { workspace_id?: string }).workspace_id ?? req.auth?.workspaceId;
+    if (!wsId) return reply.code(400).send({ error: "workspace_required" });
+
+    await adminPool.query(
+      `insert into public.service_settings (workspace_id, key, value, is_secret, updated_by, updated_at)
+       values ($1,$2,$3::jsonb,$4,$5, now())
+       on conflict (workspace_id, key) do update set
+         value = excluded.value, is_secret = excluded.is_secret,
+         updated_by = excluded.updated_by, updated_at = now()`,
+      [wsId, body.data.key, JSON.stringify(body.data.value ?? null), body.data.is_secret, req.auth?.user?.sub ?? null],
+    );
+    await logAudit(req, {
+      action: "settings.upsert", target: body.data.key, status: "ok",
+      metadata: { workspace_id: wsId, is_secret: body.data.is_secret },
+    });
+    return { ok: true };
+  });
+
+  app.delete("/settings/:key", async (req, reply) => {
+    const { key } = req.params as { key: string };
+    const wsId = (req.query as { workspace_id?: string })?.workspace_id ?? req.auth?.workspaceId;
+    if (!wsId) return reply.code(400).send({ error: "workspace_required" });
+    await adminPool.query(`delete from public.service_settings where workspace_id = $1 and key = $2`, [wsId, key]);
+    await logAudit(req, { action: "settings.delete", target: key, status: "ok", metadata: { workspace_id: wsId } });
+    return { ok: true };
+  });
 }
+

@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import { Copy, KeyRound } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Copy, KeyRound, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
+import { isLive, live, type Workspace, type WorkspaceKey } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/projects")({
   component: ProjectsPage,
@@ -9,10 +10,34 @@ export const Route = createFileRoute("/dashboard/projects")({
 
 function ProjectsPage() {
   const [copied, setCopied] = useState<string | null>(null);
-  const keys = [
-    { name: "anon (public)", value: "pk_anon_3f9k2lq8d7s2nv0w" },
-    { name: "service_role (server only)", value: "sk_service_8xv2j7l4m1q5pdz0", danger: true },
-  ];
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [wsId, setWsId] = useState<string | null>(null);
+  const [keys, setKeys] = useState<WorkspaceKey[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [minted, setMinted] = useState<{ name: string; plaintext: string } | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newKind, setNewKind] = useState<"anon" | "service_role">("anon");
+
+  useEffect(() => {
+    if (!isLive()) return;
+    (async () => {
+      try {
+        const { workspaces: ws } = await live.workspaces.list();
+        setWorkspaces(ws);
+        if (ws.length && !wsId) setWsId(ws[0].id);
+      } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!isLive() || !wsId) return;
+    (async () => {
+      try {
+        const { items } = await live.admin.apiKeys.list(wsId);
+        setKeys(items);
+      } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    })();
+  }, [wsId]);
 
   function copy(v: string) {
     navigator.clipboard.writeText(v);
@@ -20,22 +45,138 @@ function ProjectsPage() {
     setTimeout(() => setCopied(null), 1200);
   }
 
+  async function mint() {
+    if (!wsId || !newName.trim()) return;
+    try {
+      const r = await live.admin.apiKeys.mint(wsId, newName.trim(), newKind);
+      setMinted({ name: r.name, plaintext: r.plaintext });
+      setNewName("");
+      const { items } = await live.admin.apiKeys.list(wsId);
+      setKeys(items);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  }
+
+  async function revoke(id: string) {
+    if (!wsId) return;
+    try {
+      await live.admin.apiKeys.revoke(wsId, id);
+      const { items } = await live.admin.apiKeys.list(wsId);
+      setKeys(items);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  }
+
+  // Fallback (no live backend configured) — keep the original static
+  // display so the dashboard still renders in demo mode.
+  if (!isLive()) {
+    const demo = [
+      { name: "anon (public)", value: "pk_anon_3f9k2lq8d7s2nv0w", danger: false },
+      { name: "service_role (server only)", value: "sk_service_8xv2j7l4m1q5pdz0", danger: true },
+    ];
+    return (
+      <div>
+        <PageHeader title="Projects & API Keys" description="এই Pluto instance-এর project URL ও keys। (mock)" />
+        <div className="rounded-lg border border-border bg-card p-6">
+          <div className="flex items-center gap-2"><KeyRound className="h-4 w-4 text-muted-foreground" /><h2 className="font-medium">Default project</h2></div>
+          <div className="mt-5 space-y-4">
+            <Field label="Project URL" value="http://localhost:8000" onCopy={copy} copied={copied} />
+            {demo.map((k) => <Field key={k.name} label={k.name} value={k.value} onCopy={copy} copied={copied} danger={k.danger} />)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <PageHeader title="Projects & API Keys" description="এই Pluto instance-এর project URL ও keys।" />
+      <PageHeader
+        title="Projects & API Keys"
+        description="Workspace বেছে নিন এবং API key mint/revoke করুন। (live)"
+        actions={
+          <select
+            value={wsId ?? ""}
+            onChange={(e) => setWsId(e.target.value)}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+          >
+            {workspaces.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        }
+      />
 
-      <div className="rounded-lg border border-border bg-card p-6">
-        <div className="flex items-center gap-2">
+      {err && <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
+
+      {minted && (
+        <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-4">
+          <div className="text-sm font-medium">Key "{minted.name}" minted — copy it now.</div>
+          <p className="text-xs text-muted-foreground mt-1">
+            এই key শুধু এক বারই দেখানো হবে; পরে হারিয়ে গেলে revoke করে নতুন mint করতে হবে।
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <code className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-xs font-mono">{minted.plaintext}</code>
+            <button onClick={() => copy(minted.plaintext)} className="inline-flex items-center gap-1.5 rounded-md border border-input px-3 py-2 text-xs hover:bg-accent">
+              <Copy className="h-3.5 w-3.5" />{copied === minted.plaintext ? "Copied" : "Copy"}
+            </button>
+            <button onClick={() => setMinted(null)} className="rounded-md border border-input px-3 py-2 text-xs hover:bg-accent">Dismiss</button>
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border bg-card p-5">
+        <div className="flex items-center gap-2 mb-4">
           <KeyRound className="h-4 w-4 text-muted-foreground" />
-          <h2 className="font-medium">Default project</h2>
+          <h2 className="font-medium">API keys</h2>
         </div>
 
-        <div className="mt-5 space-y-4">
-          <Field label="Project URL" value="http://localhost:8000" onCopy={copy} copied={copied} />
-          {keys.map((k) => (
-            <Field key={k.name} label={k.name} value={k.value} onCopy={copy} copied={copied} danger={k.danger} />
-          ))}
+        <div className="mb-4 flex gap-2">
+          <input
+            placeholder="Key name (e.g. mobile-prod)"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          />
+          <select value={newKind} onChange={(e) => setNewKind(e.target.value as "anon" | "service_role")} className="rounded-md border border-input bg-background px-2 py-2 text-sm">
+            <option value="anon">anon</option>
+            <option value="service_role">service_role</option>
+          </select>
+          <button onClick={mint} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90">
+            <Plus className="h-3.5 w-3.5" /> Mint
+          </button>
         </div>
+
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40">
+            <tr>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Name</th>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Kind</th>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Prefix</th>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Used</th>
+              <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Status</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {keys.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-xs text-muted-foreground">No keys yet — mint one above.</td></tr>}
+            {keys.map((k) => (
+              <tr key={k.id} className="border-t border-border">
+                <td className="px-3 py-2">{k.name}</td>
+                <td className="px-3 py-2 text-xs"><code className={k.kind === "service_role" ? "text-destructive" : ""}>{k.kind}</code></td>
+                <td className="px-3 py-2 font-mono text-xs">{k.key_prefix}…</td>
+                <td className="px-3 py-2 text-xs text-muted-foreground">{k.use_count}</td>
+                <td className="px-3 py-2 text-xs">
+                  {k.revoked_at
+                    ? <span className="rounded bg-muted px-1.5 py-0.5">revoked</span>
+                    : <span className="rounded bg-emerald-500/15 text-emerald-600 px-1.5 py-0.5">active</span>}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {!k.revoked_at && (
+                    <button onClick={() => revoke(k.id)} className="text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
         <p className="mt-6 text-xs text-muted-foreground">
           ⚠️ <span className="font-medium">service_role</span> key কখনো frontend-এ ব্যবহার করবেন না — এটি RLS bypass করে।
