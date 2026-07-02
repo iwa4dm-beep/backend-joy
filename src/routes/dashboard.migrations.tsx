@@ -244,6 +244,15 @@ function MigrationsPage() {
               >
                 <Download className="h-3 w-3" /> Text
               </button>
+              <button
+                onClick={() => exportPlan("sql")}
+                disabled={plan.length === 0}
+                title="Download an executable .sql file wrapped in BEGIN/COMMIT"
+                className="inline-flex items-center gap-1 text-xs rounded-md border border-primary/40 bg-primary/10 text-primary px-2 py-1 hover:bg-primary/20 disabled:opacity-40"
+              >
+                <Download className="h-3 w-3" /> SQL
+              </button>
+
               <button onClick={() => setPlan(null)} className="text-xs text-muted-foreground hover:text-foreground">Dismiss</button>
             </div>
           </div>
