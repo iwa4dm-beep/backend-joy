@@ -56,7 +56,7 @@ function AiPage() {
       <PageHeader
         title="AI & Vector"
         description="Embeddings, streaming chat, and vector search — proxied through Pluto so your frontend never sees a provider key."
-        icon={Sparkles}
+
       />
 
       <Card>

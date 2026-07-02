@@ -80,7 +80,7 @@ function MfaPage() {
       <PageHeader
         title="Multi-factor authentication"
         description="Time-based one-time passwords (TOTP) and single-use recovery codes. Phase 15 — handlers land in 15.1."
-        icon={Shield}
+
       />
 
       {!live && (
