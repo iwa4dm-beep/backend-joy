@@ -1,8 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, ChevronLeft, ChevronRight, Circle, Eye, RefreshCw, Search, XCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ChevronLeft, ChevronRight, Circle, Eye, RefreshCw, Search, ShieldAlert, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, live, subscribe, type AuditEvent, type AuditPage, type AuditQuery, type RealtimeEvent } from "@/lib/pluto/live";
+import {
+  isLive, live, subscribe,
+  type AuditEvent, type AuditPage, type AuditQuery,
+  type RealtimeAuthError, type RealtimeEvent, type RealtimeStatus,
+} from "@/lib/pluto/live";
+
+// Small debounce hook — audit filter inputs use it so we don't refetch
+// (and re-run the ILIKE query on the server) on every keystroke. The
+// server still enforces its own limits via zod max lengths.
+function useDebounced<T>(value: T, ms = 300): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
 
 export const Route = createFileRoute("/dashboard/audit")({
   component: AuditPage,
