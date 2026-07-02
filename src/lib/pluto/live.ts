@@ -125,6 +125,28 @@ export type DryRunEntry = {
   simulation_error: string | null;
 };
 
+// Boot-time migration run history (populated by src/db/migrate.ts under
+// PLUTO_BOOT_ACTOR=boot). Surfaced by /admin/v1/migrations/last-boot.
+export type BootRun = {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  actor: string;
+  mode: "apply" | "dry-run" | "plan" | string;
+  host: string | null;
+  version_tag: string | null;
+  pending: string[];
+  drift: string[];
+  applied: string[];
+  failed: { version: string; error: string }[];
+  duration_ms: number;
+  status: "ok" | "error" | string;
+  error: string | null;
+  lock_acquired: boolean;
+  advisory_key: string | null;
+};
+
+
 export type AuditEvent = {
   id: string;
   ts: string;
@@ -172,7 +194,9 @@ export const live = {
     ),
     rerun: (version: string) => api(`/admin/v1/migrations/${version}/rerun`, { method: "POST", service: true }),
     rollback: (version: string) => api(`/admin/v1/migrations/${version}/rollback`, { method: "POST", service: true }),
+    lastBoot: () => api<{ run: BootRun | null }>("/admin/v1/migrations/last-boot", { service: true }),
   },
+
   jobs: {
     list: () => api<JobToken[]>("/jobs/v1/tokens", { service: true }),
     mint: (name: string, scope: string[], ttl_seconds: number) => api<{ id: string; name: string; expires_at: string; token: string }>(
@@ -339,9 +363,10 @@ export const live = {
 
   /** Realtime — subscribe to broadcast channels or Postgres row changes. */
   realtime: {
-    subscribe: (channel: string, cb: (e: RealtimeEvent) => void) => subscribe(channel, cb),
-    subscribeTable: (spec: string, cb: (c: RealtimeChange) => void) => subscribeTable(spec, cb),
+    subscribe: (channel: string, cb: (e: RealtimeEvent) => void, opts?: { onStatus?: (s: RealtimeStatus) => void }) => subscribe(channel, cb, opts),
+    subscribeTable: (spec: string, cb: (c: RealtimeChange) => void, opts?: { onStatus?: (s: RealtimeStatus) => void }) => subscribeTable(spec, cb, opts),
   },
+
 
   // ---- Admin surfaces (used by dashboard pages) ----
   admin: {
@@ -477,14 +502,34 @@ export type RealtimeChange = {
   record: Record<string, unknown>;
 };
 
+// Fatal auth codes: server-side realtime handshake rejects these
+// permanently; the client should stop reconnecting until the operator
+// updates the API key or JWT.
+export type RealtimeAuthError = "admin_required" | "admin_role_required" | "invalid_api_key";
+export type RealtimeStatus =
+  | { kind: "connecting" }
+  | { kind: "open" }
+  | { kind: "closed"; reason?: string }
+  | { kind: "auth_error"; error: RealtimeAuthError; message: string };
+
 type WsMsg = {
   type?: string; channel?: string; event?: string;
   payload?: unknown; record?: Record<string, unknown>; ts?: string;
+  error?: string; fatal?: boolean;
+};
+
+type SubscribeOpts = { onStatus?: (s: RealtimeStatus) => void };
+
+const AUTH_ERROR_MESSAGES: Record<RealtimeAuthError, string> = {
+  admin_required:      "Realtime requires the service_role API key. Update VITE_PLUTO_SERVICE_KEY to view live system:* channels.",
+  admin_role_required: "The signed-in user must have role='admin' to subscribe to system:* channels. Sign in with an admin account.",
+  invalid_api_key:     "The API key was rejected by the realtime server. Update VITE_PLUTO_ANON_KEY / VITE_PLUTO_SERVICE_KEY.",
 };
 
 function openSocket(
   handler: (m: WsMsg) => void,
   onOpen: (send: (m: unknown) => void) => void,
+  opts: SubscribeOpts = {},
 ): () => void {
   const cfg = liveConfig();
   if (!cfg) return () => {};
@@ -492,18 +537,42 @@ function openSocket(
     `/realtime/v1/?apikey=${encodeURIComponent(cfg.serviceKey ?? cfg.anonKey)}`;
   let ws: WebSocket | null = null;
   let closed = false;
+  let halted = false;              // set on fatal auth failure — no more retries
   let retry = 0;
 
+  const status = (s: RealtimeStatus) => { try { opts.onStatus?.(s); } catch { /* swallow */ } };
+
   const connect = () => {
-    if (closed) return;
+    if (closed || halted) return;
+    status({ kind: "connecting" });
     ws = new WebSocket(wsUrl);
     const send = (m: unknown) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
-    ws.addEventListener("open", () => { retry = 0; onOpen(send); });
+    ws.addEventListener("open", () => { retry = 0; status({ kind: "open" }); onOpen(send); });
     ws.addEventListener("message", (ev) => {
-      try { handler(JSON.parse(ev.data) as WsMsg); } catch { /* ignore */ }
+      let msg: WsMsg;
+      try { msg = JSON.parse(ev.data) as WsMsg; } catch { return; }
+      // Fatal auth error from server — surface, halt, don't reconnect.
+      if (msg.type === "error" && msg.fatal && (msg.error === "admin_required" || msg.error === "admin_role_required")) {
+        halted = true;
+        const err = msg.error;
+        status({ kind: "auth_error", error: err, message: AUTH_ERROR_MESSAGES[err] });
+        try { ws?.close(); } catch { /* ignore */ }
+        return;
+      }
+      handler(msg);
     });
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (ev) => {
       if (closed) return;
+      // 1008 = policy violation — server rejected auth. Do not retry.
+      if (ev.code === 1008) {
+        halted = true;
+        const reason = (ev.reason || "invalid_api_key") as RealtimeAuthError;
+        const known = (reason === "admin_required" || reason === "admin_role_required" || reason === "invalid_api_key")
+          ? reason : "invalid_api_key";
+        status({ kind: "auth_error", error: known, message: AUTH_ERROR_MESSAGES[known] });
+        return;
+      }
+      status({ kind: "closed", reason: ev.reason });
       retry = Math.min(retry + 1, 6);
       setTimeout(connect, 500 * 2 ** retry);
     });
@@ -513,7 +582,11 @@ function openSocket(
   return () => { closed = true; ws?.close(); };
 }
 
-export function subscribe(channel: string, onEvent: (e: RealtimeEvent) => void): () => void {
+export function subscribe(
+  channel: string,
+  onEvent: (e: RealtimeEvent) => void,
+  opts: SubscribeOpts = {},
+): () => void {
   return openSocket(
     (msg) => {
       if (msg.type === "broadcast" && msg.channel === channel && msg.event) {
@@ -521,6 +594,7 @@ export function subscribe(channel: string, onEvent: (e: RealtimeEvent) => void):
       }
     },
     (send) => send({ type: "subscribe", channel }),
+    opts,
   );
 }
 
@@ -530,7 +604,11 @@ export function subscribe(channel: string, onEvent: (e: RealtimeEvent) => void):
  *   subscribeTable("public:notes", cb)
  *   subscribeTable("public:notes:user_id=eq.<uuid>", cb)
  */
-export function subscribeTable(spec: string, onChange: (c: RealtimeChange) => void): () => void {
+export function subscribeTable(
+  spec: string,
+  onChange: (c: RealtimeChange) => void,
+  opts: SubscribeOpts = {},
+): () => void {
   const baseChannel = spec.split(":").slice(0, 2).join(":");
   return openSocket(
     (msg) => {
@@ -543,8 +621,10 @@ export function subscribeTable(spec: string, onChange: (c: RealtimeChange) => vo
       }
     },
     (send) => send({ type: "subscribe", channel: spec }),
+    opts,
   );
 }
+
 
 // -------- OAuth helpers (browser redirect flow) --------
 //

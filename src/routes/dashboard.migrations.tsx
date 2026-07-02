@@ -1,12 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Eye, Play, RotateCcw, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Download, Eye, Play, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, live, subscribe, type DryRunEntry, type MigrationEntry, type RealtimeEvent } from "@/lib/pluto/live";
+import {
+  isLive, live, subscribe,
+  type BootRun, type DryRunEntry, type MigrationEntry,
+  type RealtimeAuthError, type RealtimeEvent, type RealtimeStatus,
+} from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/migrations")({
   component: MigrationsPage,
 });
+
 
 const STATUS_COLOR: Record<MigrationEntry["status"], string> = {
   applied: "text-emerald-500 bg-emerald-500/10 border-emerald-500/30",
@@ -27,6 +32,8 @@ function MigrationsPage() {
   const [plan, setPlan] = useState<DryRunEntry[] | null>(null);
   const [progress, setProgress] = useState<ProgressEntry[]>([]);
   const [liveConn, setLiveConn] = useState(false);
+  const [authErr, setAuthErr] = useState<{ code: RealtimeAuthError; message: string } | null>(null);
+  const [bootRun, setBootRun] = useState<BootRun | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -36,8 +43,12 @@ function MigrationsPage() {
         setNote("Showing sample data — configure VITE_PLUTO_URL & VITE_PLUTO_ANON_KEY to run against a live Pluto instance.");
         return;
       }
-      const { migrations } = await live.migrations.list();
+      const [{ migrations }, boot] = await Promise.all([
+        live.migrations.list(),
+        live.migrations.lastBoot().catch(() => ({ run: null as BootRun | null })),
+      ]);
       setEntries(migrations);
+      setBootRun(boot.run);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -48,7 +59,6 @@ function MigrationsPage() {
   // Live progress: subscribe to the migrations broadcast channel.
   useEffect(() => {
     if (!isLive()) return;
-    setLiveConn(true);
     const push = (e: RealtimeEvent) => {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const bits: string[] = [];
@@ -62,9 +72,16 @@ function MigrationsPage() {
       // Any run.done / rollback.done event should refresh the list.
       if (e.event === "run.done" || e.event.endsWith(".done") || e.event === "step") void load();
     };
-    const off = subscribe("system:migrations", push);
+    const off = subscribe("system:migrations", push, {
+      onStatus: (s: RealtimeStatus) => {
+        if (s.kind === "open") { setLiveConn(true); setAuthErr(null); }
+        else if (s.kind === "auth_error") { setLiveConn(false); setAuthErr({ code: s.error, message: s.message }); }
+        else setLiveConn(false);
+      },
+    });
     return () => { off(); setLiveConn(false); };
   }, [load]);
+
 
   async function guard<T>(key: string, fn: () => Promise<T>) {
     setBusy(key); setErr(null); setNote(null);

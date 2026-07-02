@@ -6,6 +6,7 @@ import { db } from "../../db/index.js";
 import { env } from "../../config.js";
 import { requireApiKey, requireAdmin, bustKeyCache } from "../../lib/apikey.js";
 import { audit as logAudit } from "../../lib/audit.js";
+import { lastBootRun } from "../../lib/migrator.js";
 
 const adminPool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 5 });
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -146,6 +147,15 @@ export async function adminRoutes(app: FastifyInstance) {
       objects: Number(obj[0].objects),
       storage_bytes: Number(obj[0].bytes),
     };
+  });
+
+  // Last boot-time migration run (populated by src/db/migrate.ts under
+  // PLUTO_BOOT_ACTOR=boot). Feeds the "Last Boot" widget in the
+  // migrations dashboard so operators can see what the container did
+  // on startup: pending plan, drift, applied statements, timings.
+  app.get("/migrations/last-boot", async () => {
+    const run = await lastBootRun();
+    return { run };
   });
 
   // Audit trail — read-only. Server-side filter by action (prefix with

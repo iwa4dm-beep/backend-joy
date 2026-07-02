@@ -112,8 +112,18 @@ export async function realtimeRoutes(app: FastifyInstance) {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === "subscribe" && msg.channel) {
         if (msg.channel.startsWith("system:") && !client.isAdmin) {
-          return client.send(JSON.stringify({ type: "error", channel: msg.channel, error: "admin_required" }));
+          // Distinguish "you need the service_role key" from "you have
+          // the key but your JWT doesn't carry role=admin". The UI
+          // uses this to render the correct fix instructions and to
+          // STOP retrying until credentials change.
+          const code = !isServiceRole ? "admin_required" : "admin_role_required";
+          client.send(JSON.stringify({ type: "error", channel: msg.channel, error: code, fatal: true }));
+          // Close with a policy-violation code so the client's
+          // reconnect logic can back off permanently.
+          try { socket.close(1008, code); } catch { /* already closed */ }
+          return;
         }
+
         const s = parseChannel(msg.channel);
         if (!s) return client.send(JSON.stringify({ type: "error", error: "bad_channel" }));
         client.subs.push(s);

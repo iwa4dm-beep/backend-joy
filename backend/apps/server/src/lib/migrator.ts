@@ -390,31 +390,76 @@ export async function planPendingDetailed(): Promise<DryRunEntry[]> {
   return plan;
 }
 
+// Same key migrate.ts uses so dashboard-triggered runs and boot-time
+// runs serialize against each other.
+const ADVISORY_KEY = "5787456889398095698"; // hex of "PLUTOMGR" masked
+
 export async function runPending(actor = "dashboard", emit?: EmitFn) {
   await ensureLedger();
-  const entries = await listMigrations();
-  const files = await readMigrationFiles();
-  const filesByVersion = new Map(files.map((f) => [f.version, f]));
-  const applied: string[] = [];
-  const failed: { version: string; error: string }[] = [];
-
-  const targets = entries.filter((e) => e.status === "pending" || e.status === "rolled_back" || e.status === "failed");
-  await emit?.("run.start", { total: targets.length, versions: targets.map((t) => t.version) });
-
-  for (const e of targets) {
-    const file = filesByVersion.get(e.version);
-    if (!file) continue;
-    try {
-      await runOne(file, actor, emit);
-      applied.push(e.version);
-    } catch (err) {
-      failed.push({ version: e.version, error: err instanceof Error ? err.message : String(err) });
-      break;
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    const r = await client.query<{ ok: boolean }>(
+      "select pg_try_advisory_lock($1::bigint) as ok", [ADVISORY_KEY],
+    );
+    locked = r.rows[0]?.ok === true;
+    if (!locked) {
+      await emit?.("run.locked", { reason: "advisory_lock_held" });
+      throw new Error("migration_lock_held");
     }
+
+    const entries = await listMigrations();
+    const files = await readMigrationFiles();
+    const filesByVersion = new Map(files.map((f) => [f.version, f]));
+    const applied: string[] = [];
+    const failed: { version: string; error: string }[] = [];
+
+    const targets = entries.filter((e) => e.status === "pending" || e.status === "rolled_back" || e.status === "failed");
+    await emit?.("run.start", { total: targets.length, versions: targets.map((t) => t.version) });
+
+    for (const e of targets) {
+      const file = filesByVersion.get(e.version);
+      if (!file) continue;
+      try {
+        await runOne(file, actor, emit);
+        applied.push(e.version);
+      } catch (err) {
+        failed.push({ version: e.version, error: err instanceof Error ? err.message : String(err) });
+        break;
+      }
+    }
+    await emit?.("run.done", { applied, failed });
+    return { applied, failed };
+  } finally {
+    if (locked) await client.query("select pg_advisory_unlock($1::bigint)", [ADVISORY_KEY]).catch(() => {});
+    client.release();
   }
-  await emit?.("run.done", { applied, failed });
-  return { applied, failed };
 }
+
+// Fetch the most-recent boot-time migration run (recorded by
+// src/db/migrate.ts when PLUTO_BOOT_ACTOR=boot). Returns null if the
+// table doesn't exist yet or has no rows.
+export type BootRun = {
+  id: string; started_at: string; finished_at: string | null;
+  actor: string; mode: string; host: string | null; version_tag: string | null;
+  pending: string[]; drift: string[]; applied: string[];
+  failed: { version: string; error: string }[];
+  duration_ms: number; status: string; error: string | null;
+  lock_acquired: boolean; advisory_key: string | null;
+};
+export async function lastBootRun(): Promise<BootRun | null> {
+  try {
+    const { rows } = await pool.query<BootRun>(
+      `select id, started_at, finished_at, actor, mode, host, version_tag,
+              pending, drift, applied, failed, duration_ms, status, error,
+              lock_acquired, advisory_key::text
+         from public.migration_boot_runs
+        order by started_at desc limit 1`,
+    );
+    return rows[0] ?? null;
+  } catch { return null; }
+}
+
 
 export async function rerunOne(version: string, actor = "dashboard", emit?: EmitFn) {
   const files = await readMigrationFiles();
