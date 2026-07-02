@@ -1,12 +1,19 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import argon2 from "argon2";
 import { z } from "zod";
 import { db } from "../../db/index.js";
 import { env } from "../../config.js";
-import { signAccessToken, verifyAccessToken } from "../../lib/jwt.js";
+import { signAccessToken } from "../../lib/jwt.js";
 import { requireApiKey } from "../../lib/apikey.js";
 import { log } from "../../lib/logs.js";
+import { preCheck, recordFailure, recordSuccess } from "../../lib/ratelimit.js";
+
+function limited(reply: FastifyReply, retryAfterSec: number, reason: string) {
+  reply.header("Retry-After", String(retryAfterSec));
+  return reply.code(429).send({ error: "rate_limited", reason, retry_after_sec: retryAfterSec });
+}
+type Req = FastifyRequest;
 
 const credsSchema = z.object({
   email: z.string().email().max(255),
