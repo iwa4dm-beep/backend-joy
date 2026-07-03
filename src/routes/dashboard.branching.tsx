@@ -1,8 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Plus, Trash2, Play, RefreshCw, GitBranch, Wand2, Camera, Undo2 } from "lucide-react";
+import { Loader2, Plus, Trash2, Play, RefreshCw, GitBranch, Wand2, Camera, Undo2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { isLive, branching, studio, type DbBranch, type BranchChange, type BranchSnapshot, type SchemaOp } from "@/lib/pluto/live";
+import { isLive, branching, studio, me, type DbBranch, type BranchChange, type BranchSnapshot, type SchemaOp, type WorkspaceRole } from "@/lib/pluto/live";
+
+// Phase 22b — Workspace-role RBAC gates schema apply / branch apply. Non-admins can still browse.
+function useWorkspaceAdmin(): { role: WorkspaceRole; canAdmin: boolean } {
+  const [role, setRole] = useState<WorkspaceRole>("member");
+  useEffect(() => {
+    if (!isLive()) return;
+    me.workspaceRole().then((r) => setRole(r.role)).catch(() => setRole("anon"));
+  }, []);
+  return {
+    role,
+    canAdmin: role === "owner" || role === "admin" || role === "global_admin" || role === "service_role",
+  };
+}
 
 export const Route = createFileRoute("/dashboard/branching")({ component: BranchingPage });
 
@@ -13,6 +26,7 @@ export const Route = createFileRoute("/dashboard/branching")({ component: Branch
 
 function BranchingPage() {
   const [tab, setTab] = useState<"branches" | "studio">("branches");
+  const { role, canAdmin } = useWorkspaceAdmin();
   return (
     <div className="p-6 space-y-6">
       <PageHeader
@@ -24,6 +38,11 @@ function BranchingPage() {
           Set <code>VITE_PLUTO_URL</code> to a running Pluto instance to use branching &amp; studio.
         </div>
       )}
+      {!canAdmin && isLive() && (
+        <div className="rounded-md border border-border bg-muted/30 p-3 text-xs inline-flex items-center gap-2">
+          <Lock className="h-3 w-3" /> Read-only view — schema apply is restricted to workspace admins (your role: <code>{role}</code>).
+        </div>
+      )}
       <div className="flex gap-2 border-b border-border">
         {(["branches", "studio"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
@@ -33,12 +52,12 @@ function BranchingPage() {
           </button>
         ))}
       </div>
-      {tab === "branches" ? <BranchesTab /> : <StudioTab />}
+      {tab === "branches" ? <BranchesTab canAdmin={canAdmin} /> : <StudioTab canAdmin={canAdmin} />}
     </div>
   );
 }
 
-function BranchesTab() {
+function BranchesTab({ canAdmin }: { canAdmin: boolean }) {
   const [rows, setRows] = useState<DbBranch[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -145,9 +164,10 @@ function BranchesTab() {
           <textarea value={sql} onChange={(e) => setSql(e.target.value)}
             disabled={!selected} rows={6} placeholder="alter table users add column tier text default 'free';"
             className="w-full bg-background border border-border rounded px-2 py-2 text-xs font-mono" />
-          <button onClick={() => void apply()} disabled={!selected || applying || !sql.trim()}
+          <button onClick={() => void apply()} disabled={!selected || applying || !sql.trim() || !canAdmin}
+            title={canAdmin ? "Apply SQL to branch" : "Workspace admin required"}
             className="inline-flex items-center gap-1 rounded bg-primary text-primary-foreground text-xs px-3 py-1.5 disabled:opacity-40">
-            {applying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Apply
+            {applying ? <Loader2 className="h-3 w-3 animate-spin" /> : canAdmin ? <Play className="h-3 w-3" /> : <Lock className="h-3 w-3" />} Apply
           </button>
           <div>
             <div className="text-xs font-medium mb-2">Change history</div>
@@ -205,7 +225,7 @@ function BranchesTab() {
 
 // ---------- Studio ----------
 type Row = { name: string; type: string; nullable: boolean; primary: boolean };
-function StudioTab() {
+function StudioTab({ canAdmin }: { canAdmin: boolean }) {
   const [mode, setMode] = useState<"create_table" | "add_column" | "add_index" | "add_fk" | "drop_column">("create_table");
   const [schema, setSchema] = useState("public");
   const [table, setTable] = useState("");
@@ -343,8 +363,10 @@ function StudioTab() {
           <button onClick={() => void dryRun()} disabled={!op || busy} className="text-xs inline-flex items-center gap-1 border border-border rounded px-3 py-1.5 disabled:opacity-40">
             <Wand2 className="h-3 w-3" /> Preview SQL
           </button>
-          <button onClick={() => void apply()} disabled={!op || busy} className="text-xs inline-flex items-center gap-1 bg-primary text-primary-foreground rounded px-3 py-1.5 disabled:opacity-40">
-            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} {branchId ? "Apply to branch" : "Apply"}
+          <button onClick={() => void apply()} disabled={!op || busy || !canAdmin}
+            title={canAdmin ? "Apply schema change" : "Workspace admin required"}
+            className="text-xs inline-flex items-center gap-1 bg-primary text-primary-foreground rounded px-3 py-1.5 disabled:opacity-40">
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : canAdmin ? <Play className="h-3 w-3" /> : <Lock className="h-3 w-3" />} {branchId ? "Apply to branch" : "Apply"}
           </button>
         </div>
         {err && <div className="text-xs text-red-500">{err}</div>}

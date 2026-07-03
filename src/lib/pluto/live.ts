@@ -1042,6 +1042,12 @@ export const studio = {
   history: () => api<{ edits: Array<{ id: number; operation: SchemaOp; sql: string; ok: boolean; error: string | null; applied_at: string; branch_id: string | null }> }>("/schema/v1/history"),
 };
 
+export type WorkspaceRole = "owner" | "admin" | "member" | "viewer" | "global_admin" | "service_role" | "anon";
+
+export const me = {
+  workspaceRole: () => api<{ role: WorkspaceRole; can_admin: boolean }>("/me/v1/workspace-role"),
+};
+
 export const usage = {
   record: (body: { metric: UsageMetric; quantity: number; environment?: UsageEnvironment; billing_label?: string; meta?: Record<string, unknown> }) =>
     api<{ ok: boolean }>("/usage/v1/events", { method: "POST", body: JSON.stringify(body) }),
@@ -1050,4 +1056,53 @@ export const usage = {
   quotas: () => api<{ quotas: Quota[] }>("/usage/v1/quotas"),
   setQuota: (body: { metric: UsageMetric; period?: "day" | "month"; hard_limit: number; soft_limit?: number; overage_behavior?: OverageBehavior; billing_label?: string }) =>
     api<{ ok: boolean }>("/usage/v1/quotas", { method: "PUT", body: JSON.stringify(body) }),
+
+  // Phase 22b — Server-Sent Events stream. Fetch-based (EventSource can't
+  // send auth headers). Returns an unsubscribe function; the callback fires
+  // once on connect and again on every ingest / 3s heartbeat.
+  stream(
+    onSummary: (s: UsageSummary & { quotas: Quota[]; ts: number }) => void,
+    opts: { period?: "day" | "month"; environment?: UsageEnvironment; onError?: (e: Error) => void } = {},
+  ): () => void {
+    const cfg = liveConfig();
+    if (!cfg) { opts.onError?.(new Error("Pluto backend not configured")); return () => undefined; }
+    const controller = new AbortController();
+    const qs = new URLSearchParams();
+    if (opts.period) qs.set("period", opts.period);
+    if (opts.environment) qs.set("environment", opts.environment);
+    (async () => {
+      try {
+        const res = await fetch(`${cfg.url.replace(/\/$/, "")}/usage/v1/stream?${qs.toString()}`, {
+          method: "GET",
+          headers: { ...bearer(false), accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`stream failed: HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf("\n\n")) !== -1) {
+            const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+            const lines = raw.split("\n");
+            let event = "message"; let data = "";
+            for (const l of lines) {
+              if (l.startsWith("event:")) event = l.slice(6).trim();
+              else if (l.startsWith("data:")) data += l.slice(5).trim();
+            }
+            if (event === "summary" && data) {
+              try { onSummary(JSON.parse(data)); } catch { /* malformed frame */ }
+            }
+          }
+        }
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") opts.onError?.(e as Error);
+      }
+    })();
+    return () => controller.abort();
+  },
 };

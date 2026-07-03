@@ -155,3 +155,51 @@ export function requireAdmin(req: FastifyRequest, reply: FastifyReply): void {
     reply.code(403).send({ error: "admin_role_required" });
   }
 }
+
+// Phase 22 — Workspace-scoped RBAC gate for privileged mutations
+// (quota editing, schema apply, branch apply). The caller may pass any
+// api key, but the session user MUST be either:
+//   • a global admin (auth.user.role === "admin"), OR
+//   • an owner/admin in public.workspace_members for the target workspace.
+// The service_role api key alone also grants access — it's already a
+// privileged system credential and matches the existing admin surfaces.
+export async function requireWorkspaceAdmin(
+  req: FastifyRequest, reply: FastifyReply,
+): Promise<void> {
+  if (req.auth?.apiKey === "service_role") return;
+  const user = req.auth?.user;
+  if (!user) { reply.code(401).send({ error: "auth_required" }); return; }
+  if (user.role === "admin") return;
+  const raw = req.headers["x-workspace-id"];
+  const ws = Array.isArray(raw) ? raw[0] : raw;
+  if (!ws) { reply.code(400).send({ error: "workspace_required" }); return; }
+  const row = await db
+    .selectFrom("workspace_members as m" as never)
+    .select(["m.role as role" as never])
+    .where("m.workspace_id" as never, "=", ws as never)
+    .where("m.user_id" as never, "=", user.sub as never)
+    .executeTakeFirst() as { role: string } | undefined;
+  if (row && (row.role === "owner" || row.role === "admin")) return;
+  reply.code(403).send({ error: "workspace_admin_required" });
+}
+
+// Returns the caller's effective role in the workspace context of the request.
+// Used by the dashboard to decide which controls to enable.
+export async function resolveWorkspaceRole(
+  req: FastifyRequest,
+): Promise<"owner" | "admin" | "member" | "viewer" | "global_admin" | "service_role" | "anon"> {
+  if (req.auth?.apiKey === "service_role") return "service_role";
+  const user = req.auth?.user;
+  if (!user) return "anon";
+  if (user.role === "admin") return "global_admin";
+  const raw = req.headers["x-workspace-id"];
+  const ws = Array.isArray(raw) ? raw[0] : raw;
+  if (!ws) return "member";
+  const row = await db
+    .selectFrom("workspace_members as m" as never)
+    .select(["m.role as role" as never])
+    .where("m.workspace_id" as never, "=", ws as never)
+    .where("m.user_id" as never, "=", user.sub as never)
+    .executeTakeFirst() as { role: string } | undefined;
+  return (row?.role as "owner" | "admin" | "member" | "viewer") ?? "member";
+}

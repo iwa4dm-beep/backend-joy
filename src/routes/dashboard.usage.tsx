@@ -1,17 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Save, Activity, ShieldAlert } from "lucide-react";
+import { Loader2, RefreshCw, Save, Activity, ShieldAlert, Radio, Lock } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import {
-  isLive, usage,
+  isLive, usage, me,
   type UsageMetric, type UsageSummary, type Quota,
-  type OverageBehavior, type UsageEnvironment,
+  type OverageBehavior, type UsageEnvironment, type WorkspaceRole,
 } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/usage")({ component: UsagePage });
 
-// Phase 22 — Metered usage dashboard with environment filter, overage
-// behavior, billing labels, and live auto-refresh (15s).
+// Phase 22b — Live SSE-driven usage dashboard with workspace-role RBAC.
+// Non-admins see read-only cards; admins can edit quotas / billing labels.
 
 const METRICS: { key: UsageMetric; label: string; unit: string }[] = [
   { key: "storage_gb", label: "Storage", unit: "GB" },
@@ -36,9 +36,31 @@ function UsagePage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [live, setLive] = useState(true);
+  const [connected, setConnected] = useState(false);
+  const [lastAt, setLastAt] = useState<number | null>(null);
+  const [role, setRole] = useState<WorkspaceRole>("member");
+  const canAdmin = role === "owner" || role === "admin" ||
+                   role === "global_admin" || role === "service_role";
 
-  const load = useCallback(async () => {
+  // Merge quotas from either REST (fallback) or the SSE snapshot into UI state.
+  const applyQuotas = useCallback((rows: Quota[]) => {
+    const map: Record<string, Quota> = {};
+    const dr: Record<string, Draft> = {};
+    for (const qu of rows) {
+      map[qu.metric] = qu;
+      dr[qu.metric] = {
+        hard: String(qu.hard_limit),
+        soft: qu.soft_limit == null ? "" : String(qu.soft_limit),
+        overage: qu.overage_behavior ?? "warn",
+        label: qu.billing_label ?? "",
+      };
+    }
+    setQuotas(map);
+    setDrafts((d) => ({ ...dr, ...d }));
+  }, []);
+
+  const loadOnce = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
       const [s, q] = await Promise.all([
@@ -46,31 +68,35 @@ function UsagePage() {
         usage.quotas(),
       ]);
       setSummary(s);
-      const map: Record<string, Quota> = {};
-      const dr: Record<string, Draft> = {};
-      for (const qu of q.quotas) {
-        map[qu.metric] = qu;
-        dr[qu.metric] = {
-          hard: String(qu.hard_limit),
-          soft: qu.soft_limit == null ? "" : String(qu.soft_limit),
-          overage: qu.overage_behavior ?? "warn",
-          label: qu.billing_label ?? "",
-        };
-      }
-      setQuotas(map);
-      setDrafts((d) => ({ ...dr, ...d }));
+      applyQuotas(q.quotas);
     } catch (e) { setErr((e as Error).message); }
     finally { setLoading(false); }
-  }, [period, env]);
+  }, [period, env, applyQuotas]);
 
-  useEffect(() => { void load(); }, [load]);
+  // Load caller's workspace role once so we know which controls to enable.
   useEffect(() => {
-    if (!autoRefresh) return;
-    const t = setInterval(() => { void load(); }, 15_000);
-    return () => clearInterval(t);
-  }, [autoRefresh, load]);
+    if (!isLive()) return;
+    me.workspaceRole().then((r) => setRole(r.role)).catch(() => setRole("anon"));
+  }, []);
+
+  // Live SSE stream — replaces the previous 15s polling loop.
+  useEffect(() => {
+    if (!isLive() || !live) { setConnected(false); void loadOnce(); return; }
+    setConnected(false);
+    const unsub = usage.stream(
+      (payload) => {
+        setConnected(true);
+        setLastAt(payload.ts ?? Date.now());
+        setSummary({ period: payload.period, environment: payload.environment, metrics: payload.metrics });
+        if (payload.quotas) applyQuotas(payload.quotas);
+      },
+      { period, environment: env || undefined, onError: (e) => { setConnected(false); setErr(e.message); } },
+    );
+    return () => { setConnected(false); unsub(); };
+  }, [period, env, live, loadOnce, applyQuotas]);
 
   const saveQuota = async (metric: UsageMetric) => {
+    if (!canAdmin) { setErr("Only workspace admins can edit quotas."); return; }
     const d = drafts[metric]; if (!d) return;
     const hard = Number(d.hard); if (!isFinite(hard) || hard < 0) return;
     const soft = d.soft === "" ? undefined : Number(d.soft);
@@ -82,7 +108,8 @@ function UsagePage() {
         overage_behavior: d.overage,
         billing_label: d.label || undefined,
       });
-      await load();
+      // SSE will repaint; also force one immediate REST fetch when offline.
+      if (!live) await loadOnce();
     } catch (e) { setErr((e as Error).message); }
     finally { setSavingKey(null); }
   };
@@ -96,12 +123,12 @@ function UsagePage() {
         billing_label: "dashboard-test",
         meta: { source: "dashboard-test" },
       });
-      await load();
     } catch (e) { setErr((e as Error).message); }
   };
 
   const totalCards = useMemo(() => METRICS.length, []);
   void totalCards;
+
 
   return (
     <div className="p-6 space-y-6">
@@ -124,13 +151,18 @@ function UsagePage() {
           <option value="">All environments</option>
           {ENVS.map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
-        <button onClick={() => void load()} className="text-xs inline-flex items-center gap-1 border border-border rounded px-3 py-1">
+        <button onClick={() => void loadOnce()} className="text-xs inline-flex items-center gap-1 border border-border rounded px-3 py-1">
           <RefreshCw className="h-3 w-3" /> Refresh
         </button>
         <label className="text-[11px] inline-flex items-center gap-1 text-muted-foreground">
-          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
-          Live (15s)
+          <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+          <Radio className={`h-3 w-3 ${connected ? "text-emerald-500" : "text-muted-foreground"}`} />
+          {connected ? "Streaming" : live ? "Connecting…" : "Paused"}
+          {lastAt && connected && <span className="text-[10px] text-muted-foreground">· {new Date(lastAt).toLocaleTimeString()}</span>}
         </label>
+        <span className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground inline-flex items-center gap-1">
+          {canAdmin ? "workspace admin" : <><Lock className="h-3 w-3" /> read-only ({role})</>}
+        </span>
         <button onClick={() => void seedTest()} className="text-xs inline-flex items-center gap-1 border border-border rounded px-3 py-1 ml-auto">
           <Activity className="h-3 w-3" /> Record test event
         </button>
@@ -201,23 +233,24 @@ function UsagePage() {
               )}
 
               <div className="grid grid-cols-[1fr_1fr] gap-1 items-center pt-1">
-                <input value={draft.hard} onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, hard: e.target.value } }))}
-                  placeholder="hard limit" className="bg-background border border-border rounded px-2 py-1 text-xs" />
-                <input value={draft.soft} onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, soft: e.target.value } }))}
-                  placeholder="soft" className="bg-background border border-border rounded px-2 py-1 text-xs" />
+                <input value={draft.hard} disabled={!canAdmin} onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, hard: e.target.value } }))}
+                  placeholder="hard limit" className="bg-background border border-border rounded px-2 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
+                <input value={draft.soft} disabled={!canAdmin} onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, soft: e.target.value } }))}
+                  placeholder="soft" className="bg-background border border-border rounded px-2 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
               </div>
               <div className="grid grid-cols-[1fr_1fr_auto] gap-1 items-center">
-                <select value={draft.overage}
+                <select value={draft.overage} disabled={!canAdmin}
                   onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, overage: e.target.value as OverageBehavior } }))}
-                  className="bg-background border border-border rounded px-2 py-1 text-xs">
+                  className="bg-background border border-border rounded px-2 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed">
                   {OVERAGES.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
-                <input value={draft.label}
+                <input value={draft.label} disabled={!canAdmin}
                   onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, label: e.target.value } }))}
-                  placeholder="billing label" className="bg-background border border-border rounded px-2 py-1 text-xs" />
-                <button onClick={() => void saveQuota(m.key)} disabled={savingKey === m.key}
+                  placeholder="billing label" className="bg-background border border-border rounded px-2 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
+                <button onClick={() => void saveQuota(m.key)} disabled={savingKey === m.key || !canAdmin}
+                  title={canAdmin ? "Save quota" : "Workspace admin required"}
                   className="text-xs inline-flex items-center gap-1 bg-primary text-primary-foreground rounded px-2 py-1 disabled:opacity-40">
-                  {savingKey === m.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                  {savingKey === m.key ? <Loader2 className="h-3 w-3 animate-spin" /> : canAdmin ? <Save className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
                 </button>
               </div>
             </div>

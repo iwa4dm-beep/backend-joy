@@ -16,7 +16,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { q } from "../../lib/pgraw.js";
-import { requireApiKey } from "../../lib/apikey.js";
+import { requireApiKey, requireWorkspaceAdmin, resolveWorkspaceRole } from "../../lib/apikey.js";
 
 const IDENT = /^[a-z_][a-z0-9_]{0,40}$/i;
 
@@ -84,7 +84,7 @@ export const branchingPlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.post<{ Params: { id: string } }>("/branches/v1/:id/apply",
-    { preHandler: requireApiKey }, async (req, reply) => {
+    { preHandler: [requireApiKey, requireWorkspaceAdmin] }, async (req, reply) => {
       const ws = (req.headers["x-workspace-id"] as string) ?? null;
       const b = z.object({ sql: z.string().min(1).max(50_000) }).parse(req.body);
       const row = await q<{ schema_name: string }>(
@@ -270,7 +270,7 @@ export const branchingPlugin: FastifyPluginAsync = async (app) => {
     }
   }
 
-  app.post("/schema/v1/apply", { preHandler: requireApiKey }, async (req, reply) => {
+  app.post("/schema/v1/apply", { preHandler: [requireApiKey, requireWorkspaceAdmin] }, async (req, reply) => {
     const ws = (req.headers["x-workspace-id"] as string) ?? null;
     const b = z.object({
       operations: z.array(z.any()).min(1).max(50),
@@ -390,7 +390,7 @@ export const usagePlugin: FastifyPluginAsync = async (app) => {
     return { quotas: r.rows };
   });
 
-  app.put("/usage/v1/quotas", { preHandler: requireApiKey }, async (req, reply) => {
+  app.put("/usage/v1/quotas", { preHandler: [requireApiKey, requireWorkspaceAdmin] }, async (req, reply) => {
     const ws = (req.headers["x-workspace-id"] as string) ?? null;
     if (!ws) { reply.code(400); return { error: "workspace_required" }; }
     const b = z.object({
@@ -410,6 +410,109 @@ export const usagePlugin: FastifyPluginAsync = async (app) => {
                      updated_at=now()`,
       [ws, b.metric, b.period, b.hard_limit, b.soft_limit ?? null, b.overage_behavior, b.billing_label ?? null]);
     return { ok: true };
+  });
+
+  // Caller's effective workspace role — the dashboard uses this to gate UI.
+  app.get("/me/v1/workspace-role", { preHandler: requireApiKey }, async (req) => {
+    const role = await resolveWorkspaceRole(req);
+    const canAdmin = role === "owner" || role === "admin" ||
+                     role === "global_admin" || role === "service_role";
+    return { role, can_admin: canAdmin };
+  });
+
+  // ---- SSE: live usage + quota stream (replaces 15s dashboard polling) ----
+  // Sends a full summary snapshot on connect, then every 3s. Also emits an
+  // event immediately after any /usage/v1/events ingest for this workspace.
+  const wsStreams = new Map<string, Set<(payload: string) => void>>();
+  function pushToWorkspace(ws: string, payload: string) {
+    const set = wsStreams.get(ws); if (!set) return;
+    for (const write of set) { try { write(payload); } catch { /* subscriber gone */ } }
+  }
+
+  async function buildSummary(ws: string, period: string, envFilter: string | null) {
+    const iv = period === "day" ? "1 day" : "30 days";
+    const params: unknown[] = [ws];
+    let envClause = "";
+    if (envFilter) { params.push(envFilter); envClause = ` and environment=$${params.length}`; }
+    const usage = await q<{ metric: string; total: string; environment: string; billing_label: string | null }>(
+      `select metric, environment, billing_label, sum(quantity)::text as total
+       from public.usage_events
+       where workspace_id=$1::uuid and observed_at > now() - interval '${iv}'${envClause}
+       group by metric, environment, billing_label`, params);
+    const quotas = await q<{ metric: string; hard_limit: number; soft_limit: number | null; period: string; overage_behavior: string; billing_label: string | null }>(
+      `select metric, hard_limit, soft_limit, period, overage_behavior, billing_label
+       from public.workspace_quotas where workspace_id=$1::uuid`, [ws]);
+    const byMetric: Record<string, {
+      used: number; hard_limit: number | null; soft_limit: number | null; pct: number | null;
+      overage_behavior: string | null; billing_label: string | null;
+      by_env: Record<string, number>; by_label: Record<string, number>;
+    }> = {};
+    for (const m of METRICS) byMetric[m] = { used: 0, hard_limit: null, soft_limit: null, pct: null, overage_behavior: null, billing_label: null, by_env: {}, by_label: {} };
+    for (const r of usage.rows) {
+      const b = byMetric[r.metric]; if (!b) continue;
+      const n = Number(r.total);
+      b.used += n;
+      b.by_env[r.environment] = (b.by_env[r.environment] ?? 0) + n;
+      if (r.billing_label) b.by_label[r.billing_label] = (b.by_label[r.billing_label] ?? 0) + n;
+    }
+    for (const qq of quotas.rows) {
+      const b = byMetric[qq.metric]; if (!b) continue;
+      b.hard_limit = qq.hard_limit; b.soft_limit = qq.soft_limit;
+      b.overage_behavior = qq.overage_behavior; b.billing_label = qq.billing_label;
+      b.pct = qq.hard_limit > 0 ? Math.min(100, (b.used / qq.hard_limit) * 100) : null;
+    }
+    return { period, environment: envFilter, metrics: byMetric, quotas: quotas.rows, ts: Date.now() };
+  }
+
+  app.get("/usage/v1/stream", { preHandler: requireApiKey }, async (req, reply) => {
+    const ws = (req.headers["x-workspace-id"] as string) ?? null;
+    if (!ws) { reply.code(400); return { error: "workspace_required" }; }
+    const query = req.query as { period?: string; environment?: string };
+    const period = query?.period === "day" ? "day" : "month";
+    const envFilter = query?.environment && ENVS.includes(query.environment as typeof ENVS[number])
+      ? (query.environment as string) : null;
+
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      "connection": "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    const write = (payload: string) => reply.raw.write(payload);
+    const send = (event: string, data: unknown) =>
+      write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    // Register this subscriber so ingest can fan out to it.
+    let set = wsStreams.get(ws);
+    if (!set) { set = new Set(); wsStreams.set(ws, set); }
+    const emit = (_payload: string) => {
+      buildSummary(ws, period, envFilter).then((s) => send("summary", s)).catch(() => undefined);
+    };
+    set.add(emit);
+
+    // Initial snapshot + heartbeat/refresh every 3s.
+    try { send("summary", await buildSummary(ws, period, envFilter)); } catch { /* first paint */ }
+    const timer = setInterval(() => {
+      buildSummary(ws, period, envFilter)
+        .then((s) => send("summary", s))
+        .catch(() => write(`: keepalive\n\n`));
+    }, 3000);
+
+    req.raw.on("close", () => {
+      clearInterval(timer);
+      set!.delete(emit);
+      if (!set!.size) wsStreams.delete(ws);
+      try { reply.raw.end(); } catch { /* already closed */ }
+    });
+  });
+
+  // Hook the ingest path so live subscribers repaint immediately.
+  // Hook the ingest path so live subscribers repaint immediately.
+  app.addHook("onResponse", async (req) => {
+    if (req.method !== "POST") return;
+    if (!req.url || !req.url.startsWith("/usage/v1/events")) return;
+    const ws = (req.headers["x-workspace-id"] as string) ?? null;
+    if (ws) pushToWorkspace(ws, "ingest");
   });
 };
 
