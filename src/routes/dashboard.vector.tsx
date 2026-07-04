@@ -118,8 +118,15 @@ function VectorPage() {
           <Card>
             <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Search className="h-4 w-4" /> Similarity query</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              <div className="flex gap-2">
-                <Input placeholder="query text" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} />
+              <div className="flex gap-2 flex-wrap items-center">
+                <Input placeholder="query text" className="flex-1 min-w-[200px]" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()} />
+                <label className="text-xs text-muted-foreground">top-k</label>
+                <Input type="number" className="w-20" min={1} max={50} value={topK} onChange={e => setTopK(Math.max(1, Math.min(50, Number(e.target.value) || 5)))} />
+                <label className="text-xs text-muted-foreground">field</label>
+                <select className="h-9 px-2 rounded-md border border-border bg-background text-xs" value={embField} onChange={e => setEmbField(e.target.value)}>
+                  <option value="">embedding (default)</option>
+                  {fieldOptions.map(f => <option key={f} value={f}>metadata.{f}</option>)}
+                </select>
                 <Button onClick={search} disabled={!active}>Search</Button>
               </div>
               <div className="space-y-1 max-h-[400px] overflow-y-auto">
