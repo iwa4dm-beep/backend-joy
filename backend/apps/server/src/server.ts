@@ -175,7 +175,10 @@ async function main() {
   await app.register(realtimeV4Plugin);     // Phase 51 — presence CRDTs, offline queue, delta compression
   const { dataApiV3Plugin } = await import("./modules/data_api_v3/plugin.js");
   await app.register(dataApiV3Plugin);      // Phase 52 — nested writes, computed fields, generated types, schema cache
+  const { edgeV5Plugin } = await import("./modules/edge_v5/plugin.js");
+  await app.register(edgeV5Plugin);         // Phase 53 — WASM runtime, warm pool, per-region, custom domains v2
   startLogRetentionSweeper(app.log);
+
 
 
 
