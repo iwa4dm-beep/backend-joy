@@ -123,3 +123,35 @@ I'll build Phase 31 → 32 → 33 in sequence, each landing as a self-contained 
 3. **Order preference**: strict 31 → 32 → 33, or interleave (e.g. CDC first because it's the biggest differentiator)?
 
 Reply "go" for defaults (Twilio + comms + 31→32→33), or specify overrides.
+
+---
+
+## ✅ Phases 31–33 delivered (2026-07-04)
+
+**Phase 31 — Auth completion**
+- Migration `0030_auth_completion.sql`: password_reset_tokens, phone/OTP columns, phone_otp_codes.
+- `modules/auth_completion/plugin.ts`: `/auth/v1/recover`, `/verify-recovery`, `/send-email-confirmation`, `/confirm-email`, `/resend-confirmation`, `/otp/send`, `/otp/verify`, `/config`.
+- `lib/email-provider.ts` (console + webhook), `lib/sms-provider.ts` (console + Twilio).
+- SDK: `live.auth.{resetPasswordForEmail,verifyPasswordRecovery,confirmEmail,resendConfirmation,signInWithOtp,verifyOtp,sendEmailConfirmation,config}`.
+- UI: `/auth/forgot`, `/auth/reset-password`, `/auth/confirm-email`, `/auth/phone` routes + links on sign-in card.
+- Google OAuth was already present at `modules/auth/oauth.ts` — kept as-is.
+- Docs: `docs/api/auth.md`.
+
+**Phase 32 — Storage: image transforms + TUS resumable uploads**
+- Migration `0031_storage_transforms_tus.sql`: `tus_uploads`, `render_cache`.
+- `modules/storage_ext/plugin.ts`: `/storage/v1/render/image/:bucket/*`, `DELETE /storage/v1/render/cache/:bucket`, TUS 1.0.0 `POST/HEAD/PATCH/DELETE /storage/v1/upload/resumable`, `OPTIONS` discovery, 5-min expiry sweeper.
+- `lib/image-transform.ts`: pluggable provider abstraction (passthrough default; WASM providers swap in via `setImageTransformProvider`).
+- SDK: `storageV2.{renderUrl, purgeRenderCache, uploadResumable}` (built-in TUS client with 409 offset-conflict resume).
+- Docs: `docs/api/storage.md`.
+
+**Phase 33 — Postgres CDC → realtime channels**
+- Migration `0032_cdc.sql`: `cdc_config`, `cdc_events` (24h ring buffer).
+- `modules/cdc/dispatcher.ts`: `startCdcPipeline` (advisory-lock guarded), `dispatchCdcEvent`, `getSlotLag`, `sweepCdcRetention`, publication + slot management (wal2json → test_decoding fallback).
+- `modules/cdc/filter.ts`: PostgREST-style filter parser (`eq|neq|gt|gte|lt|lte|in`) + evaluator.
+- `modules/cdc/plugin.ts`: `/rt/v2/cdc/{tables,tables/:qual,slot-lag,events,subscribe}` admin surface.
+- Vitest: `src/lib/pluto/cdc-filter.spec.ts` (9 tests, all green).
+- SDK: `cdc.{listTables, enableTable, disableTable, slotLag, events, validateSubscribe}`.
+- UI: `CdcPanel` component embedded in `/dashboard/realtime` — add/remove tables, live slot-lag readout.
+- Docs: `docs/api/realtime-cdc.md`.
+
+All features are opt-in via env flags (`PLUTO_ENABLE_AUTH_COMPLETION`, `PLUTO_ENABLE_SMS_OTP`, `PLUTO_REQUIRE_EMAIL_CONFIRM`, `PLUTO_ENABLE_IMAGE_TRANSFORM`, `PLUTO_ENABLE_TUS`, `PLUTO_ENABLE_CDC`). Typecheck: green. Vitest: green.
