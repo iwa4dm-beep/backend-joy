@@ -155,3 +155,50 @@ Reply "go" for defaults (Twilio + comms + 31→32→33), or specify overrides.
 - Docs: `docs/api/realtime-cdc.md`.
 
 All features are opt-in via env flags (`PLUTO_ENABLE_AUTH_COMPLETION`, `PLUTO_ENABLE_SMS_OTP`, `PLUTO_REQUIRE_EMAIL_CONFIRM`, `PLUTO_ENABLE_IMAGE_TRANSFORM`, `PLUTO_ENABLE_TUS`, `PLUTO_ENABLE_CDC`). Typecheck: green. Vitest: green.
+
+---
+
+## ✅ Phases 34–36 delivered (2026-07-04)
+
+**Phase 34 — Auto REST + GraphQL (`PLUTO_ENABLE_DATA_API=1`)**
+- Migration `0033_data_api.sql`: `data_api_exposed`, `data_api_introspect_cache`.
+- `modules/data_api/{introspect,openapi,graphql,plugin}.ts`:
+  `GET /rest/v1/` (OpenAPI 3.1), `GET /rest/v1/introspect`, `POST /graphql/v1`
+  (hand-rolled parser + executor; supports `where/order/limit/offset` +
+  `insert_/update_/delete_` mutations; RLS via `SET LOCAL pluto.user_id`).
+- Hidden system tables excluded from discovery/GraphQL.
+- Docs: `docs/api/data-api.md`.
+
+**Phase 35 — Edge Functions v3 hardened isolate (`PLUTO_ENABLE_EDGE_V3=1`)**
+- Migration `0034_edge_v3.sql`: `fn_v3_deployments`, `fn_v3_invocations`.
+- `modules/edge_v3/isolate.ts`: worker-thread invoker with
+  `resourceLimits.maxOldGenerationSizeMb`, wall-clock deadline via
+  `worker.terminate()`, `codeGeneration.strings/wasm=false`, fetch host
+  allow-list; reuses existing `modules/edge/isolate-worker.js`.
+- `modules/edge_v3/plugin.ts`: deployments CRUD + `/fn/v3/invoke/:slug` +
+  invocation log with automatic versioning.
+- Docs: `docs/api/edge-v3.md`.
+
+**Phase 36a — Stripe billing + plan enforcement (`PLUTO_ENABLE_BILLING=1`)**
+- Migration `0035_billing.sql`: `billing_plans` (free/pro/team/enterprise
+  seeded with feature + limit maps), `billing_subscriptions`, `billing_events`.
+- `modules/billing/plugin.ts`: `/billing/v1/{plans,subscription,checkout,portal,webhook,admin/set-plan}`.
+- No Stripe SDK dep — direct `fetch` to `api.stripe.com` with HMAC
+  webhook verify; dev mode when `STRIPE_SECRET_KEY` absent.
+- Exports enforcement helpers `getWorkspacePlan / planAllows / planLimit`
+  with 60s cache; other modules can gate features by workspace plan.
+
+**Phase 36b — PITR + cross-region backup replication (`PLUTO_ENABLE_PITR=1`)**
+- Migration `0036_pitr.sql`: `wal_archive_config`, `pitr_snapshots`,
+  `backup_replicas`, `pitr_restores`.
+- `modules/pitr/plugin.ts`: `/pitr/v1/{config,snapshots,restore,replicas,...}`.
+- Control plane + audit log — the physical `pg_basebackup` / WAL replay
+  runs out of process via `backend/scripts/backup.sh`.
+
+Docs: `docs/api/billing-pitr.md`.
+
+**Server wiring:** all four plugins registered in `backend/apps/server/src/server.ts` behind their env flags; nothing changes when disabled.
+
+Out of scope for Phase 37+: full SDK bindings for these routes,
+dashboard UI panels for billing + PITR, GraphQL subscriptions, Deno v2
+runtime, and antivirus scanning on storage uploads.
