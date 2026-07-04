@@ -106,7 +106,10 @@ export async function checkQuota(ws: string, metric: MeteredMetric, quantity: nu
 
 // ---- Alert fan-out --------------------------------------------------------
 // Fires at most once per hour per (workspace, metric) — coalesces bursts.
-// Delivers webhook payloads (best-effort) for any registered receiver.
+// - Persists a quota_alert row.
+// - Broadcasts `system:usage_alert` over pg_notify('pluto_broadcast', ...)
+//   so dashboards get the event over SSE without polling.
+// - Enqueues a delivery per registered webhook (best-effort, with retry).
 async function maybeFireAlert(ws: string, metric: string, pct: number, used: number, hardLimit: number) {
   try {
     const existing = await q<{ id: string }>(
@@ -119,38 +122,77 @@ async function maybeFireAlert(ws: string, metric: string, pct: number, used: num
       `insert into public.quota_alerts (workspace_id, metric, pct, used, hard_limit)
        values ($1::uuid, $2, $3, $4, $5) returning id`,
       [ws, metric, pct.toFixed(2), used, hardLimit]);
+    const alertId = ins.rows[0].id;
+    const payload = {
+      type: "quota.alert",
+      workspace_id: ws, metric, pct: Number(pct.toFixed(2)),
+      used, hard_limit: hardLimit,
+      alert_id: alertId,
+      triggered_at: new Date().toISOString(),
+    };
+
+    // SSE broadcast — dashboards subscribed to /usage/v1/alerts/stream
+    // filter by workspace_id and repaint the banner immediately.
+    await q(`select pg_notify('pluto_broadcast', $1)`, [JSON.stringify({
+      channel: "system:usage_alert", event: "quota.alert", payload, ts: new Date().toISOString(),
+    })]).catch(() => undefined);
+
     const hooks = await q<{ id: string; url: string; secret: string | null; events: string[] }>(
       `select id, url, secret, events from public.workspace_webhooks
        where workspace_id=$1::uuid and active=true`, [ws]);
-    const body = JSON.stringify({
-      type: "quota.alert",
-      workspace_id: ws, metric, pct: Number(pct.toFixed(2)),
-      used, hard_limit: hardLimit, triggered_at: new Date().toISOString(),
-    });
+    const body = JSON.stringify(payload);
     for (const h of hooks.rows) {
       if (h.events && h.events.length && !h.events.includes("quota.alert")) continue;
-      void deliverWebhook(h.id, h.url, h.secret, body);
+      void deliverWebhook(h.id, h.url, h.secret, body, alertId, "quota.alert", 1);
     }
-    await q(`update public.quota_alerts set notified=true where id=$1::uuid`, [ins.rows[0].id]);
+    await q(`update public.quota_alerts set notified=true where id=$1::uuid`, [alertId]);
   } catch { /* metering must never throw */ }
 }
 
-async function deliverWebhook(id: string, url: string, secret: string | null, body: string) {
+// Retry schedule (seconds since previous attempt): 30, 120, 300, 900, exhausted.
+const RETRY_DELAYS_S = [30, 120, 300, 900];
+
+export async function deliverWebhook(
+  webhookId: string, url: string, secret: string | null,
+  body: string, alertId: string | null, event: string, attempt: number,
+): Promise<void> {
+  const { createHmac, createHash } = await import("node:crypto");
+  const payloadHash = createHash("sha256").update(body).digest("hex");
+  const started = Date.now();
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (secret) headers["x-pluto-signature"] = createHmac("sha256", secret).update(body).digest("hex");
+  let status: number | null = null;
+  let errMsg: string | null = null;
   try {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    if (secret) {
-      const { createHmac } = await import("node:crypto");
-      headers["x-pluto-signature"] = createHmac("sha256", secret).update(body).digest("hex");
-    }
-    const res = await fetch(url, { method: "POST", headers, body,
-      signal: AbortSignal.timeout(5000) });
-    await q(`update public.workspace_webhooks
-             set last_status=$2, last_error=null, last_delivered_at=now() where id=$1::uuid`,
-            [id, res.status]);
+    const res = await fetch(url, { method: "POST", headers, body, signal: AbortSignal.timeout(5000) });
+    status = res.status;
+    if (!res.ok) errMsg = `HTTP ${res.status}`;
   } catch (e) {
-    await q(`update public.workspace_webhooks
-             set last_status=0, last_error=$2, last_delivered_at=now() where id=$1::uuid`,
-            [id, (e as Error).message.slice(0, 300)]).catch(() => undefined);
+    errMsg = (e as Error).message.slice(0, 300);
+  }
+  const rt = Date.now() - started;
+  const succeeded = status !== null && status >= 200 && status < 300;
+  const nextDelay = succeeded ? null : RETRY_DELAYS_S[attempt - 1] ?? null;
+  const nextRetryAt = nextDelay ? new Date(Date.now() + nextDelay * 1000) : null;
+
+  await q(
+    `insert into public.webhook_deliveries
+       (webhook_id, alert_id, event, attempt, status_code, response_time_ms, error, payload, payload_hash, next_retry_at, succeeded)
+     values ($1::uuid, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)`,
+    [webhookId, alertId, event, attempt, status, rt, errMsg, body, payloadHash, nextRetryAt, succeeded],
+  ).catch(() => undefined);
+
+  await q(
+    `update public.workspace_webhooks
+       set last_status=$2, last_error=$3, last_delivered_at=now() where id=$1::uuid`,
+    [webhookId, status ?? 0, errMsg],
+  ).catch(() => undefined);
+
+  if (!succeeded && nextRetryAt) {
+    setTimeout(() => {
+      void deliverWebhook(webhookId, url, secret, body, alertId, event, attempt + 1);
+    }, nextDelay! * 1000).unref?.();
   }
 }
+
 
