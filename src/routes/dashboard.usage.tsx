@@ -26,7 +26,7 @@ const METRICS: { key: UsageMetric; label: string; unit: string }[] = [
 const ENVS: UsageEnvironment[] = ["production", "staging", "preview", "development"];
 const OVERAGES: OverageBehavior[] = ["allow", "warn", "block"];
 
-type Draft = { hard: string; soft: string; overage: OverageBehavior; label: string };
+type Draft = { hard: string; soft: string; overage: OverageBehavior; label: string; alertPct: string };
 
 function UsagePage() {
   const [period, setPeriod] = useState<"day" | "month">("month");
