@@ -157,6 +157,7 @@ function TokensPage() {
     const meta = `# filters=${JSON.stringify(activeFilters())} matched=${bulkPreview.matched} revoked=${bulkPreview.revoked.length}\n`;
     const body = meta + [header, ...rows].map((r) => r.map(esc).join(",")).join("\n") + "\n";
     downloadBlob(`bulk-revoke-${Date.now()}.csv`, "text/csv", body);
+  }
 
   return (
     <div className="p-6 space-y-6">
