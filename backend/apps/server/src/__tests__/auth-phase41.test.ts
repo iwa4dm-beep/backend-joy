@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../db/index.js", () => ({ db: {} }));
 vi.mock("../lib/pgraw.js", () => ({ pgraw: vi.fn(async () => ({ rows: [] })) }));
+vi.mock("argon2", () => ({ default: { hash: async () => "x", verify: async () => true, argon2id: 2 } }));
 
 import { dispatchBefore } from "../lib/auth-hooks.js";
 
