@@ -217,7 +217,7 @@ d("REST/GraphQL RLS end-to-end (real Postgres)", () => {
       const res = await executeGraphql(
         `query { ${T}(order: "id.asc") { note user_id } }`,
         {},
-        { client: c as unknown as { query: (s: string, p?: unknown[]) => Promise<{ rows: unknown[] }> } },
+        { client: c as any },
       );
       expect(res.errors).toBeUndefined();
       const rows = (res.data?.[T] ?? []) as Array<{ note: string }>;

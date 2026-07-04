@@ -177,7 +177,7 @@ export async function tokensPlugin(app: FastifyInstance) {
     if (f.scope)               q = q.where("scopes" as never, "@>", [f.scope] as never);
     if (f.last_used_before)    q = q.where("last_used_at" as never, "<", new Date(f.last_used_before) as never);
     if (f.never_used)          q = q.where("last_used_at" as never, "is", null as never);
-    if (!f.include_expired)    q = q.where((eb: unknown) => (eb as { or: (a: unknown[]) => unknown; eb: (a: string, b: string, c: unknown) => unknown; }).or([
+    if (!f.include_expired)    q = (q as any).where((eb: any) => (eb as { or: (a: unknown[]) => unknown; eb: (a: string, b: string, c: unknown) => unknown; }).or([
       (eb as { eb: (a: string, b: string, c: unknown) => unknown }).eb("expires_at" as never, "is", null as never),
       (eb as { eb: (a: string, b: string, c: unknown) => unknown }).eb("expires_at" as never, ">", new Date() as never),
     ]));
