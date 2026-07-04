@@ -155,6 +155,8 @@ async function main() {
   await app.register(authPhase41Plugin);    // Phase 41 — magic-link, anonymous, link-anon
   const { storageV2Plugin } = await import("./modules/storage_v2/plugin.js");
   await app.register(storageV2Plugin);      // Phase 42 — multipart, presigned POST, AV scan, CDN purge, imgproxy
+  const { realtimeV3Plugin } = await import("./modules/realtime_v3/plugin.js");
+  await app.register(realtimeV3Plugin);     // Phase 43 — CDC + NATS backplane + RLS-aware channels + replay
   startLogRetentionSweeper(app.log);
 
 
