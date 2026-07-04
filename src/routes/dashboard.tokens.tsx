@@ -4,26 +4,29 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { KeyRound, Plus, Trash2, Copy, Check } from "lucide-react";
+import { KeyRound, Plus, Trash2, Copy, Check, RefreshCw, ShieldCheck, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
-import { isLive, tokens, type WorkspaceToken, type WorkspaceTokenMint } from "@/lib/pluto/live";
+import { isLive, tokens, type WorkspaceToken, type WorkspaceTokenMint, type ScopeCoverage } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/tokens")({ component: TokensPage });
 
 function TokensPage() {
   const [rows, setRows] = useState<WorkspaceToken[]>([]);
   const [scopeCatalog, setScopeCatalog] = useState<string[]>([]);
+  const [coverage, setCoverage] = useState<ScopeCoverage>({});
+  const [expandedScope, setExpandedScope] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [expiresDays, setExpiresDays] = useState<string>("");
   const [minted, setMinted] = useState<WorkspaceTokenMint | null>(null);
   const [copied, setCopied] = useState(false);
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
 
   async function refresh() {
     if (!isLive()) return;
     try {
-      const [t, s] = await Promise.all([tokens.list(), tokens.scopes()]);
-      setRows(t.tokens); setScopeCatalog(s.scopes);
+      const [t, s, c] = await Promise.all([tokens.list(), tokens.scopes(), tokens.coverage()]);
+      setRows(t.tokens); setScopeCatalog(s.scopes); setCoverage(c.coverage);
     } catch (e) { toast.error((e as Error).message); }
   }
   useEffect(() => { void refresh(); }, []);
@@ -50,6 +53,21 @@ function TokensPage() {
     catch (e) { toast.error((e as Error).message); }
   }
 
+  async function rotate(t: WorkspaceToken) {
+    if (!confirm(
+      `Rotate "${t.name}"?\n\nA new token will be minted with the same scopes and expiry. ` +
+      `You'll see the new plaintext once. The old token is revoked immediately after.`,
+    )) return;
+    setRotatingId(t.id);
+    try {
+      const m = await tokens.rotate(t.id);
+      setMinted(m); setCopied(false);
+      toast.success("Token rotated — copy the new value now.");
+      await refresh();
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setRotatingId(null); }
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -65,7 +83,9 @@ function TokensPage() {
 
       {minted && (
         <Card className="border-primary/40">
-          <CardHeader><CardTitle className="text-sm">Copy your new token — shown once</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-sm">
+            {minted.replaced_id ? "Rotated token — copy the new value" : "Copy your new token — shown once"}
+          </CardTitle></CardHeader>
           <CardContent className="space-y-2">
             <div className="flex items-center gap-2">
               <code className="flex-1 font-mono text-xs p-2 rounded-md bg-muted break-all">{minted.token}</code>
@@ -78,6 +98,7 @@ function TokensPage() {
             <div className="text-[11px] text-muted-foreground">
               Prefix <span className="font-mono">{minted.prefix}</span> · scopes: {minted.scopes.join(", ")}
               {minted.expires_at && <> · expires {new Date(minted.expires_at).toLocaleString()}</>}
+              {minted.replaced_id && <> · replaced <span className="font-mono">{minted.replaced_id.slice(0, 8)}</span> (revoked)</>}
             </div>
           </CardContent>
         </Card>
@@ -114,14 +135,60 @@ function TokensPage() {
       </Card>
 
       <Card>
+        <CardHeader><CardTitle className="text-sm flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4" /> Scope enforcement coverage
+        </CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground mb-2">
+            Endpoints protected by <code>requireScope()</code>. Click a scope to see the exact routes it unlocks.
+          </p>
+          <div className="space-y-1">
+            {Object.keys(coverage).length === 0 && (
+              <div className="text-xs text-muted-foreground">No coverage reported.</div>
+            )}
+            {Object.entries(coverage).map(([scope, entries]) => {
+              const open = expandedScope === scope;
+              return (
+                <div key={scope} className="border border-border rounded-md">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedScope(open ? null : scope)}
+                    className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-accent/50"
+                  >
+                    <div className="flex items-center gap-2">
+                      {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      <span className="font-mono text-xs">{scope}</span>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">{entries.length} endpoint{entries.length === 1 ? "" : "s"}</span>
+                  </button>
+                  {open && (
+                    <div className="px-3 pb-2 space-y-1">
+                      {entries.map((e, i) => (
+                        <div key={i} className="grid grid-cols-[60px,1fr,2fr] gap-2 text-[11px] items-center">
+                          <Badge variant="secondary" className="font-mono w-fit">{e.method}</Badge>
+                          <code className="font-mono text-xs">{e.path}</code>
+                          <span className="text-muted-foreground">{e.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle className="text-sm">Existing tokens ({rows.length})</CardTitle></CardHeader>
         <CardContent>
           <div className="space-y-1">
             {rows.map(t => {
               const expired = t.expires_at && new Date(t.expires_at).getTime() < Date.now();
               const revoked = !!t.revoked_at;
+              const active = !revoked && !expired;
               return (
-                <div key={t.id} className="grid grid-cols-[1fr,90px,180px,180px,90px] gap-2 items-center text-xs p-2 border border-border rounded-md">
+                <div key={t.id} className="grid grid-cols-[1fr,90px,180px,180px,140px] gap-2 items-center text-xs p-2 border border-border rounded-md">
                   <div>
                     <div className="font-medium">{t.name}</div>
                     <div className="text-[10px] text-muted-foreground font-mono">plt_{t.prefix}_… · {t.scopes.join(", ")}</div>
@@ -131,7 +198,13 @@ function TokensPage() {
                   </Badge>
                   <span className="text-muted-foreground">created {new Date(t.created_at).toLocaleString()}</span>
                   <span className="text-muted-foreground">last used {t.last_used_at ? new Date(t.last_used_at).toLocaleString() : "—"}</span>
-                  <div className="flex justify-end">
+                  <div className="flex justify-end gap-1">
+                    {active && (
+                      <Button size="sm" variant="outline" title="Rotate" disabled={rotatingId === t.id}
+                              onClick={() => rotate(t)}>
+                        <RefreshCw className={"h-3 w-3 " + (rotatingId === t.id ? "animate-spin" : "")} />
+                      </Button>
+                    )}
                     {!revoked && (
                       <Button size="sm" variant="ghost" title="Revoke" onClick={() => revoke(t.id)}>
                         <Trash2 className="h-3 w-3" />
