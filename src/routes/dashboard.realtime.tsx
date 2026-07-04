@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { rt2, isLive, type Rt2Channel, type Rt2Message, type Rt2Member } from "@/lib/pluto/live";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Radio, Users2, Send, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { PresenceIndicator, type PresenceStatus } from "@/components/pluto/PresenceIndicator";
 
 export const Route = createFileRoute("/dashboard/realtime")({ component: RealtimePage });
 
