@@ -314,7 +314,15 @@ function TokensPage() {
               Confirm revoke{bulkPreview ? ` (${bulkPreview.matched})` : ""}
             </Button>
             {bulkPreview && (
-              <Button size="sm" variant="ghost" onClick={() => setBulkPreview(null)}>Clear</Button>
+              <>
+                <Button size="sm" variant="outline" onClick={exportCSV} title="Download results as CSV">
+                  <Download className="h-3 w-3 mr-1" /> CSV
+                </Button>
+                <Button size="sm" variant="outline" onClick={exportJSON} title="Download results as JSON">
+                  <Download className="h-3 w-3 mr-1" /> JSON
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setBulkPreview(null)}>Clear</Button>
+              </>
             )}
           </div>
           {bulkPreview && (
