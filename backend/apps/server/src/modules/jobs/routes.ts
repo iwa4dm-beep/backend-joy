@@ -106,7 +106,7 @@ export async function jobsRoutes(app: FastifyInstance) {
       await db.updateTable("job_tokens" as never)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .set({ revoked_at: new Date() } as any)
-        .where("id" as never, "=", id).execute();
+        .where("id" as never, "=", id as never).execute();
       await log("admin", "warn", `revoked job token ${id}`, req.auth?.user?.sub ?? null);
       await audit(req, { action: "job_token.revoke", target: id });
       return { ok: true };
@@ -172,6 +172,6 @@ async function bumpUsage(id: string) {
       last_used_at: new Date(),
       use_count: eb("use_count", "+", 1),
     }))
-    .where("id" as never, "=", id).execute()
+    .where("id" as never, "=", id as never).execute()
     .catch(() => {});
 }

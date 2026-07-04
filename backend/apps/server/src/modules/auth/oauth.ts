@@ -187,7 +187,7 @@ export async function oauthRoutes(app: FastifyInstance) {
       userRow = { id, email, password_hash: "!oauth", role: isFirst ? "admin" : "user", email_verified: true, created_at: new Date() };
     }
     await db.insertInto("oauth_accounts").values({
-      id: crypto.randomUUID(), user_id: userRow.id, provider,
+      id: crypto.randomUUID(), user_id: userRow.id, provider: provider as "google" | "github",
       provider_user_id: providerUserId, created_at: new Date(),
     }).onConflict((oc) => oc.columns(["provider", "provider_user_id"]).doNothing()).execute();
 

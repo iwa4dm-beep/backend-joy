@@ -7,6 +7,8 @@ export type AccessClaims = {
   sub: string;
   role: "admin" | "user";
   email: string;
+  /** Alias of `sub`, populated by verifyAccessToken for legacy callers. */
+  id?: string;
 };
 
 export async function signAccessToken(claims: AccessClaims): Promise<string> {
@@ -23,6 +25,7 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims> {
   const { payload } = await jwtVerify(token, secret, { issuer: "pluto" });
   return {
     sub: payload.sub as string,
+    id: payload.sub as string,
     role: payload.role as "admin" | "user",
     email: payload.email as string,
   };

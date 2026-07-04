@@ -56,7 +56,7 @@ export async function cdcPlugin(app: FastifyInstance) {
     await db.insertInto("cdc_config" as never).values({
       workspace_id: ws, schema_name: body.data.schema, table_name: body.data.table,
       enabled: true, updated_at: new Date(),
-    } as never).onConflict((c: unknown) =>
+    } as never).onConflict((c: any): any =>
       (c as { columns: (k: string[]) => { doUpdateSet: (u: unknown) => unknown } })
         .columns(["workspace_id", "schema_name", "table_name"])
         .doUpdateSet({ enabled: true, updated_at: new Date() })).execute();
@@ -120,7 +120,7 @@ export async function cdcPlugin(app: FastifyInstance) {
     if (!IDENT.test(body.data.schema) || !IDENT.test(body.data.table)) {
       return reply.code(400).send({ error: "invalid_identifier" });
     }
-    let filter = null;
+    let filter: any = null;
     if (body.data.filter) {
       try { filter = parseCdcFilter(body.data.filter); }
       catch (e) { return reply.code(400).send({ error: "invalid_filter", message: (e as Error).message }); }

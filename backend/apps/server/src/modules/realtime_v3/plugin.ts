@@ -59,7 +59,7 @@ export async function realtimeV3Plugin(app: FastifyInstance) {
       rls_predicate: body.data.rls_predicate ?? null,
       require_role: body.data.require_role ?? null,
       replay_window_s: body.data.replay_window_s,
-    } as never).onConflict((c: unknown) =>
+    } as never).onConflict((c: any): any =>
       (c as { columns: (k: string[]) => { doUpdateSet: (u: unknown) => unknown } })
         .columns(["workspace_id", "name"])
         .doUpdateSet({
@@ -108,7 +108,7 @@ export async function realtimeV3Plugin(app: FastifyInstance) {
     const chan = await db.selectFrom("rt3_channels" as never).selectAll()
       .where("workspace_id" as never, "is not distinct from", ws as never)
       .where("name" as never, "=", body.data.channel as never)
-      .executeTakeFirst() as { name: string } | undefined;
+      .executeTakeFirst() as unknown as { name: string } | undefined;
     if (!chan) return reply.code(404).send({ error: "channel_not_found" });
 
     const subject = `${process.env.PLUTO_NATS_SUBJECT_PREFIX ?? "pluto.rt3"}.${body.data.channel}`;
@@ -165,7 +165,7 @@ export async function realtimeV3Plugin(app: FastifyInstance) {
       .where("channel_name" as never, "=", name as never)
       .where("ts" as never, ">=", new Date(Date.now() - chan.replay_window_s * 1000) as never);
     if (q.data.since_id) base = base.where("id" as never, ">", q.data.since_id as never);
-    const rows = await base.orderBy("id" as never, "asc").limit(q.data.limit).execute() as
+    const rows = await base.orderBy("id" as never, "asc").limit(q.data.limit).execute() as unknown as
       Array<{ id: number; payload: Record<string, unknown> }>;
 
     // Server-side RLS predicate filtering so subscribers never see rows
@@ -200,7 +200,7 @@ export async function realtimeV3Plugin(app: FastifyInstance) {
     const chan = await db.selectFrom("rt3_channels" as never).select(["id" as never])
       .where("workspace_id" as never, "is not distinct from", ws as never)
       .where("name" as never, "=", body.data.channel as never)
-      .executeTakeFirst() as { id: string } | undefined;
+      .executeTakeFirst() as unknown as { id: string } | undefined;
     if (!chan) return reply.code(404).send({ error: "channel_not_found" });
 
     await db.insertInto("rt3_subscriptions" as never).values({
@@ -209,7 +209,7 @@ export async function realtimeV3Plugin(app: FastifyInstance) {
       user_id: req.auth?.userId ?? null,
       last_event_id: body.data.last_event_id,
       last_seen: new Date(),
-    } as never).onConflict((c: unknown) =>
+    } as never).onConflict((c: any): any =>
       (c as { columns: (k: string[]) => { doUpdateSet: (u: unknown) => unknown } })
         .columns(["channel_id", "subscriber_id"])
         .doUpdateSet({ last_event_id: body.data.last_event_id, last_seen: new Date() })).execute();

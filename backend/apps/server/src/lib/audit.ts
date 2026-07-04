@@ -16,11 +16,13 @@ import { db } from "../db/index.js";
 
 const notifier = new pg.Pool({ connectionString: env.DATABASE_URL, max: 2 });
 
-export type AuditStatus = "ok" | "error" | "dry_run";
+export type AuditStatus = "ok" | "error" | "dry_run" | "warn";
 
 export type AuditInput = {
   action: string;
   target?: string | null;
+  /** Back-compat alias for `target` used by newer plugins (auth_v3 etc.). */
+  target_id?: string | null;
   status?: AuditStatus;
   metadata?: Record<string, unknown>;
 };
@@ -31,7 +33,16 @@ async function broadcast(channel: string, event: string, payload: unknown) {
   ]).catch(() => { /* best effort */ });
 }
 
-export async function audit(req: FastifyRequest | null, input: AuditInput) {
+export async function audit(
+  req: FastifyRequest | null,
+  input: AuditInput | string,
+  extraMetadata?: Record<string, unknown>,
+) {
+  if (typeof input === "string") {
+    input = { action: input, metadata: extraMetadata };
+  } else if (extraMetadata) {
+    input = { ...input, metadata: { ...(input.metadata ?? {}), ...extraMetadata } };
+  }
   const actor = req?.auth?.user ?? null;
   const ip = req?.ip ?? null;
   const ua = (req?.headers?.["user-agent"] as string | undefined) ?? null;

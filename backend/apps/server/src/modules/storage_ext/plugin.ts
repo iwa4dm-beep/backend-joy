@@ -93,7 +93,7 @@ export async function storageExtPlugin(app: FastifyInstance) {
       if (cached) {
         // Update hit counters (fire-and-forget).
         void db.updateTable("render_cache" as never)
-          .set({ hit_count: db.fn("hit_count" as never).add(1 as never) as never, last_hit_at: new Date() } as never)
+          .set({ hit_count: (db.fn as any)("hit_count").add(1) as never, last_hit_at: new Date() } as never)
           .where("cache_key" as never, "=", ckey as never).execute().catch(() => undefined);
         reply.header("x-cache", "hit").header("content-type", cached.content_type)
              .header("cache-control", "public, max-age=86400, immutable");
@@ -119,7 +119,7 @@ export async function storageExtPlugin(app: FastifyInstance) {
       await db.insertInto("render_cache" as never).values({
         cache_key: ckey, bucket_name: bucket, source_key: key,
         params_json: params, content_type: result.contentType, bytes: outBuf.length,
-      } as never).onConflict((c: unknown) =>
+      } as never).onConflict((c: any): any =>
         (c as { column: (k: string) => { doNothing: () => unknown } }).column("cache_key").doNothing()).execute();
 
       reply.header("x-cache", "miss").header("content-type", result.contentType)

@@ -16,6 +16,9 @@ export type RequestAuth = {
   workspaceSlug: string;
   keyId: string | null;     // null for env-provided root keys
   user: AccessClaims | null;
+  /** Convenience aliases used by newer plugins. */
+  userId?: string | null;
+  role?: string | null;
 };
 
 declare module "fastify" {
@@ -56,9 +59,9 @@ async function resolveKey(plaintext: string): Promise<CacheEntry | null> {
   if (hit && Date.now() - hit.cachedAt < CACHE_TTL_MS) return hit;
 
   const hash = sha256(plaintext);
-  const row = await db
-    .selectFrom("workspace_api_keys as k" as never)
-    .innerJoin("workspaces as w" as never, "w.id" as never, "k.workspace_id" as never)
+  const row = await (db as any)
+    .selectFrom("workspace_api_keys as k")
+    .innerJoin("workspaces as w", "w.id", "k.workspace_id")
     .select([
       "k.id as keyId" as never,
       "k.kind as kind" as never,
@@ -129,6 +132,8 @@ export async function requireApiKey(req: FastifyRequest, reply: FastifyReply): P
     workspaceSlug: resolved.workspaceSlug,
     keyId: resolved.keyId,
     user,
+    userId: user?.sub ?? null,
+    role: user?.role ?? null,
   };
 }
 
