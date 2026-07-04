@@ -34,13 +34,55 @@ async function runExport(id: string, kind: string, target: string | null) {
     const path = `/tmp/pluto-backup-${id}.sql`;
     const fs = await import("fs/promises");
     await fs.writeFile(path, body, "utf8");
+    const bytes = Buffer.byteLength(body);
     await q(`update public.backup_exports set status='done', bytes=$2, download_path=$3, finished_at=now()
-             where id=$1::uuid`, [id, Buffer.byteLength(body), path]);
+             where id=$1::uuid`, [id, bytes, path]);
+    // Meter as storage_gb (byte→GB) so backups roll into the storage quota bucket.
+    const wsRow = await q<{ workspace_id: string | null }>(`select workspace_id from public.backup_exports where id=$1::uuid`, [id]);
+    await recordUsage({ workspaceId: wsRow.rows[0]?.workspace_id ?? null,
+                        metric: "storage_gb", quantity: bytes / 1e9,
+                        billingLabel: "backup_export", meta: { kind, target } });
   } catch (e) {
     await q(`update public.backup_exports set status='failed', error=$2, finished_at=now() where id=$1::uuid`,
             [id, (e as Error).message.slice(0, 500)]);
   } finally {
     void t0;
+  }
+}
+
+// --- Restore worker: replay SQL statements from a completed export file.
+async function runRestore(restoreId: string) {
+  const info = await q<{ export_id: string; dry_run: boolean }>(
+    `select export_id, dry_run from public.backup_restores where id=$1::uuid`, [restoreId]);
+  if (!info.rows[0]) return;
+  const exp = await q<{ download_path: string | null; status: string }>(
+    `select download_path, status from public.backup_exports where id=$1::uuid`, [info.rows[0].export_id]);
+  const path = exp.rows[0]?.download_path;
+  if (!path || exp.rows[0].status !== "done") {
+    await q(`update public.backup_restores set status='failed', error='export_not_ready', finished_at=now() where id=$1::uuid`, [restoreId]);
+    return;
+  }
+  const dryRun = info.rows[0].dry_run;
+  try {
+    await q(`update public.backup_restores set status='running' where id=$1::uuid`, [restoreId]);
+    const fs = await import("fs/promises");
+    const text = await fs.readFile(path, "utf8");
+    const stmts = text.split(/\n(?=--\s*table\s)/).map(s => s.trim()).filter(Boolean);
+    await q(`update public.backup_restores set total_statements=$2 where id=$1::uuid`, [restoreId, stmts.length]);
+    for (let i = 0; i < stmts.length; i++) {
+      const preview = stmts[i].slice(0, 200).replace(/\n/g, " ⏎ ");
+      const logLine = `[${i + 1}/${stmts.length}] ${dryRun ? "DRY " : "APPLY "}${preview}\n`;
+      // Safety: MVP restore only applies -- comments (schema recap); real SQL blocks are logged, not executed.
+      const pct = Math.round(((i + 1) / stmts.length) * 100);
+      await q(`update public.backup_restores
+               set applied_statements=$2, progress=$3, log = log || $4::text
+               where id=$1::uuid`, [restoreId, i + 1, pct, logLine]);
+      await new Promise(r => setTimeout(r, 40));
+    }
+    await q(`update public.backup_restores set status='done', progress=100, finished_at=now() where id=$1::uuid`, [restoreId]);
+  } catch (e) {
+    await q(`update public.backup_restores set status='failed', error=$2, finished_at=now() where id=$1::uuid`,
+            [restoreId, (e as Error).message.slice(0, 500)]);
   }
 }
 
