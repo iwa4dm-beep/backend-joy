@@ -55,6 +55,7 @@ function BackupsPage() {
     if (targetMode === "existing" && !targetBranchId) { toast.error("Pick a target branch."); return; }
     if (targetMode === "new" && !/^[a-z_][a-z0-9_]{0,40}$/i.test(newBranchName)) { toast.error("Enter a valid branch name."); return; }
     try {
+      stopRef.current?.(); stopRef.current = null;
       const r = await backups.startRestore(wizard.id, {
         dry_run: dryRun, confirm: dryRun ? undefined : confirm,
         target_branch_id: targetMode === "existing" ? targetBranchId : undefined,
@@ -66,12 +67,12 @@ function BackupsPage() {
         onEvent: (ev) => {
           setRestore(prev => prev ? { ...prev, ...ev } : ev);
           if (ev.log) setRestoreLog(ev.log);
-          if (ev.status === "done") toast.success("Restore complete");
-          if (ev.status === "failed") toast.error(`Restore failed: ${ev.error ?? ""}`);
+          if (ev.status === "done") { toast.success("Restore complete"); stopRef.current?.(); stopRef.current = null; }
+          if (ev.status === "failed") { toast.error(`Restore failed: ${ev.error ?? ""}`); stopRef.current?.(); stopRef.current = null; }
         },
         onError: (e) => toast.error(e.message),
       });
-      return stop;
+      stopRef.current = stop;
     } catch (e) { toast.error((e as Error).message); }
   }
 
