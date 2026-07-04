@@ -38,6 +38,8 @@ function BackupsPage() {
     try { const r = await backups.list(); setRows(r.exports); }
     catch (e) { toast.error((e as Error).message); }
   }
+  const stopRef = useRef<null | (() => void)>(null);
+  useEffect(() => () => { stopRef.current?.(); }, []);
   useEffect(() => { refresh(); const t = setInterval(refresh, 4000); return () => clearInterval(t); }, []);
   useEffect(() => { if (isLive()) branching.list().then(r => setBranches(r.branches)).catch(() => undefined); }, [wizard]);
 
