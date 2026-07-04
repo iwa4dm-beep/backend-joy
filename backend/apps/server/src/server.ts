@@ -136,12 +136,21 @@ async function main() {
   const { authCompletionPlugin } = await import("./modules/auth_completion/plugin.js");
   const { storageExtPlugin } = await import("./modules/storage_ext/plugin.js");
   const { cdcPlugin } = await import("./modules/cdc/plugin.js");
+  const { dataApiPlugin } = await import("./modules/data_api/plugin.js");
+  const { edgeV3Plugin } = await import("./modules/edge_v3/plugin.js");
+  const { billingPlugin } = await import("./modules/billing/plugin.js");
+  const { pitrPlugin } = await import("./modules/pitr/plugin.js");
   await app.register(logsPlugin);           // Phase 27 — /logs/v1/*
   await app.register(tokensPlugin);         // Phase 28 — /tokens/v1/*
   await app.register(authCompletionPlugin); // Phase 31 — /auth/v1/recover, /confirm-email, /otp/*
   await app.register(storageExtPlugin);     // Phase 32 — /storage/v1/render/*, /storage/v1/upload/resumable
   await app.register(cdcPlugin);            // Phase 33 — /rt/v2/cdc/*
+  await app.register(dataApiPlugin);        // Phase 34 — /rest/v1/(introspect), /graphql/v1
+  await app.register(edgeV3Plugin);         // Phase 35 — /fn/v3/*  (hardened isolate)
+  await app.register(billingPlugin);        // Phase 36 — /billing/v1/*
+  await app.register(pitrPlugin);           // Phase 36 — /pitr/v1/*
   startLogRetentionSweeper(app.log);
+
 
   // Top-level Prometheus scrape target — proxies to the observability
   // module when enabled so scrapers hit a stable /metrics regardless of
