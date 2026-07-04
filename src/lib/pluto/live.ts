@@ -1510,7 +1510,9 @@ export type WorkspaceToken = {
   id: string; workspace_id: string; name: string; prefix: string; scopes: string[];
   created_at: string; last_used_at: string | null; expires_at: string | null; revoked_at: string | null;
 };
-export type WorkspaceTokenMint = WorkspaceToken & { token: string };
+export type WorkspaceTokenMint = WorkspaceToken & { token: string; replaced_id?: string };
+export type ScopeCoverageEntry = { method: string; path: string; description: string };
+export type ScopeCoverage = Record<string, ScopeCoverageEntry[]>;
 
 export const tokens = {
   async scopes(): Promise<{ scopes: string[] }> { return api(`/tokens/v1/scopes`); },
