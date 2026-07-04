@@ -1527,6 +1527,9 @@ export const tokens = {
     return api(`/tokens/v1/tokens/${id}/rotate`, { method: "POST", body: JSON.stringify(input) });
   },
   async coverage(): Promise<{ coverage: ScopeCoverage }> { return api(`/tokens/v1/coverage`); },
+  async bulkRevoke(input: BulkRevokeInput): Promise<BulkRevokeResult> {
+    return api(`/tokens/v1/tokens/bulk-revoke`, { method: "POST", body: JSON.stringify(input) });
+  },
   async whoami(bearer: string): Promise<{ workspace_id: string | null; scopes: string[] }> {
     const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
     const res = await fetch(cfg.url.replace(/\/$/, "") + `/tokens/v1/whoami`, {
