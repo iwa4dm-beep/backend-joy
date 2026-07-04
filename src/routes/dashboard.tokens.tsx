@@ -21,6 +21,12 @@ function TokensPage() {
   const [minted, setMinted] = useState<WorkspaceTokenMint | null>(null);
   const [copied, setCopied] = useState(false);
   const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [bulkScope, setBulkScope] = useState("");
+  const [bulkCreatedBy, setBulkCreatedBy] = useState("");
+  const [bulkUnusedDays, setBulkUnusedDays] = useState("");
+  const [bulkNeverUsed, setBulkNeverUsed] = useState(false);
+  const [bulkPreview, setBulkPreview] = useState<BulkRevokeResult | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   async function refresh() {
     if (!isLive()) return;
