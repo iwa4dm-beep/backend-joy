@@ -12,6 +12,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { q } from "../../lib/pgraw.js";
 import { requireApiKey, requireAdmin } from "../../lib/apikey.js";
+import type { AccessClaims } from "../../lib/jwt.js";
 
 const metricBody = z.object({
   samples: z.array(z.object({
