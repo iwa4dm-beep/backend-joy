@@ -243,5 +243,85 @@ export const backupsPlugin: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // Phase 30 — Schema compatibility diff for the restore wizard.
+  // Parses the export's DDL preamble and compares against a target schema
+  // (default: `public`, or the resolved branch schema). Returns tables and
+  // columns that would be created / dropped / retyped so the operator can
+  // decide whether to toggle `allow_incompatible`.
+  app.get("/backups/v1/:id/compat", { preHandler: requireApiKey }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { target_branch_id?: string; target_schema?: string };
+    const exp = await q<{ download_path: string | null; workspace_id: string | null; kind: string; status: string }>(
+      `select download_path, workspace_id, kind, status from public.backup_exports where id=$1::uuid`, [id]);
+    if (!exp.rows[0]) { reply.code(404); return { error: "export_not_found" }; }
+    if (exp.rows[0].status !== "done") { reply.code(409); return { error: "export_not_ready" }; }
+
+    let target = query.target_schema ?? "public";
+    if (query.target_branch_id) {
+      const br = await q<{ schema_name: string }>(
+        `select schema_name from public.db_branches where id=$1::uuid`, [query.target_branch_id]);
+      if (br.rows[0]) target = br.rows[0].schema_name;
+    }
+
+    type Col = { name: string; type: string; nullable: boolean };
+    const source: Record<string, Col[]> = {};
+    try {
+      const fs = await import("fs/promises");
+      const buf = await fs.readFile(exp.rows[0].download_path!, "utf8");
+      let currentTable: string | null = null;
+      for (const line of buf.split("\n")) {
+        const tm = /^-- table\s+([\w.]+)$/.exec(line);
+        if (tm) { currentTable = tm[1].includes(".") ? tm[1].split(".")[1] : tm[1]; source[currentTable] = []; continue; }
+        const cm = /^--\s{3}(\S+)\s+(.+?)\s+(NULL|NOT NULL)$/.exec(line);
+        if (cm && currentTable) source[currentTable].push({ name: cm[1], type: cm[2], nullable: cm[3] === "NULL" });
+      }
+    } catch (e) {
+      reply.code(500); return { error: "read_export_failed", message: (e as Error).message };
+    }
+
+    const tgtRows = await q<{ table_name: string; column_name: string; data_type: string; is_nullable: string }>(
+      `select table_name, column_name, data_type, is_nullable
+       from information_schema.columns
+       where table_schema=$1
+       order by table_name, ordinal_position`, [target]);
+    const targetMap: Record<string, Col[]> = {};
+    for (const r of tgtRows.rows) {
+      (targetMap[r.table_name] ??= []).push({ name: r.column_name, type: r.data_type, nullable: r.is_nullable === "YES" });
+    }
+
+    const sourceTables = Object.keys(source);
+    const targetTables = Object.keys(targetMap);
+    const added_tables   = sourceTables.filter(t => !targetMap[t]);
+    const removed_tables = targetTables.filter(t => !source[t]);
+    const shared         = sourceTables.filter(t => targetMap[t]);
+
+    type ColDiff = { table: string; column: string; source_type: string | null;
+                     target_type: string | null; nullable_change?: string; action: "add"|"drop"|"retype"|"nullable" };
+    const columns: ColDiff[] = [];
+    for (const t of shared) {
+      const src = new Map(source[t].map(c => [c.name, c]));
+      const dst = new Map(targetMap[t].map(c => [c.name, c]));
+      for (const [name, sc] of src) {
+        const dc = dst.get(name);
+        if (!dc) columns.push({ table: t, column: name, source_type: sc.type, target_type: null, action: "add" });
+        else {
+          if (sc.type !== dc.type) columns.push({ table: t, column: name, source_type: sc.type, target_type: dc.type, action: "retype" });
+          if (sc.nullable !== dc.nullable) columns.push({ table: t, column: name, source_type: sc.type, target_type: dc.type,
+              nullable_change: `${dc.nullable ? "NULL" : "NOT NULL"} → ${sc.nullable ? "NULL" : "NOT NULL"}`, action: "nullable" });
+        }
+      }
+      for (const [name, dc] of dst) if (!src.has(name)) columns.push({ table: t, column: name, source_type: null, target_type: dc.type, action: "drop" });
+    }
+
+    return {
+      target_schema: target,
+      source_tables: sourceTables.length,
+      target_tables: targetTables.length,
+      added_tables, removed_tables, columns,
+      compatible: added_tables.length === 0 && removed_tables.length === 0 && columns.length === 0,
+    };
+  });
+
   app.log.info("[backups] Backup exports enabled — /backups/v1/*");
 };
+
