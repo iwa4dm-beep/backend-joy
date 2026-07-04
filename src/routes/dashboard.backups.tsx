@@ -162,10 +162,16 @@ function BackupsPage() {
                 <Input placeholder="new-branch-name" value={newBranchName} onChange={e => setNewBranchName(e.target.value)} />
               )}
               <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <input type="checkbox" checked={allowIncompat} onChange={e => setAllowIncompat(e.target.checked)} />
+                <input type="checkbox" checked={allowIncompat}
+                       disabled={compat && !compat.compatible && !compatAck}
+                       onChange={e => setAllowIncompat(e.target.checked)} />
                 Allow restore over incompatible schema (skips safety check)
+                {compat && !compat.compatible && !compatAck && <span className="text-destructive">— review diff first</span>}
               </label>
             </div>
+
+            <CompatibilityPanel compat={compat} loading={compatLoading} onLoad={loadCompat}
+              ack={compatAck} onAck={() => setCompatAck(true)} />
 
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} />
@@ -178,11 +184,13 @@ function BackupsPage() {
               </div>
             )}
             <div className="flex gap-2">
-              <Button size="sm" onClick={beginRestore} disabled={restore?.status === "running" || restore?.status === "pending"}>
+              <Button size="sm" data-testid="restore-apply" onClick={beginRestore}
+                disabled={restore?.status === "running" || restore?.status === "pending"
+                          || (!dryRun && compat != null && !compat.compatible && !compatAck)}>
                 <Play className="h-4 w-4 mr-1" /> {dryRun ? "Run dry-run" : "Apply restore"}
               </Button>
               {restore && restore.status !== "done" && restore.status !== "failed" && (
-                <Button size="sm" variant="ghost" onClick={async () => { await backups.cancelRestore(restore.id); }}>Cancel</Button>
+                <Button size="sm" variant="ghost" data-testid="restore-cancel" onClick={async () => { await backups.cancelRestore(restore.id); }}>Cancel</Button>
               )}
             </div>
             {restore && (
