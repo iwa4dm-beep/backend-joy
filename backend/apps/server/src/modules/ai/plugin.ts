@@ -7,6 +7,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { q } from "../../lib/pgraw.js";
+import { requireApiKey } from "../../lib/apikey.js";
 import { DEFAULT_VECTOR_ALLOW, type AiDriver } from "./types.js";
 
 const ALLOWED_DRIVERS: readonly AiDriver[] = ["lovable", "openai", "voyage", "cohere", "anthropic"] as const;
