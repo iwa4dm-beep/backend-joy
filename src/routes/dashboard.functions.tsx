@@ -82,18 +82,72 @@ function FunctionsPage() {
         <div className="flex gap-2">
           <Input value={slug} onChange={e => setSlug(e.target.value)} className="w-40" placeholder="function-slug" />
           <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="h-4 w-4 mr-1" /> Refresh</Button>
-          <Button size="sm" onClick={fakeInvoke}><Play className="h-4 w-4 mr-1" /> Test invoke</Button>
+          <Button size="sm" onClick={invoke}><Play className="h-4 w-4 mr-1" /> Invoke</Button>
         </div>
       </div>
 
       <div className="flex gap-1 border-b border-border">
-        {(["secrets","schedules","logs"] as const).map(t => (
+        {(["functions","secrets","schedules","logs"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={"px-4 py-2 text-sm border-b-2 -mb-px " + (tab === t ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
             {t}
           </button>
         ))}
       </div>
+
+      {tab === "functions" && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Boxes className="h-4 w-4" /> Create / update function</CardTitle></CardHeader>
+            <CardContent className="flex gap-2 flex-wrap items-center">
+              <Input placeholder="slug (a-z, digits, -)" value={newSlug} onChange={e => setNewSlug(e.target.value.toLowerCase())} className="w-48" />
+              <Input placeholder="display name" value={newName} onChange={e => setNewName(e.target.value)} className="w-56" />
+              <select className="h-9 px-2 rounded-md border border-border bg-background text-sm" value={runtime} onChange={e => setRuntime(e.target.value as "node20"|"deno1"|"bun1")}>
+                <option value="node20">node20</option><option value="deno1">deno1</option><option value="bun1">bun1</option>
+              </select>
+              <Button size="sm" onClick={createFn}><Plus className="h-4 w-4 mr-1" /> Save</Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Zap className="h-4 w-4" /> Test invoke {slug}</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              <textarea className="w-full min-h-[80px] font-mono text-xs p-2 rounded-md border border-border bg-background"
+                        value={invokePayload} onChange={e => setInvokePayload(e.target.value)} />
+              <div className="flex justify-end"><Button size="sm" onClick={invoke}><Play className="h-4 w-4 mr-1" /> Run</Button></div>
+              {invokeResult && (
+                <pre className="text-[10px] font-mono p-2 rounded-md bg-muted">{JSON.stringify(invokeResult, null, 2)}</pre>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle className="text-sm">Functions</CardTitle></CardHeader>
+            <CardContent>
+              <div className="space-y-1">
+                {functions.map(f => (
+                  <div key={f.id} className="grid grid-cols-[1fr,80px,80px,80px,80px,90px] gap-2 items-center text-xs p-2 border border-border rounded-md">
+                    <div>
+                      <button className="font-medium hover:underline" onClick={() => setSlug(f.slug)}>{f.slug}</button>
+                      <span className="text-muted-foreground ml-2">{f.display_name}</span>
+                    </div>
+                    <Badge variant="secondary">{f.runtime}</Badge>
+                    <span>{f.secrets} secrets</span>
+                    <span>{f.schedules} cron</span>
+                    <span>{f.invocations_24h}/24h</span>
+                    <div className="flex justify-end gap-1">
+                      <Button size="sm" variant="ghost" onClick={async () => { await edgeV2.deleteFunction(f.slug); refresh(); }}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {functions.length === 0 && <div className="text-xs text-muted-foreground">No functions registered yet.</div>}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {tab === "secrets" && (
         <Card>
