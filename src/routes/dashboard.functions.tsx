@@ -233,7 +233,11 @@ function FunctionsPage() {
                     <Button size="sm" variant="ghost" onClick={async () => { await edgeV2.toggleSchedule(s.id, !s.active); refresh(); }}>
                       {s.active ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={async () => { await edgeV2.deleteSchedule(s.id); refresh(); }}>
+                    <Button size="sm" variant="ghost" title="Delete schedule" onClick={async () => {
+                      if (!confirm(`Delete cron "${s.cron}" for ${s.function_slug}?`)) return;
+                      try { await edgeV2.deleteSchedule(s.id); toast.success("Schedule deleted"); refresh(); }
+                      catch (e) { toast.error((e as Error).message); }
+                    }}>
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
