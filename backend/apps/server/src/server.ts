@@ -193,6 +193,8 @@ async function main() {
   await app.register(realtimeV5Plugin);     // Phase 60 — presence sharding, room-level backpressure, ordered delivery
   const { vectorV3Plugin } = await import("./modules/vector_v3/plugin.js");
   await app.register(vectorV3Plugin);       // Phase 61 — hybrid rerankers, per-tenant HNSW tuning, streaming embeddings
+  const { jobsV2Plugin } = await import("./modules/jobs_v2/plugin.js");
+  await app.register(jobsV2Plugin);         // Phase 62 — durable DAG workflows, exactly-once side effects, retries
   startLogRetentionSweeper(app.log);
 
 
