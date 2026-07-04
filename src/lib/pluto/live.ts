@@ -1328,6 +1328,19 @@ export type FnCatalog = { id: string; slug: string; display_name: string|null; r
 // -------------------- Phase 24: Backups --------------------
 export type BackupExport = { id: string; kind: "full"|"schema"|"table"; target: string|null; status: "pending"|"running"|"done"|"failed"; bytes: number; download_path: string|null; error: string|null; created_at: string; finished_at: string|null };
 export type BackupRestore = { id: string; export_id?: string; dry_run: boolean; status: "pending"|"running"|"done"|"failed"|"canceled"; progress: number; applied_statements: number; total_statements: number; log?: string; error: string|null; created_at: string; finished_at: string|null };
+export type BackupColumnDiff = {
+  table: string; column: string;
+  source_type: string | null; target_type: string | null;
+  nullable_change?: string;
+  action: "add" | "drop" | "retype" | "nullable";
+};
+export type BackupCompat = {
+  target_schema: string;
+  source_tables: number; target_tables: number;
+  added_tables: string[]; removed_tables: string[];
+  columns: BackupColumnDiff[];
+  compatible: boolean;
+};
 
 export const backups = {
   list:   ()                                                     => api<{ exports: BackupExport[] }>("/backups/v1"),
