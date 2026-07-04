@@ -158,7 +158,11 @@ function FunctionsPage() {
                     <span>{f.schedules} cron</span>
                     <span>{f.invocations_24h}/24h</span>
                     <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="ghost" onClick={async () => { await edgeV2.deleteFunction(f.slug); refresh(); }}>
+                      <Button size="sm" variant="ghost" title="Delete function" onClick={async () => {
+                        if (!confirm(`Delete function "${f.slug}"? This removes secrets, schedules, and invocation history.`)) return;
+                        try { await edgeV2.deleteFunction(f.slug); toast.success("Function deleted"); refresh(); }
+                        catch (e) { toast.error((e as Error).message); }
+                      }}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
