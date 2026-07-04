@@ -128,6 +128,16 @@ export async function storageV4Plugin(app: FastifyInstance) {
     return { ok: true, job: result };
   });
 
+  app.get("/storage/v4/replication/status", async (req, reply) => {
+    const p = z.object({
+      bucket: z.string(), object_key: z.string(), version_id: z.string(),
+    }).safeParse(req.query);
+    if (!p.success) { reply.code(400); return { error: "bad_request" }; }
+    return { jobs: statusFor(p.data.bucket, p.data.object_key, p.data.version_id) };
+  });
+
+
+
   // Streaming SSE — emits a snapshot every 250 ms until all jobs for the
   // given (bucket, object_key, version_id) reach a terminal state, or up to
   // `max_events` frames. Clients close the stream at any time.
