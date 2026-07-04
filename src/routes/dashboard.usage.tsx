@@ -272,6 +272,9 @@ function UsagePage() {
                 <input value={draft.soft} disabled={!canAdmin} onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, soft: e.target.value } }))}
                   placeholder="soft" className="bg-background border border-border rounded px-2 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
               </div>
+              <input value={draft.alertPct} disabled={!canAdmin}
+                onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, alertPct: e.target.value } }))}
+                placeholder="alert at % (default 80)" className="w-full bg-background border border-border rounded px-2 py-1 text-xs disabled:opacity-50 disabled:cursor-not-allowed" />
               <div className="grid grid-cols-[1fr_1fr_auto] gap-1 items-center">
                 <select value={draft.overage} disabled={!canAdmin}
                   onChange={(e) => setDrafts((d) => ({ ...d, [m.key]: { ...draft, overage: e.target.value as OverageBehavior } }))}
