@@ -19,8 +19,8 @@ describe("select parser", () => {
     expect(n[2].columns).toBe("*");
   });
 
-  it("rejects invalid identifiers", () => {
-    expect(() => parseSelect("1bad")).toThrow(/invalid/);
+  it("rejects unbalanced parens", () => {
+    expect(() => parseSelect("author(name")).toThrow(/missing/);
   });
 
   it("scalarColumns returns * when no scalars", () => {
