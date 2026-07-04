@@ -222,6 +222,78 @@ function TokensPage() {
       </Card>
 
       <Card>
+        <CardHeader><CardTitle className="text-sm flex items-center gap-2">
+          <Zap className="h-4 w-4" /> Bulk revoke
+        </CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Revoke many tokens at once by scope, creator user id, or last-used cutoff.
+            Preview first — nothing changes until you confirm.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div>
+              <div className="text-[10px] text-muted-foreground mb-1">Scope contains</div>
+              <select value={bulkScope} onChange={e => setBulkScope(e.target.value)}
+                      className="w-full text-xs px-2 py-1.5 rounded border border-border bg-background">
+                <option value="">(any)</option>
+                {scopeCatalog.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="*">* (wildcard)</option>
+              </select>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground mb-1">Created by (user id)</div>
+              <Input value={bulkCreatedBy} onChange={e => setBulkCreatedBy(e.target.value)} placeholder="uuid or subject" />
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground mb-1">Unused for N days</div>
+              <Input type="number" min={1} value={bulkUnusedDays}
+                     onChange={e => setBulkUnusedDays(e.target.value)} placeholder="e.g. 30" />
+            </div>
+            <label className="flex items-end gap-2 text-xs pb-1">
+              <input type="checkbox" checked={bulkNeverUsed}
+                     onChange={e => setBulkNeverUsed(e.target.checked)} />
+              Never used
+            </label>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" disabled={bulkBusy} onClick={bulkPreviewFn}>
+              Preview matches
+            </Button>
+            <Button size="sm" variant="destructive"
+                    disabled={bulkBusy || !bulkPreview || bulkPreview.matched === 0 || bulkPreview.revoked.length > 0}
+                    onClick={bulkConfirm}>
+              Confirm revoke{bulkPreview ? ` (${bulkPreview.matched})` : ""}
+            </Button>
+            {bulkPreview && (
+              <Button size="sm" variant="ghost" onClick={() => setBulkPreview(null)}>Clear</Button>
+            )}
+          </div>
+          {bulkPreview && (
+            <div className="border border-border rounded-md p-2 space-y-1 max-h-64 overflow-auto">
+              <div className="text-[11px] text-muted-foreground">
+                {bulkPreview.revoked.length > 0
+                  ? <>✔ Revoked <b>{bulkPreview.revoked.length}</b> token(s).</>
+                  : <>Preview: <b>{bulkPreview.matched}</b> token(s) would be revoked.</>}
+              </div>
+              {bulkPreview.tokens.map(t => (
+                <div key={t.id} className="grid grid-cols-[1fr,120px,140px] gap-2 text-[11px] items-center">
+                  <div>
+                    <span className="font-medium">{t.name}</span>
+                    <span className="text-muted-foreground font-mono ml-2">plt_{t.prefix}_…</span>
+                  </div>
+                  <span className="text-muted-foreground truncate">{t.scopes.join(", ")}</span>
+                  <span className="text-muted-foreground">
+                    {t.last_used_at ? `used ${new Date(t.last_used_at).toLocaleDateString()}` : "never used"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+
+      <Card>
         <CardHeader><CardTitle className="text-sm">Existing tokens ({rows.length})</CardTitle></CardHeader>
         <CardContent>
           <div className="space-y-1">
