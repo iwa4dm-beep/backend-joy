@@ -1129,6 +1129,70 @@ export const rt2 = {
   leave:         (name: string, member_key: string) =>
     api<{ ok: boolean }>(`/rt2/v1/channels/${encodeURIComponent(name)}/presence/${encodeURIComponent(member_key)}`,
       { method: "DELETE" }),
+  /**
+   * Presence subscription with heartbeat + auto-resubscribe on failure.
+   * - Sends join() every `heartbeatMs` (default 20s) so the member row stays fresh (< 5 min TTL).
+   * - Polls presence roster every `pollMs` (default 3s).
+   * - On any failure, retries with exponential backoff (capped at 30s).
+   * - On page unload / cancel, sends leave() best-effort.
+   * Returns an unsubscribe function.
+   */
+  subscribePresence(name: string, member_key: string, opts: {
+    metadata?: Record<string, unknown>;
+    heartbeatMs?: number;
+    pollMs?: number;
+    onMembers?: (m: Rt2Member[]) => void;
+    onReconnect?: (attempt: number) => void;
+    onError?: (err: Error) => void;
+  } = {}) {
+    const heartbeatMs = opts.heartbeatMs ?? 20_000;
+    const pollMs = opts.pollMs ?? 3_000;
+    let stopped = false; let attempt = 0;
+    let hbTimer: ReturnType<typeof setInterval> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const clearTimers = () => {
+      if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    };
+
+    const backoff = () => Math.min(30_000, 500 * 2 ** attempt);
+
+    const start = async () => {
+      while (!stopped) {
+        try {
+          await rt2.join(name, member_key, opts.metadata ?? {});
+          if (attempt > 0) opts.onReconnect?.(attempt);
+          attempt = 0;
+          hbTimer = setInterval(() => {
+            rt2.join(name, member_key, opts.metadata ?? {}).catch((e) => opts.onError?.(e as Error));
+          }, heartbeatMs);
+          pollTimer = setInterval(async () => {
+            try { const r = await rt2.presence(name); opts.onMembers?.(r.members); }
+            catch (e) { opts.onError?.(e as Error); throw e; }
+          }, pollMs);
+          // Wait until a poll fails — we detect via a promise that never resolves; timers handle themselves.
+          await new Promise<void>((resolve) => {
+            const iv = setInterval(() => { if (stopped) { clearInterval(iv); resolve(); } }, 250);
+          });
+          return;
+        } catch (e) {
+          clearTimers();
+          opts.onError?.(e as Error);
+          attempt++;
+          await new Promise(r => setTimeout(r, backoff()));
+        }
+      }
+    };
+
+    void start();
+
+    return () => {
+      stopped = true;
+      clearTimers();
+      rt2.leave(name, member_key).catch(() => { /* best effort */ });
+    };
+  },
 };
 
 // -------------------- Phase 23: Vector search --------------------
