@@ -601,12 +601,80 @@ export const usagePlugin: FastifyPluginAsync = async (app) => {
   });
 
   // Hook the ingest path so live subscribers repaint immediately.
-  // Hook the ingest path so live subscribers repaint immediately.
   app.addHook("onResponse", async (req) => {
     if (req.method !== "POST") return;
     if (!req.url || !req.url.startsWith("/usage/v1/events")) return;
     const ws = (req.headers["x-workspace-id"] as string) ?? null;
     if (ws) pushToWorkspace(ws, "ingest");
   });
+
+  // ---- SSE: workspace-scoped quota alerts (Phase 29) -------------------
+  // Single LISTEN pluto_broadcast connection multiplexed to per-workspace
+  // subscribers so dashboards see alerts within milliseconds of firing.
+  type AlertSub = (payload: string) => void;
+  const alertSubs = new Map<string, Set<AlertSub>>();
+  let alertListenerStarted = false;
+  async function ensureAlertListener() {
+    if (alertListenerStarted) return; alertListenerStarted = true;
+    const { default: pg } = await import("pg");
+    const { env } = await import("../../config.js");
+    const client = new pg.Client({ connectionString: env.DATABASE_URL });
+    await client.connect();
+    await client.query("listen pluto_broadcast");
+    client.on("notification", (msg) => {
+      if (!msg.payload) return;
+      try {
+        const evt = JSON.parse(msg.payload) as { channel: string; event: string; payload: { workspace_id?: string } };
+        if (evt.channel !== "system:usage_alert") return;
+        const ws = evt.payload?.workspace_id; if (!ws) return;
+        const set = alertSubs.get(ws); if (!set) return;
+        const wire = `event: ${evt.event}\ndata: ${JSON.stringify(evt.payload)}\n\n`;
+        for (const w of set) { try { w(wire); } catch { /* subscriber gone */ } }
+      } catch { /* bad payload — ignore */ }
+    });
+    client.on("error", (e) => { app.log.error({ err: e.message }, "alert_listener_pg_error"); });
+  }
+
+  app.get("/usage/v1/alerts/stream", { preHandler: requireApiKey }, async (req, reply) => {
+    const ws = (req.headers["x-workspace-id"] as string) ?? null;
+    if (!ws) { reply.code(400); return { error: "workspace_required" }; }
+    await ensureAlertListener();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      "connection": "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    reply.raw.write(`: connected\n\n`);
+    const write: AlertSub = (payload) => reply.raw.write(payload);
+    let set = alertSubs.get(ws);
+    if (!set) { set = new Set(); alertSubs.set(ws, set); }
+    set.add(write);
+
+    // Immediately send any active/unresolved alerts as a snapshot.
+    try {
+      const snap = await q<{ id: string; metric: string; pct: number; used: number; hard_limit: number; triggered_at: Date }>(
+        `select id, metric, pct, used, hard_limit, triggered_at
+         from public.quota_alerts
+         where workspace_id=$1::uuid and resolved_at is null
+         order by triggered_at desc limit 20`, [ws]);
+      for (const r of snap.rows) {
+        write(`event: quota.alert\ndata: ${JSON.stringify({
+          type: "quota.alert", workspace_id: ws, alert_id: r.id,
+          metric: r.metric, pct: Number(r.pct), used: Number(r.used),
+          hard_limit: r.hard_limit, triggered_at: r.triggered_at,
+        })}\n\n`);
+      }
+    } catch { /* snapshot best-effort */ }
+
+    const hb = setInterval(() => { try { reply.raw.write(`: ping\n\n`); } catch { /* closed */ } }, 25_000);
+    req.raw.on("close", () => {
+      clearInterval(hb);
+      set!.delete(write);
+      if (!set!.size) alertSubs.delete(ws);
+      try { reply.raw.end(); } catch { /* already closed */ }
+    });
+  });
 };
+
 
