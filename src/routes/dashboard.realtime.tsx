@@ -161,3 +161,27 @@ function RealtimePage() {
     </div>
   );
 }
+
+function MessagesTable({ messages }: { messages: Rt2Message[] }) {
+  const t = usePaginatedTable(messages, { pageSize: 15, defaultSort: { key: "created_at", dir: "desc" } });
+  return (
+    <PaginatedTable
+      rows={t.rows} sorted={t.sorted}
+      page={t.page} pageSize={t.pageSize} totalPages={t.totalPages}
+      sortKey={t.sortKey} sortDir={t.sortDir}
+      onPage={t.setPage} onSort={t.toggleSort}
+      csvFilename="realtime-messages.csv"
+      csvColumns={["created_at","event","sender","payload"]}
+      columns={[
+        { key: "event", label: "event", className: "w-24" },
+        { key: "sender", label: "sender", className: "w-32",
+          render: (r) => <span className="text-muted-foreground">{r.sender ?? "—"}</span> },
+        { key: "payload", label: "payload",
+          render: (r) => <pre className="text-[10px] font-mono truncate">{JSON.stringify(r.payload)}</pre> },
+        { key: "created_at", label: "time", className: "w-40",
+          render: (r) => <span className="text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span> },
+      ]}
+      empty="No messages."
+    />
+  );
+}
