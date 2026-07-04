@@ -10,3 +10,7 @@ export async function q<T extends pg.QueryResultRow = pg.QueryResultRow>(
 ): Promise<pg.QueryResult<T>> {
   return pgPool.query<T>(text, params as never);
 }
+
+// Back-compat alias: some modules import { pgraw }.
+export const pgraw = q;
+
