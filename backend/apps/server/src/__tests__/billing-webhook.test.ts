@@ -17,6 +17,9 @@ vi.mock("../lib/apikey.js", () => ({
   requireWorkspaceAdmin: async () => {},
 }));
 
+const calls: { sql: string; params: unknown[] }[] = [];
+
+
 vi.mock("../lib/pgraw.js", () => ({
   q: vi.fn(async (sql: string, params?: unknown[]) => {
     calls.push({ sql, params: params ?? [] });
