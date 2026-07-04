@@ -14,7 +14,11 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "bun run dev",
+    // Bake mock Pluto env into the Vite dev bundle so `isLive()` returns true
+    // and the dashboard exercises the real code paths against the fetch mocks
+    // installed in e2e/*.spec.ts. Without these vars all tests self-skip.
+    command:
+      "VITE_PLUTO_URL=http://pluto.mock VITE_PLUTO_ANON_KEY=anon.test bun run dev",
     port: 8080,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
