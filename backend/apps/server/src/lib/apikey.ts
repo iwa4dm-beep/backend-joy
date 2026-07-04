@@ -132,6 +132,8 @@ export async function requireApiKey(req: FastifyRequest, reply: FastifyReply): P
     workspaceSlug: resolved.workspaceSlug,
     keyId: resolved.keyId,
     user,
+    userId: user?.sub ?? null,
+    role: user?.role ?? null,
   };
 }
 
