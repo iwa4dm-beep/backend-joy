@@ -7,6 +7,8 @@ export type AccessClaims = {
   sub: string;
   role: "admin" | "user";
   email: string;
+  /** Alias of `sub`, populated by verifyAccessToken for legacy callers. */
+  id?: string;
 };
 
 export async function signAccessToken(claims: AccessClaims): Promise<string> {
