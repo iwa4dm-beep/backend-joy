@@ -34,6 +34,9 @@ function BackupsPage() {
   const [targetBranchId, setTargetBranchId] = useState<string>("");
   const [newBranchName, setNewBranchName] = useState<string>("");
   const [allowIncompat, setAllowIncompat] = useState(false);
+  const [compat, setCompat] = useState<BackupCompat | null>(null);
+  const [compatLoading, setCompatLoading] = useState(false);
+  const [compatAck, setCompatAck] = useState(false);
 
   async function refresh() {
     if (!isLive()) return;
