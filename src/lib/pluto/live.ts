@@ -1209,9 +1209,9 @@ export const vector = {
   upsert:           (name: string, docs: { id?: string; external_id?: string; content: string; embedding: number[]; metadata?: Record<string, unknown> }[]) =>
     api<{ ok: boolean; inserted: number }>(`/vec/v1/collections/${encodeURIComponent(name)}/upsert`,
       { method: "POST", body: JSON.stringify({ docs }) }),
-  query:            (name: string, embedding: number[], top_k = 5) =>
+  query:            (name: string, embedding: number[], top_k = 5, embedding_field?: string) =>
     api<{ matches: VecMatch[] }>(`/vec/v1/collections/${encodeURIComponent(name)}/query`,
-      { method: "POST", body: JSON.stringify({ embedding, top_k }) }),
+      { method: "POST", body: JSON.stringify({ embedding, top_k, embedding_field }) }),
 };
 
 // -------------------- Phase 24: Edge Functions v2 --------------------
