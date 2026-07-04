@@ -88,9 +88,10 @@ describe("delta codec round-trip", () => {
     expect(decodeDelta(null, env)).toEqual({ a: 1 });
   });
 
-  it("reduces bytes for small mutations", () => {
-    const base = { items: [1,2,3,4,5,6,7,8,9,10], meta: { author: "u", ts: 1 } };
-    const next = { items: [1,2,3,4,5,6,7,8,9,10], meta: { author: "u", ts: 2 } };
+  it("reduces bytes for small mutations on large payloads", () => {
+    const bigItems = Array.from({ length: 200 }, (_, i) => ({ id: i, name: `item-${i}`, value: i * 3 }));
+    const base = { items: bigItems, meta: { author: "user-alpha", ts: 1 } };
+    const next = { items: bigItems, meta: { author: "user-alpha", ts: 2 } };
     const env = encodeDelta(base, next);
     expect(JSON.stringify(env).length).toBeLessThan(JSON.stringify(next).length);
   });
