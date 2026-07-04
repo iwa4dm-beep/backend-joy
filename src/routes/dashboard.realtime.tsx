@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { rt2, isLive, type Rt2Channel, type Rt2Message, type Rt2Member } from "@/lib/pluto/live";
+import { rt2, cdc, isLive, type Rt2Channel, type Rt2Message, type Rt2Member, type CdcTable } from "@/lib/pluto/live";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Radio, Users2, Send, Plus, RefreshCw } from "lucide-react";
+import { Radio, Users2, Send, Plus, RefreshCw, Database, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PresenceIndicator, type PresenceStatus } from "@/components/pluto/PresenceIndicator";
 import { PaginatedTable } from "@/components/pluto/PaginatedTable";
@@ -158,6 +158,8 @@ function RealtimePage() {
               </CardContent>
             </Card>
           </div>
+
+          <CdcPanel />
         </div>
       </div>
     </div>
@@ -185,5 +187,79 @@ function MessagesTable({ messages }: { messages: Rt2Message[] }) {
       ]}
       empty="No messages."
     />
+  );
+}
+
+function CdcPanel() {
+  const [tables, setTables] = useState<CdcTable[]>([]);
+  const [lag, setLag] = useState<number | null>(null);
+  const [schema, setSchema] = useState("public");
+  const [table, setTable] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    if (!isLive()) return;
+    try {
+      const [t, l] = await Promise.all([cdc.listTables(), cdc.slotLag()]);
+      setTables(t.tables); setLag(l.lag_bytes);
+    } catch (e) { toast.error((e as Error).message); }
+  }
+  useEffect(() => { void refresh(); const id = setInterval(refresh, 15_000); return () => clearInterval(id); }, []);
+
+  async function enable() {
+    if (!table.trim()) return toast.error("Table required");
+    setBusy(true);
+    try { await cdc.enableTable(schema.trim() || "public", table.trim()); setTable(""); await refresh(); toast.success("Enabled"); }
+    catch (e) { toast.error((e as Error).message); }
+    finally { setBusy(false); }
+  }
+  async function disable(s: string, t: string) {
+    if (!confirm(`Stop CDC on ${s}.${t}?`)) return;
+    try { await cdc.disableTable(s, t); await refresh(); }
+    catch (e) { toast.error((e as Error).message); }
+  }
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-sm flex items-center gap-2">
+        <Database className="h-4 w-4" /> Change data capture
+        {lag !== null && (
+          <span className="ml-auto text-[10px] text-muted-foreground font-mono">
+            slot lag: {lag.toLocaleString()} bytes
+          </span>
+        )}
+      </CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Rows in these tables emit realtime events on <code>postgres_changes:&lt;schema&gt;:&lt;table&gt;</code>.
+          Requires <code>PLUTO_ENABLE_CDC=1</code> on the server.
+        </p>
+        <div className="grid grid-cols-[120px,1fr,120px] gap-2">
+          <Input placeholder="schema" value={schema} onChange={e => setSchema(e.target.value)} />
+          <Input placeholder="table (e.g. todos)" value={table} onChange={e => setTable(e.target.value)} />
+          <Button size="sm" onClick={enable} disabled={busy}>
+            <Plus className="h-3 w-3 mr-1" /> Enable
+          </Button>
+        </div>
+        <div className="space-y-1">
+          {tables.map(row => (
+            <div key={`${row.schema_name}.${row.table_name}`}
+                 className="grid grid-cols-[1fr,90px,140px,60px] gap-2 items-center text-xs p-2 border border-border rounded-md">
+              <span className="font-mono">{row.schema_name}.{row.table_name}</span>
+              <Badge variant={row.enabled ? "default" : "secondary"}>{row.enabled ? "enabled" : "disabled"}</Badge>
+              <span className="text-muted-foreground">since {new Date(row.created_at).toLocaleDateString()}</span>
+              <div className="flex justify-end">
+                {row.enabled && (
+                  <Button size="sm" variant="ghost" onClick={() => disable(row.schema_name, row.table_name)}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+          {tables.length === 0 && <div className="text-xs text-muted-foreground">No tables configured. Enable one above.</div>}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

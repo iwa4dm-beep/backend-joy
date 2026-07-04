@@ -42,6 +42,10 @@ import { Route as DashboardAuditLogRouteImport } from './routes/dashboard.audit-
 import { Route as DashboardAuditRouteImport } from './routes/dashboard.audit'
 import { Route as DashboardApiRouteImport } from './routes/dashboard.api'
 import { Route as DashboardAiRouteImport } from './routes/dashboard.ai'
+import { Route as AuthResetPasswordRouteImport } from './routes/auth.reset-password'
+import { Route as AuthPhoneRouteImport } from './routes/auth.phone'
+import { Route as AuthForgotRouteImport } from './routes/auth.forgot'
+import { Route as AuthConfirmEmailRouteImport } from './routes/auth.confirm-email'
 
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
@@ -208,11 +212,35 @@ const DashboardAiRoute = DashboardAiRouteImport.update({
   path: '/ai',
   getParentRoute: () => DashboardRoute,
 } as any)
+const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthPhoneRoute = AuthPhoneRouteImport.update({
+  id: '/phone',
+  path: '/phone',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthForgotRoute = AuthForgotRouteImport.update({
+  id: '/forgot',
+  path: '/forgot',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthConfirmEmailRoute = AuthConfirmEmailRouteImport.update({
+  id: '/confirm-email',
+  path: '/confirm-email',
+  getParentRoute: () => AuthRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRoute
+  '/auth': typeof AuthRouteWithChildren
   '/dashboard': typeof DashboardRouteWithChildren
+  '/auth/confirm-email': typeof AuthConfirmEmailRoute
+  '/auth/forgot': typeof AuthForgotRoute
+  '/auth/phone': typeof AuthPhoneRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/api': typeof DashboardApiRoute
   '/dashboard/audit': typeof DashboardAuditRoute
@@ -246,7 +274,11 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRoute
+  '/auth': typeof AuthRouteWithChildren
+  '/auth/confirm-email': typeof AuthConfirmEmailRoute
+  '/auth/forgot': typeof AuthForgotRoute
+  '/auth/phone': typeof AuthPhoneRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/api': typeof DashboardApiRoute
   '/dashboard/audit': typeof DashboardAuditRoute
@@ -281,8 +313,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/auth': typeof AuthRoute
+  '/auth': typeof AuthRouteWithChildren
   '/dashboard': typeof DashboardRouteWithChildren
+  '/auth/confirm-email': typeof AuthConfirmEmailRoute
+  '/auth/forgot': typeof AuthForgotRoute
+  '/auth/phone': typeof AuthPhoneRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
   '/dashboard/ai': typeof DashboardAiRoute
   '/dashboard/api': typeof DashboardApiRoute
   '/dashboard/audit': typeof DashboardAuditRoute
@@ -320,6 +356,10 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/dashboard'
+    | '/auth/confirm-email'
+    | '/auth/forgot'
+    | '/auth/phone'
+    | '/auth/reset-password'
     | '/dashboard/ai'
     | '/dashboard/api'
     | '/dashboard/audit'
@@ -354,6 +394,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/auth'
+    | '/auth/confirm-email'
+    | '/auth/forgot'
+    | '/auth/phone'
+    | '/auth/reset-password'
     | '/dashboard/ai'
     | '/dashboard/api'
     | '/dashboard/audit'
@@ -389,6 +433,10 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/dashboard'
+    | '/auth/confirm-email'
+    | '/auth/forgot'
+    | '/auth/phone'
+    | '/auth/reset-password'
     | '/dashboard/ai'
     | '/dashboard/api'
     | '/dashboard/audit'
@@ -423,7 +471,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AuthRoute: typeof AuthRoute
+  AuthRoute: typeof AuthRouteWithChildren
   DashboardRoute: typeof DashboardRouteWithChildren
 }
 
@@ -660,8 +708,52 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardAiRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/auth/reset-password': {
+      id: '/auth/reset-password'
+      path: '/reset-password'
+      fullPath: '/auth/reset-password'
+      preLoaderRoute: typeof AuthResetPasswordRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/auth/phone': {
+      id: '/auth/phone'
+      path: '/phone'
+      fullPath: '/auth/phone'
+      preLoaderRoute: typeof AuthPhoneRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/auth/forgot': {
+      id: '/auth/forgot'
+      path: '/forgot'
+      fullPath: '/auth/forgot'
+      preLoaderRoute: typeof AuthForgotRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/auth/confirm-email': {
+      id: '/auth/confirm-email'
+      path: '/confirm-email'
+      fullPath: '/auth/confirm-email'
+      preLoaderRoute: typeof AuthConfirmEmailRouteImport
+      parentRoute: typeof AuthRoute
+    }
   }
 }
+
+interface AuthRouteChildren {
+  AuthConfirmEmailRoute: typeof AuthConfirmEmailRoute
+  AuthForgotRoute: typeof AuthForgotRoute
+  AuthPhoneRoute: typeof AuthPhoneRoute
+  AuthResetPasswordRoute: typeof AuthResetPasswordRoute
+}
+
+const AuthRouteChildren: AuthRouteChildren = {
+  AuthConfirmEmailRoute: AuthConfirmEmailRoute,
+  AuthForgotRoute: AuthForgotRoute,
+  AuthPhoneRoute: AuthPhoneRoute,
+  AuthResetPasswordRoute: AuthResetPasswordRoute,
+}
+
+const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 
 interface DashboardRouteChildren {
   DashboardAiRoute: typeof DashboardAiRoute
@@ -735,7 +827,7 @@ const DashboardRouteWithChildren = DashboardRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AuthRoute: AuthRoute,
+  AuthRoute: AuthRouteWithChildren,
   DashboardRoute: DashboardRouteWithChildren,
 }
 export const routeTree = rootRouteImport

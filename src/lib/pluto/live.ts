@@ -359,6 +359,49 @@ export const live = {
       signInWithOAuth(provider, opts),
     /** Consume `#access_token=...` fragment on redirect-back. Call on app boot. */
     completeOAuthRedirect: () => completeOAuthRedirect(),
+
+    // ---- Phase 31 — Auth completion ----
+    /** Retrieve public auth config (which flows are enabled server-side). */
+    config: () => api<{
+      require_email_confirmation: boolean; sms_otp_enabled: boolean;
+      email_provider: string; sms_provider: string;
+    }>("/auth/v1/config"),
+
+    /** Send a password-reset email. Always resolves — no user-enumeration. */
+    resetPasswordForEmail: (email: string) =>
+      api<{ ok: true }>("/auth/v1/recover", { method: "POST", body: JSON.stringify({ email }) }),
+
+    /** Consume a reset token and set a new password. Returns a fresh session. */
+    verifyPasswordRecovery: (token: string, new_password: string) =>
+      api<{ ok: true; session: AuthSession & { user: AuthUser } }>(
+        "/auth/v1/verify-recovery",
+        { method: "POST", body: JSON.stringify({ token, new_password }) },
+      ).then((r) => { persistSession(r.session, r.session.user); return r; }),
+
+    /** Send an email-confirmation link to the currently signed-in user. */
+    sendEmailConfirmation: () =>
+      api<{ ok: true; already_confirmed?: boolean }>("/auth/v1/send-email-confirmation", { method: "POST" }),
+
+    /** Consume an email-confirmation token from the link the user clicked. */
+    confirmEmail: (token: string) =>
+      api<{ ok: true }>("/auth/v1/confirm-email", { method: "POST", body: JSON.stringify({ token }) }),
+
+    /** Anonymous resend (rate-limited server-side to one every 60s). */
+    resendConfirmation: (email: string) =>
+      api<{ ok: true }>("/auth/v1/resend-confirmation", { method: "POST", body: JSON.stringify({ email }) }),
+
+    /** Request a 6-digit SMS OTP. `channel` may be "sms" or "whatsapp". */
+    signInWithOtp: (input: { phone: string; channel?: "sms" | "whatsapp" }) =>
+      api<{ ok: true; ttl_sec: number }>("/auth/v1/otp/send",
+        { method: "POST", body: JSON.stringify({ phone: input.phone, channel: input.channel ?? "sms" }) }),
+
+    /** Verify an OTP code; persists the returned session. */
+    verifyOtp: async (input: { phone: string; token: string }) => {
+      const r = await api<{ session: AuthSession & { user: AuthUser } }>("/auth/v1/otp/verify",
+        { method: "POST", body: JSON.stringify({ phone: input.phone, code: input.token }) });
+      persistSession(r.session, r.session.user);
+      return r;
+    },
   },
 
   /** Realtime — subscribe to broadcast channels or Postgres row changes. */
@@ -1548,4 +1591,138 @@ export const tokens = {
     if (!res.ok) throw new Error((j as { error?: string }).error ?? `HTTP ${res.status}`);
     return j as { workspace_id: string | null; scopes: string[] };
   },
+};
+
+
+// ============================================================
+// Phase 32 — Storage extensions: image transforms + TUS uploads
+// ============================================================
+
+export type ImageTransformParams = {
+  width?: number; height?: number;
+  resize?: "cover" | "contain" | "fill";
+  quality?: number;
+  format?: "webp" | "jpeg" | "png" | "avif" | "original";
+};
+
+export const storageV2 = {
+  /**
+   * Build a URL to the image-render endpoint. The dashboard uses this to
+   * preview transforms without downloading the source client-side.
+   */
+  renderUrl(bucket: string, key: string, params: ImageTransformParams = {}): string {
+    const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) qs.set(k, String(v));
+    const base = cfg.url.replace(/\/$/, "");
+    const q = qs.toString();
+    return `${base}/storage/v1/render/image/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}${q ? `?${q}` : ""}`;
+  },
+
+  async purgeRenderCache(bucket: string): Promise<{ ok: boolean; purged: number }> {
+    return api(`/storage/v1/render/cache/${encodeURIComponent(bucket)}`, { method: "DELETE" });
+  },
+
+  /**
+   * Minimal TUS 1.0.0 client. Streams the file to
+   * `/storage/v1/upload/resumable` in `chunkSize`-sized parts, resuming
+   * from the server-reported offset on reconnect. Rejects on protocol or
+   * HTTP error; resolves with the final object descriptor on completion.
+   */
+  async uploadResumable(input: {
+    bucket: string;
+    key: string;
+    file: Blob;
+    contentType?: string;
+    chunkSize?: number;                // default 5 MiB
+    onProgress?: (uploaded: number, total: number) => void;
+  }): Promise<{ id: string; bucket: string; key: string; size: number }> {
+    const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
+    const base = cfg.url.replace(/\/$/, "");
+    const chunkSize = input.chunkSize ?? 5 * 1024 * 1024;
+    const size = input.file.size;
+    const meta = [
+      ["bucket", input.bucket],
+      ["filename", input.key],
+      ["contentType", input.contentType ?? input.file.type ?? "application/octet-stream"],
+    ].map(([k, v]) => `${k} ${btoa(v)}`).join(",");
+    const headers = { ...bearer(), "Tus-Resumable": "1.0.0" };
+
+    const createRes = await fetch(`${base}/storage/v1/upload/resumable`, {
+      method: "POST",
+      headers: { ...headers, "Upload-Length": String(size), "Upload-Metadata": meta },
+    });
+    if (createRes.status !== 201) throw new Error(`tus_create_${createRes.status}`);
+    const location = createRes.headers.get("Location");
+    if (!location) throw new Error("tus_no_location");
+    const uploadUrl = location.startsWith("http") ? location : `${base}${location}`;
+
+    let offset = 0;
+    while (offset < size) {
+      const end = Math.min(offset + chunkSize, size);
+      const chunk = input.file.slice(offset, end);
+      const patchRes = await fetch(uploadUrl, {
+        method: "PATCH",
+        headers: {
+          ...headers,
+          "Content-Type": "application/offset+octet-stream",
+          "Upload-Offset": String(offset),
+        },
+        body: chunk,
+      });
+      if (patchRes.status === 409) {
+        // Resume from server-reported offset.
+        const head = await fetch(uploadUrl, { method: "HEAD", headers });
+        offset = Number(head.headers.get("Upload-Offset") ?? offset);
+        continue;
+      }
+      if (patchRes.status !== 204) throw new Error(`tus_patch_${patchRes.status}`);
+      offset = Number(patchRes.headers.get("Upload-Offset") ?? end);
+      input.onProgress?.(offset, size);
+    }
+
+    const id = uploadUrl.split("/").pop() ?? "";
+    return { id, bucket: input.bucket, key: input.key, size };
+  },
+};
+
+
+// ============================================================
+// Phase 33 — Postgres CDC (change data capture) admin + subscribe
+// ============================================================
+
+export type CdcTable = {
+  schema_name: string; table_name: string; enabled: boolean;
+  created_at: string; updated_at: string;
+};
+export type CdcEventRow = {
+  id: number; commit_ts: string; schema_name: string; table_name: string;
+  op: "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE";
+  row_pk: unknown; new_row: unknown; old_row: unknown; lsn: string | null;
+};
+
+export const cdc = {
+  listTables: () => api<{ tables: CdcTable[] }>("/rt/v2/cdc/tables"),
+  enableTable: (schema: string, table: string) =>
+    api<{ ok: true }>("/rt/v2/cdc/tables",
+      { method: "POST", body: JSON.stringify({ schema, table }) }),
+  disableTable: (schema: string, table: string) =>
+    api<{ ok: true }>(`/rt/v2/cdc/tables/${encodeURIComponent(schema)}.${encodeURIComponent(table)}`,
+      { method: "DELETE" }),
+  slotLag: () => api<{ slot: string; lag_bytes: number | null }>("/rt/v2/cdc/slot-lag"),
+  events: (params: { schema?: string; table?: string; since_id?: number; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.schema)   qs.set("schema",   params.schema);
+    if (params.table)    qs.set("table",    params.table);
+    if (params.since_id !== undefined) qs.set("since_id", String(params.since_id));
+    if (params.limit)    qs.set("limit",    String(params.limit));
+    return api<{ events: CdcEventRow[] }>(`/rt/v2/cdc/events${qs.toString() ? `?${qs}` : ""}`);
+  },
+  /** Validate a subscription payload before opening a websocket. */
+  validateSubscribe: (input: { schema?: string; table: string; filter?: string }) =>
+    api<{ ok: true; channel: string; filter: unknown }>("/rt/v2/cdc/subscribe", {
+      method: "POST",
+      body: JSON.stringify({ event: "postgres_changes", schema: input.schema ?? "public",
+                              table: input.table, filter: input.filter }),
+    }),
 };
