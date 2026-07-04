@@ -1,23 +1,28 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { edgeV2, isLive, type FnSecret, type FnSchedule, type FnInvocation } from "@/lib/pluto/live";
+import { edgeV2, isLive, type FnSecret, type FnSchedule, type FnInvocation, type FnCatalog } from "@/lib/pluto/live";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { KeyRound, Clock, ScrollText, Plus, RefreshCw, Trash2, Play, Pause } from "lucide-react";
+import { KeyRound, Clock, ScrollText, Plus, RefreshCw, Trash2, Play, Pause, Boxes, Zap } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/dashboard/functions")({ component: FunctionsPage });
 
 function FunctionsPage() {
-  const [tab, setTab] = useState<"secrets"|"schedules"|"logs">("secrets");
+  const [tab, setTab] = useState<"functions"|"secrets"|"schedules"|"logs">("functions");
   const [slug, setSlug] = useState("hello");
+  const [functions, setFunctions] = useState<FnCatalog[]>([]);
   const [secrets, setSecrets] = useState<FnSecret[]>([]);
   const [schedules, setSchedules] = useState<FnSchedule[]>([]);
   const [invos, setInvos] = useState<FnInvocation[]>([]);
   const [secName, setSecName] = useState(""); const [secVal, setSecVal] = useState("");
   const [cron, setCron] = useState("*/5 * * * *");
+  const [newSlug, setNewSlug] = useState(""); const [newName, setNewName] = useState("");
+  const [runtime, setRuntime] = useState<"node20"|"deno1"|"bun1">("node20");
+  const [invokePayload, setInvokePayload] = useState<string>('{"hello":"world"}');
+  const [invokeResult, setInvokeResult] = useState<{ status_code: number; duration_ms: number; echoed: unknown } | null>(null);
 
   async function refresh() {
     if (!isLive()) return;
