@@ -12,9 +12,9 @@ const REQ = { method: "GET", url: "/x?name=world", headers: {}, body: undefined 
 const OPTS = { timeoutMs: 3000, memoryMb: 64, allowHosts: [] as string[] };
 
 describe("edge_v3 isolate runtime", () => {
-  it("echoes ctx.workspace_id from a default export", async () => {
+  it("echoes ctx.workspace_id from a module.exports handler", async () => {
     const code = `
-      export default async ({ req, ctx }) => ({
+      module.exports = async ({ req, ctx }) => ({
         workspace_id: ctx.workspace_id,
         method: req.method,
       });
@@ -25,7 +25,7 @@ describe("edge_v3 isolate runtime", () => {
   });
 
   it("captures console.log via structured log messages", async () => {
-    const code = `export default async () => { console.log("hi", "there"); return 1; };`;
+    const code = `module.exports = async () => { console.log("hi", "there"); return 1; };`;
     const r = await invokeIsolate({ code, req: REQ, ctx: {}, ...OPTS });
     expect(r.ok).toBe(true);
     expect(r.logs.some((l) => l.level === "info" && l.args.join(" ").includes("hi"))).toBe(true);
@@ -33,7 +33,7 @@ describe("edge_v3 isolate runtime", () => {
 
   it("blocks fetch to a host not on the allow-list", async () => {
     const code = `
-      export default async () => {
+      module.exports = async () => {
         try { await fetch("https://evil.example.com/"); return "leaked"; }
         catch (e) { return "blocked:" + e.message; }
       };
@@ -45,7 +45,7 @@ describe("edge_v3 isolate runtime", () => {
 
   it("rejects runtime eval / new Function (codeGeneration.strings=false)", async () => {
     const code = `
-      export default async () => {
+      module.exports = async () => {
         try { const f = new Function("return 41"); return f() + 1; }
         catch (e) { return "no-eval:" + e.message; }
       };
@@ -57,7 +57,7 @@ describe("edge_v3 isolate runtime", () => {
 
   it("does not expose Node globals (process/require/Buffer)", async () => {
     const code = `
-      export default async () => ({
+      module.exports = async () => ({
         process: typeof process,
         require: typeof require,
         buffer: typeof Buffer,
@@ -69,7 +69,7 @@ describe("edge_v3 isolate runtime", () => {
   });
 
   it("enforces the wall-clock deadline on an infinite loop", async () => {
-    const code = `export default async () => { while (true) {} };`;
+    const code = `module.exports = async () => { while (true) {} };`;
     const r = await invokeIsolate({ code, req: REQ, ctx: {}, ...OPTS, timeoutMs: 200 });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/^(deadline_|exit_)/);
