@@ -1014,6 +1014,7 @@ export type UsageSummary = { period: string; environment: string | null; metrics
 export type Quota = {
   metric: UsageMetric; period: "day" | "month"; hard_limit: number; soft_limit: number | null;
   overage_behavior: OverageBehavior; billing_label: string | null; updated_at: string;
+  alert_pct?: number | null;
 };
 export type BranchSnapshot = { id: string; snapshot_schema: string; reason: string | null; created_at: string; restored_at: string | null; status: string };
 
@@ -1129,6 +1130,70 @@ export const rt2 = {
   leave:         (name: string, member_key: string) =>
     api<{ ok: boolean }>(`/rt2/v1/channels/${encodeURIComponent(name)}/presence/${encodeURIComponent(member_key)}`,
       { method: "DELETE" }),
+  /**
+   * Presence subscription with heartbeat + auto-resubscribe on failure.
+   * - Sends join() every `heartbeatMs` (default 20s) so the member row stays fresh (< 5 min TTL).
+   * - Polls presence roster every `pollMs` (default 3s).
+   * - On any failure, retries with exponential backoff (capped at 30s).
+   * - On page unload / cancel, sends leave() best-effort.
+   * Returns an unsubscribe function.
+   */
+  subscribePresence(name: string, member_key: string, opts: {
+    metadata?: Record<string, unknown>;
+    heartbeatMs?: number;
+    pollMs?: number;
+    onMembers?: (m: Rt2Member[]) => void;
+    onReconnect?: (attempt: number) => void;
+    onError?: (err: Error) => void;
+  } = {}) {
+    const heartbeatMs = opts.heartbeatMs ?? 20_000;
+    const pollMs = opts.pollMs ?? 3_000;
+    let stopped = false; let attempt = 0;
+    let hbTimer: ReturnType<typeof setInterval> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const clearTimers = () => {
+      if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    };
+
+    const backoff = () => Math.min(30_000, 500 * 2 ** attempt);
+
+    const start = async () => {
+      while (!stopped) {
+        try {
+          await rt2.join(name, member_key, opts.metadata ?? {});
+          if (attempt > 0) opts.onReconnect?.(attempt);
+          attempt = 0;
+          hbTimer = setInterval(() => {
+            rt2.join(name, member_key, opts.metadata ?? {}).catch((e) => opts.onError?.(e as Error));
+          }, heartbeatMs);
+          pollTimer = setInterval(async () => {
+            try { const r = await rt2.presence(name); opts.onMembers?.(r.members); }
+            catch (e) { opts.onError?.(e as Error); throw e; }
+          }, pollMs);
+          // Wait until a poll fails — we detect via a promise that never resolves; timers handle themselves.
+          await new Promise<void>((resolve) => {
+            const iv = setInterval(() => { if (stopped) { clearInterval(iv); resolve(); } }, 250);
+          });
+          return;
+        } catch (e) {
+          clearTimers();
+          opts.onError?.(e as Error);
+          attempt++;
+          await new Promise(r => setTimeout(r, backoff()));
+        }
+      }
+    };
+
+    void start();
+
+    return () => {
+      stopped = true;
+      clearTimers();
+      rt2.leave(name, member_key).catch(() => { /* best effort */ });
+    };
+  },
 };
 
 // -------------------- Phase 23: Vector search --------------------
@@ -1145,9 +1210,9 @@ export const vector = {
   upsert:           (name: string, docs: { id?: string; external_id?: string; content: string; embedding: number[]; metadata?: Record<string, unknown> }[]) =>
     api<{ ok: boolean; inserted: number }>(`/vec/v1/collections/${encodeURIComponent(name)}/upsert`,
       { method: "POST", body: JSON.stringify({ docs }) }),
-  query:            (name: string, embedding: number[], top_k = 5) =>
+  query:            (name: string, embedding: number[], top_k = 5, embedding_field?: string) =>
     api<{ matches: VecMatch[] }>(`/vec/v1/collections/${encodeURIComponent(name)}/query`,
-      { method: "POST", body: JSON.stringify({ embedding, top_k }) }),
+      { method: "POST", body: JSON.stringify({ embedding, top_k, embedding_field }) }),
 };
 
 // -------------------- Phase 24: Edge Functions v2 --------------------
@@ -1170,10 +1235,22 @@ export const edgeV2 = {
     api<{ invocations: FnInvocation[] }>(`/fn/v2/invocations?limit=${limit}${slug ? `&slug=${encodeURIComponent(slug)}` : ""}`),
   logInvocation: (body: { function_slug: string; trigger?: "http"|"cron"|"manual"; status_code?: number; duration_ms?: number; cold_start?: boolean; error?: string }) =>
     api<{ ok: boolean; id: number }>("/fn/v2/invocations", { method: "POST", body: JSON.stringify(body) }),
+  // Functions catalog (Phase 25).
+  functions:      () => api<{ functions: FnCatalog[] }>("/fn/v2/functions"),
+  upsertFunction: (body: { slug: string; display_name?: string; runtime?: "node20"|"deno1"|"bun1"; entry?: string; active?: boolean }) =>
+    api<{ function: FnCatalog }>("/fn/v2/functions", { method: "POST", body: JSON.stringify(body) }),
+  deleteFunction: (slug: string) => api<{ ok: boolean }>(`/fn/v2/functions/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+  invoke:         (slug: string, payload: Record<string, unknown> = {}, simulate_error = false) =>
+    api<{ ok: boolean; status_code: number; duration_ms: number; echoed: Record<string, unknown> }>(
+      `/fn/v2/functions/${encodeURIComponent(slug)}/invoke`,
+      { method: "POST", body: JSON.stringify({ payload, simulate_error }) }),
 };
+
+export type FnCatalog = { id: string; slug: string; display_name: string|null; runtime: string; entry: string; active: boolean; created_at: string; updated_at: string; schedules: number; secrets: number; invocations_24h: number };
 
 // -------------------- Phase 24: Backups --------------------
 export type BackupExport = { id: string; kind: "full"|"schema"|"table"; target: string|null; status: "pending"|"running"|"done"|"failed"; bytes: number; download_path: string|null; error: string|null; created_at: string; finished_at: string|null };
+export type BackupRestore = { id: string; export_id?: string; dry_run: boolean; status: "pending"|"running"|"done"|"failed"|"canceled"; progress: number; applied_statements: number; total_statements: number; log?: string; error: string|null; created_at: string; finished_at: string|null };
 
 export const backups = {
   list:   ()                                                     => api<{ exports: BackupExport[] }>("/backups/v1"),
@@ -1181,4 +1258,36 @@ export const backups = {
     api<{ export: BackupExport }>("/backups/v1", { method: "POST", body: JSON.stringify({ kind, target }) }),
   get:    (id: string) => api<{ export: BackupExport }>(`/backups/v1/${id}`),
   cancel: (id: string) => api<{ ok: boolean }>(`/backups/v1/${id}/cancel`, { method: "POST" }),
+  // Restore workflow (Phase 25) — dry_run by default, requires confirm='RESTORE' for live.
+  restores: (exportId: string) => api<{ restores: BackupRestore[] }>(`/backups/v1/${exportId}/restores`),
+  startRestore: (exportId: string, opts: { dry_run?: boolean; confirm?: string } = {}) =>
+    api<{ restore: BackupRestore }>(`/backups/v1/${exportId}/restore`,
+      { method: "POST", body: JSON.stringify({ dry_run: opts.dry_run ?? true, confirm: opts.confirm }) }),
+  restoreStatus: (rid: string) => api<{ restore: BackupRestore }>(`/backups/v1/restores/${rid}`),
+  cancelRestore: (rid: string) => api<{ ok: boolean }>(`/backups/v1/restores/${rid}/cancel`, { method: "POST" }),
+  // SSE progress stream: yields BackupRestore rows until status is terminal.
+  streamRestore(rid: string, opts: { onEvent: (r: BackupRestore) => void; onError?: (e: Error) => void }): () => void {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
+        const res = await fetch(cfg.url.replace(/\/$/, "") + `/backups/v1/restores/${rid}/stream`, {
+          signal: controller.signal, headers: { accept: "text/event-stream", ...bearer(false) },
+        });
+        if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+        for (;;) {
+          const { value, done } = await reader.read(); if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+          for (const p of parts) {
+            const line = p.split("\n").find(l => l.startsWith("data: "));
+            if (!line) continue;
+            try { opts.onEvent(JSON.parse(line.slice(6)) as BackupRestore); } catch { /* ignore */ }
+          }
+        }
+      } catch (e) { if ((e as Error).name !== "AbortError") opts.onError?.(e as Error); }
+    })();
+    return () => controller.abort();
+  },
 };

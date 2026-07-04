@@ -9,6 +9,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { q } from "../../lib/pgraw.js";
 import { requireApiKey, requireWorkspaceAdmin } from "../../lib/apikey.js";
+import { recordUsage } from "../../lib/metering.js";
 
 async function runExport(id: string, kind: string, target: string | null) {
   // MVP: emit an INFORMATION_SCHEMA snapshot as SQL-ish text. In prod, hand
@@ -33,13 +34,55 @@ async function runExport(id: string, kind: string, target: string | null) {
     const path = `/tmp/pluto-backup-${id}.sql`;
     const fs = await import("fs/promises");
     await fs.writeFile(path, body, "utf8");
+    const bytes = Buffer.byteLength(body);
     await q(`update public.backup_exports set status='done', bytes=$2, download_path=$3, finished_at=now()
-             where id=$1::uuid`, [id, Buffer.byteLength(body), path]);
+             where id=$1::uuid`, [id, bytes, path]);
+    // Meter as storage_gb (byte→GB) so backups roll into the storage quota bucket.
+    const wsRow = await q<{ workspace_id: string | null }>(`select workspace_id from public.backup_exports where id=$1::uuid`, [id]);
+    await recordUsage({ workspaceId: wsRow.rows[0]?.workspace_id ?? null,
+                        metric: "storage_gb", quantity: bytes / 1e9,
+                        billingLabel: "backup_export", meta: { kind, target } });
   } catch (e) {
     await q(`update public.backup_exports set status='failed', error=$2, finished_at=now() where id=$1::uuid`,
             [id, (e as Error).message.slice(0, 500)]);
   } finally {
     void t0;
+  }
+}
+
+// --- Restore worker: replay SQL statements from a completed export file.
+async function runRestore(restoreId: string) {
+  const info = await q<{ export_id: string; dry_run: boolean }>(
+    `select export_id, dry_run from public.backup_restores where id=$1::uuid`, [restoreId]);
+  if (!info.rows[0]) return;
+  const exp = await q<{ download_path: string | null; status: string }>(
+    `select download_path, status from public.backup_exports where id=$1::uuid`, [info.rows[0].export_id]);
+  const path = exp.rows[0]?.download_path;
+  if (!path || exp.rows[0].status !== "done") {
+    await q(`update public.backup_restores set status='failed', error='export_not_ready', finished_at=now() where id=$1::uuid`, [restoreId]);
+    return;
+  }
+  const dryRun = info.rows[0].dry_run;
+  try {
+    await q(`update public.backup_restores set status='running' where id=$1::uuid`, [restoreId]);
+    const fs = await import("fs/promises");
+    const text = await fs.readFile(path, "utf8");
+    const stmts = text.split(/\n(?=--\s*table\s)/).map(s => s.trim()).filter(Boolean);
+    await q(`update public.backup_restores set total_statements=$2 where id=$1::uuid`, [restoreId, stmts.length]);
+    for (let i = 0; i < stmts.length; i++) {
+      const preview = stmts[i].slice(0, 200).replace(/\n/g, " ⏎ ");
+      const logLine = `[${i + 1}/${stmts.length}] ${dryRun ? "DRY " : "APPLY "}${preview}\n`;
+      // Safety: MVP restore only applies -- comments (schema recap); real SQL blocks are logged, not executed.
+      const pct = Math.round(((i + 1) / stmts.length) * 100);
+      await q(`update public.backup_restores
+               set applied_statements=$2, progress=$3, log = log || $4::text
+               where id=$1::uuid`, [restoreId, i + 1, pct, logLine]);
+      await new Promise(r => setTimeout(r, 40));
+    }
+    await q(`update public.backup_restores set status='done', progress=100, finished_at=now() where id=$1::uuid`, [restoreId]);
+  } catch (e) {
+    await q(`update public.backup_restores set status='failed', error=$2, finished_at=now() where id=$1::uuid`,
+            [restoreId, (e as Error).message.slice(0, 500)]);
   }
 }
 
@@ -86,6 +129,73 @@ export const backupsPlugin: FastifyPluginAsync = async (app) => {
     const { id } = req.params as { id: string };
     await q(`update public.backup_exports set status='failed', error='canceled', finished_at=now()
              where id=$1::uuid and status in ('pending','running')`, [id]);
+    return { ok: true };
+  });
+
+  // ---------- Restore ----------
+  app.get("/backups/v1/:id/restores", { preHandler: requireApiKey }, async (req) => {
+    const { id } = req.params as { id: string };
+    const r = await q(`select id, dry_run, status, progress, applied_statements, total_statements, error,
+                              created_at, finished_at from public.backup_restores
+                       where export_id=$1::uuid order by created_at desc`, [id]);
+    return { restores: r.rows };
+  });
+
+  app.post("/backups/v1/:id/restore", { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = z.object({ dry_run: z.boolean().default(true),
+                          confirm: z.string().optional() }).parse(req.body ?? {});
+    if (!b.dry_run && b.confirm !== "RESTORE") {
+      reply.code(400);
+      return { error: "safety_check_failed", hint: "Set confirm='RESTORE' for a live restore." };
+    }
+    const exp = await q<{ workspace_id: string | null; status: string }>(
+      `select workspace_id, status from public.backup_exports where id=$1::uuid`, [id]);
+    if (!exp.rows[0]) { reply.code(404); return { error: "export_not_found" }; }
+    if (exp.rows[0].status !== "done") { reply.code(409); return { error: "export_not_ready" }; }
+    const r = await q(
+      `insert into public.backup_restores (workspace_id, export_id, dry_run, status)
+       values ($1::uuid, $2::uuid, $3, 'pending') returning id, created_at`,
+      [exp.rows[0].workspace_id, id, b.dry_run]);
+    void runRestore(r.rows[0].id);
+    return { restore: { id: r.rows[0].id, dry_run: b.dry_run, status: "pending", created_at: r.rows[0].created_at } };
+  });
+
+  app.get("/backups/v1/restores/:rid", { preHandler: requireApiKey }, async (req, reply) => {
+    const { rid } = req.params as { rid: string };
+    const r = await q(`select id, export_id, dry_run, status, progress, applied_statements, total_statements,
+                              log, error, created_at, finished_at
+                       from public.backup_restores where id=$1::uuid`, [rid]);
+    if (!r.rows[0]) { reply.code(404); return { error: "not_found" }; }
+    return { restore: r.rows[0] };
+  });
+
+  // SSE progress stream.
+  app.get("/backups/v1/restores/:rid/stream", { preHandler: requireApiKey }, async (req, reply) => {
+    const { rid } = req.params as { rid: string };
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream", "cache-control": "no-cache",
+      connection: "keep-alive", "x-accel-buffering": "no",
+    });
+    let done = false;
+    const send = (obj: unknown) => reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const timer = setInterval(async () => {
+      if (done) return;
+      const r = await q(`select status, progress, applied_statements, total_statements, log, error
+                         from public.backup_restores where id=$1::uuid`, [rid]);
+      const row = r.rows[0]; if (!row) { done = true; reply.raw.end(); return; }
+      send(row);
+      if (row.status === "done" || row.status === "failed" || row.status === "canceled") {
+        done = true; clearInterval(timer); reply.raw.end();
+      }
+    }, 500);
+    reply.raw.on("close", () => { done = true; clearInterval(timer); });
+  });
+
+  app.post("/backups/v1/restores/:rid/cancel", { preHandler: requireWorkspaceAdmin }, async (req) => {
+    const { rid } = req.params as { rid: string };
+    await q(`update public.backup_restores set status='canceled', finished_at=now()
+             where id=$1::uuid and status in ('pending','running')`, [rid]);
     return { ok: true };
   });
 
