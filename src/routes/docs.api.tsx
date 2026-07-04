@@ -11,7 +11,7 @@
 
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef } from "react";
-import { ExternalLink, FileJson, Radio } from "lucide-react";
+import { ExternalLink, FileJson } from "lucide-react";
 
 export const Route = createFileRoute("/docs/api")({
   head: () => ({
