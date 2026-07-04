@@ -125,7 +125,9 @@ function RealtimePage() {
                 <Input placeholder="event" value={event} onChange={e => setEvent(e.target.value)} />
                 <Input placeholder="sender" value={memberKey} onChange={e => setMemberKey(e.target.value)} />
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={join}>Join</Button>
+                  {joined
+                    ? <Button size="sm" variant="outline" onClick={leave}>Leave</Button>
+                    : <Button size="sm" variant="outline" onClick={join} disabled={!active}>Join</Button>}
                   <Button size="sm" onClick={send} disabled={!active}>Send</Button>
                 </div>
               </div>
