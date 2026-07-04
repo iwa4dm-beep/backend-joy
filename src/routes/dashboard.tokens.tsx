@@ -147,10 +147,10 @@ function TokensPage() {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const header = ["id", "name", "prefix", "scopes", "created_at", "last_used_at", "revoked_at", "expires_at"];
+    const header = ["id", "name", "prefix", "scopes", "created_by", "last_used_at", "expires_at"];
     const rows = bulkPreview.tokens.map((t) => [
       t.id, t.name, t.prefix, t.scopes.join("|"),
-      t.created_at ?? "", t.last_used_at ?? "", t.revoked_at ?? "", t.expires_at ?? "",
+      t.created_by ?? "", t.last_used_at ?? "", t.expires_at ?? "",
     ]);
     // Prepend a `# filters=…` comment line so the audit context travels
     // with the file even after tools that strip file metadata.
