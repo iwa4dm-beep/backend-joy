@@ -17,7 +17,7 @@ import { z } from "zod";
 import { requireApiKey } from "../../lib/apikey.js";
 import { putVersion, markDelete, listVersions, getVersion, deleteVersion, sha256Hex } from "../../lib/object-versions.js";
 import { setLock, getLock, clearLegalHold, canModify } from "../../lib/retention.js";
-import { submit, runOnce, statusFor, type Job } from "../../lib/replication.js";
+import { submit, runOnce, statusFor, listJobs } from "../../lib/replication.js";
 
 const enabled = process.env.PLUTO_ENABLE_STORAGE_V4 === "1";
 const BUCKET = /^[a-z0-9][a-z0-9\-]{1,62}$/;
@@ -120,13 +120,10 @@ export async function storageV4Plugin(app: FastifyInstance) {
   app.post("/storage/v4/replication/run", async (req, reply) => {
     const p = z.object({ job_id: z.string() }).safeParse(req.body);
     if (!p.success) { reply.code(400); return { error: "bad_request" }; }
-    // Look up the tracked version to get expected_checksum + monotone cursor.
-    const jobs = statusFor("", "", "");
-    const job = jobs.find((j) => j.id === p.data.job_id) ?? [...listJobsFromReplication()].find((j) => j.id === p.data.job_id);
+    const job = listJobs().find((j) => j.id === p.data.job_id);
     if (!job) { reply.code(404); return { error: "job_not_found" }; }
     const v = getVersion(job.bucket, job.object_key, job.version_id);
     if (!v) { reply.code(404); return { error: "version_not_found" }; }
-    // Simulated transfer — returns matching checksum. Real code would stream to the target region.
     const result = await runOnce(job.id, async () => ({ ok: true, remote_checksum: v.checksum_sha256 }), v.checksum_sha256, v.created_at);
     return { ok: true, job: result };
   });
@@ -140,13 +137,6 @@ export async function storageV4Plugin(app: FastifyInstance) {
   });
 }
 
-// Small helper so the plugin doesn't need a second export from replication.ts.
-function listJobsFromReplication(): Job[] {
-  // Late-bind to avoid circular import; replication module owns the state.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mod = require("../../lib/replication.js");
-  return mod.listJobs();
-}
-
 export { sha256Hex };
 export default storageV4Plugin;
+
