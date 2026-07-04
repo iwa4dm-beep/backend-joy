@@ -33,7 +33,16 @@ async function broadcast(channel: string, event: string, payload: unknown) {
   ]).catch(() => { /* best effort */ });
 }
 
-export async function audit(req: FastifyRequest | null, input: AuditInput) {
+export async function audit(
+  req: FastifyRequest | null,
+  input: AuditInput | string,
+  extraMetadata?: Record<string, unknown>,
+) {
+  if (typeof input === "string") {
+    input = { action: input, metadata: extraMetadata };
+  } else if (extraMetadata) {
+    input = { ...input, metadata: { ...(input.metadata ?? {}), ...extraMetadata } };
+  }
   const actor = req?.auth?.user ?? null;
   const ip = req?.ip ?? null;
   const ua = (req?.headers?.["user-agent"] as string | undefined) ?? null;
