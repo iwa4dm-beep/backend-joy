@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { KeyRound, Plus, Trash2, Copy, Check, RefreshCw, ShieldCheck, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
-import { isLive, tokens, type WorkspaceToken, type WorkspaceTokenMint, type ScopeCoverage } from "@/lib/pluto/live";
+import { isLive, tokens, type WorkspaceToken, type WorkspaceTokenMint, type ScopeCoverage, type BulkRevokeResult } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/tokens")({ component: TokensPage });
 
