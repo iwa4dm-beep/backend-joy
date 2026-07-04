@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { rt2, isLive, type Rt2Channel, type Rt2Message, type Rt2Member } from "@/lib/pluto/live";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Radio, Users2, Send, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { PresenceIndicator, type PresenceStatus } from "@/components/pluto/PresenceIndicator";
+import { PaginatedTable } from "@/components/pluto/PaginatedTable";
+import { usePaginatedTable } from "@/lib/pluto/usePaginatedTable";
 
 export const Route = createFileRoute("/dashboard/realtime")({ component: RealtimePage });
 
@@ -19,18 +22,36 @@ function RealtimePage() {
   const [event, setEvent] = useState("update");
   const [payload, setPayload] = useState('{"hello":"world"}');
   const [memberKey, setMemberKey] = useState("user-" + Math.floor(Math.random()*1000));
+  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("idle");
+  const [presenceAttempt, setPresenceAttempt] = useState(0);
+  const [presenceError, setPresenceError] = useState<string | null>(null);
+  const [joined, setJoined] = useState(false);
+  const presenceStopRef = useRef<null | (() => void)>(null);
 
   async function refresh() {
     if (!isLive()) return;
     try { const r = await rt2.channels(); setChannels(r.channels); if (!active && r.channels[0]) setActive(r.channels[0].name); }
     catch (e) { toast.error((e as Error).message); }
   }
-  async function refreshChannel(name: string) {
-    try { const [m, p] = await Promise.all([rt2.messages(name, 50), rt2.presence(name)]); setMessages(m.messages); setMembers(p.members); }
+  // Messages still poll (broadcast history); presence uses the hardened subscription.
+  async function refreshMessages(name: string) {
+    try { const m = await rt2.messages(name, 50); setMessages(m.messages); }
     catch (e) { toast.error((e as Error).message); }
   }
   useEffect(() => { refresh(); }, []);
-  useEffect(() => { if (!active) return; refreshChannel(active); const t = setInterval(() => refreshChannel(active), 3000); return () => clearInterval(t); }, [active]);
+  useEffect(() => {
+    if (!active) return;
+    refreshMessages(active);
+    const t = setInterval(() => refreshMessages(active), 3000);
+    return () => clearInterval(t);
+  }, [active]);
+
+  // Tear down presence subscription when switching channels or unmounting.
+  useEffect(() => () => { presenceStopRef.current?.(); presenceStopRef.current = null; }, []);
+  useEffect(() => {
+    presenceStopRef.current?.(); presenceStopRef.current = null;
+    setJoined(false); setPresenceStatus("idle"); setMembers([]); setPresenceError(null); setPresenceAttempt(0);
+  }, [active]);
 
   async function createChannel() {
     if (!newName.trim()) return;
@@ -39,12 +60,28 @@ function RealtimePage() {
   }
   async function send() {
     if (!active) return;
-    try { const parsed = JSON.parse(payload); await rt2.broadcast(active, event, parsed, memberKey); await refreshChannel(active); }
+    try { const parsed = JSON.parse(payload); await rt2.broadcast(active, event, parsed, memberKey); await refreshMessages(active); }
     catch (e) { toast.error((e as Error).message); }
   }
-  async function join() {
-    if (!active) return;
-    await rt2.join(active, memberKey, { joinedAt: new Date().toISOString() }); await refreshChannel(active);
+  function join() {
+    if (!active || joined) return;
+    setJoined(true);
+    presenceStopRef.current = rt2.subscribePresence(active, memberKey, {
+      metadata: { joinedAt: new Date().toISOString() },
+      onMembers: (m) => setMembers(m),
+      onError:   (e) => setPresenceError(e.message),
+      onReconnect: (n) => toast.info(`Presence reconnected (attempt ${n})`),
+      onStatus:  (s, n, err) => {
+        setPresenceStatus(s); setPresenceAttempt(n);
+        if (err) setPresenceError(err.message);
+        if (s === "live") setPresenceError(null);
+        if (s === "failed") toast.error("Presence disconnected after retries — click Join to try again.");
+      },
+    });
+  }
+  function leave() {
+    presenceStopRef.current?.(); presenceStopRef.current = null;
+    setJoined(false); setPresenceStatus("idle"); setMembers([]);
   }
 
   return (
@@ -54,7 +91,10 @@ function RealtimePage() {
           <h1 className="text-2xl font-semibold flex items-center gap-2"><Radio className="h-5 w-5" /> Realtime channels</h1>
           <p className="text-sm text-muted-foreground">Broadcast events and track presence per channel.</p>
         </div>
-        <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="h-4 w-4 mr-1" /> Refresh</Button>
+        <div className="flex items-center gap-2">
+          <PresenceIndicator status={presenceStatus} attempt={presenceAttempt} channel={active ?? undefined} lastError={presenceError} />
+          <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="h-4 w-4 mr-1" /> Refresh</Button>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[300px,1fr]">
@@ -87,7 +127,9 @@ function RealtimePage() {
                 <Input placeholder="event" value={event} onChange={e => setEvent(e.target.value)} />
                 <Input placeholder="sender" value={memberKey} onChange={e => setMemberKey(e.target.value)} />
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={join}>Join</Button>
+                  {joined
+                    ? <Button size="sm" variant="outline" onClick={leave}>Leave</Button>
+                    : <Button size="sm" variant="outline" onClick={join} disabled={!active}>Join</Button>}
                   <Button size="sm" onClick={send} disabled={!active}>Send</Button>
                 </div>
               </div>
@@ -111,19 +153,37 @@ function RealtimePage() {
             </Card>
             <Card>
               <CardHeader><CardTitle className="text-sm">Recent messages</CardTitle></CardHeader>
-              <CardContent className="space-y-1 max-h-[400px] overflow-y-auto">
-                {messages.map(m => (
-                  <div key={m.id} className="text-xs p-2 rounded-md border border-border">
-                    <div className="flex justify-between"><span className="font-medium">{m.event}</span><span className="text-muted-foreground">{new Date(m.created_at).toLocaleTimeString()}</span></div>
-                    <pre className="text-[10px] font-mono text-muted-foreground overflow-x-auto">{JSON.stringify(m.payload)}</pre>
-                  </div>
-                ))}
-                {messages.length === 0 && <div className="text-xs text-muted-foreground">No messages.</div>}
+              <CardContent>
+                <MessagesTable messages={messages} />
               </CardContent>
             </Card>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function MessagesTable({ messages }: { messages: Rt2Message[] }) {
+  const t = usePaginatedTable(messages, { pageSize: 15, defaultSort: { key: "created_at", dir: "desc" } });
+  return (
+    <PaginatedTable
+      rows={t.rows} sorted={t.sorted}
+      page={t.page} pageSize={t.pageSize} totalPages={t.totalPages}
+      sortKey={t.sortKey} sortDir={t.sortDir}
+      onPage={t.setPage} onSort={t.toggleSort}
+      csvFilename="realtime-messages.csv"
+      csvColumns={["created_at","event","sender","payload"]}
+      columns={[
+        { key: "event", label: "event", className: "w-24" },
+        { key: "sender", label: "sender", className: "w-32",
+          render: (r) => <span className="text-muted-foreground">{r.sender ?? "—"}</span> },
+        { key: "payload", label: "payload",
+          render: (r) => <pre className="text-[10px] font-mono truncate">{JSON.stringify(r.payload)}</pre> },
+        { key: "created_at", label: "time", className: "w-40",
+          render: (r) => <span className="text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span> },
+      ]}
+      empty="No messages."
+    />
   );
 }

@@ -1,12 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Save, Activity, ShieldAlert, Radio, Lock, Bell, Webhook, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, RefreshCw, Save, Activity, ShieldAlert, Radio, Lock, Bell, Webhook, Trash2, ChevronDown, ChevronRight, Repeat } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
+import { toast } from "sonner";
 import {
   isLive, usage, me,
   type UsageMetric, type UsageSummary, type Quota,
   type OverageBehavior, type UsageEnvironment, type WorkspaceRole,
-  type QuotaAlert, type UsageWebhook,
+  type QuotaAlert, type UsageWebhook, type UsageWebhookDelivery, type AlertEventPayload,
 } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/usage")({ component: UsagePage });
@@ -56,7 +57,38 @@ function UsagePage() {
     if (!isLive()) return;
     try { const r = await usage.webhooks(); setWebhooks(r.webhooks); } catch { /* ignore */ }
   }, []);
-  useEffect(() => { void loadAlerts(); const t = setInterval(loadAlerts, 15_000); return () => clearInterval(t); }, [loadAlerts]);
+
+  // Alerts: SSE-driven with a slow (60s) fallback poll if the stream is down.
+  const alertStopRef = useRef<null | (() => void)>(null);
+  useEffect(() => {
+    if (!isLive()) return;
+    void loadAlerts();
+    let fallback: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      alertStopRef.current?.();
+      alertStopRef.current = usage.streamAlerts({
+        onEvent: (ev: AlertEventPayload) => {
+          setAlerts((prev) => {
+            if (prev.some((a) => a.id === ev.alert_id)) return prev;
+            const inserted: QuotaAlert = {
+              id: ev.alert_id, metric: ev.metric, pct: ev.pct, used: ev.used,
+              hard_limit: ev.hard_limit, triggered_at: ev.triggered_at,
+              notified: true, resolved_at: null,
+            };
+            return [inserted, ...prev];
+          });
+          toast.warning(`Quota alert: ${ev.metric} at ${ev.pct.toFixed(1)}%`);
+        },
+        onError: () => {
+          // stream dropped — retry it in 5s and keep a slow poll as a safety net.
+          if (!fallback) fallback = setInterval(() => void loadAlerts(), 60_000);
+          setTimeout(start, 5_000);
+        },
+      });
+    };
+    start();
+    return () => { alertStopRef.current?.(); alertStopRef.current = null; if (fallback) clearInterval(fallback); };
+  }, [loadAlerts]);
   useEffect(() => { void loadWebhooks(); }, [loadWebhooks]);
 
   // Merge quotas from either REST (fallback) or the SSE snapshot into UI state.
@@ -320,25 +352,88 @@ function UsagePage() {
               }}>Add</button>
           </div>
         )}
-        <div className="space-y-1">
+        <div className="space-y-2">
           {webhooks.map(h => (
-            <div key={h.id} className="flex items-center justify-between text-xs p-2 border border-border rounded-md">
-              <div>
-                <div className="font-mono truncate max-w-[420px]">{h.url}</div>
-                <div className="text-[10px] text-muted-foreground">
-                  events: {h.events.join(",")} · last: {h.last_status ?? "—"}
-                  {h.last_error && <span className="text-destructive"> · {h.last_error}</span>}
-                </div>
-              </div>
-              {canAdmin && (
-                <button onClick={async () => { await usage.deleteWebhook(h.id); void loadWebhooks(); }}
-                        className="p-1 border border-border rounded hover:bg-background"><Trash2 className="h-3 w-3" /></button>
-              )}
-            </div>
+            <WebhookRow key={h.id} hook={h} canAdmin={canAdmin} onDelete={loadWebhooks} />
           ))}
           {webhooks.length === 0 && <div className="text-xs text-muted-foreground">No webhooks configured.</div>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Collapsible webhook row showing recent delivery attempts and letting
+// admins redeliver a specific attempt. Loads deliveries lazily on expand.
+function WebhookRow({ hook, canAdmin, onDelete }: {
+  hook: UsageWebhook; canAdmin: boolean; onDelete: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<UsageWebhookDelivery[]>([]);
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const r = await usage.deliveries(hook.id, { limit: 20 }); setRows(r.deliveries); }
+    catch (e) { toast.error((e as Error).message); }
+    finally { setLoading(false); }
+  }, [hook.id]);
+  useEffect(() => { if (open) void load(); }, [open, load]);
+
+  return (
+    <div className="border border-border rounded-md">
+      <div className="flex items-center justify-between text-xs p-2">
+        <button onClick={() => setOpen(v => !v)} className="flex items-center gap-1 text-left flex-1 min-w-0">
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <div className="min-w-0">
+            <div className="font-mono truncate max-w-[420px]">{hook.url}</div>
+            <div className="text-[10px] text-muted-foreground">
+              events: {hook.events.join(",")} · last: {hook.last_status ?? "—"}
+              {hook.last_error && <span className="text-destructive"> · {hook.last_error}</span>}
+            </div>
+          </div>
+        </button>
+        {canAdmin && (
+          <button onClick={async () => { if (!confirm("Delete this webhook?")) return; await usage.deleteWebhook(hook.id); void onDelete(); }}
+                  className="p-1 border border-border rounded hover:bg-background"><Trash2 className="h-3 w-3" /></button>
+        )}
+      </div>
+      {open && (
+        <div className="border-t border-border p-2 space-y-1">
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] text-muted-foreground">
+              Delivery attempts {loading && <Loader2 className="inline h-3 w-3 animate-spin ml-1" />}
+            </div>
+            <button onClick={() => void load()} className="text-[10px] px-2 py-0.5 border border-border rounded hover:bg-background">
+              <RefreshCw className="inline h-3 w-3 mr-1" /> refresh
+            </button>
+          </div>
+          {rows.length === 0 && !loading && <div className="text-[11px] text-muted-foreground">No deliveries recorded yet.</div>}
+          {rows.map(d => {
+            const ok = d.succeeded;
+            return (
+              <div key={d.id} className="grid grid-cols-[64px,60px,72px,1fr,140px,80px] gap-2 text-[11px] items-center p-1.5 border border-border rounded">
+                <span className={"px-1.5 py-0.5 rounded text-[10px] text-center " + (ok ? "bg-emerald-500/15 text-emerald-600" : "bg-destructive/15 text-destructive")}>
+                  {d.status_code ?? "ERR"}
+                </span>
+                <span className="text-muted-foreground">try #{d.attempt}</span>
+                <span className="text-muted-foreground">{d.response_time_ms ?? "—"}ms</span>
+                <span className="truncate text-muted-foreground">{d.error ?? d.event}</span>
+                <span className="text-muted-foreground text-right">{new Date(d.delivered_at).toLocaleString()}</span>
+                <div className="flex justify-end">
+                  {canAdmin && !ok && (
+                    <button title="Redeliver this payload" onClick={async () => {
+                      try { await usage.redeliver(hook.id, d.id); toast.success("Redelivery queued"); setTimeout(() => void load(), 800); }
+                      catch (e) { toast.error((e as Error).message); }
+                    }} className="p-1 border border-border rounded hover:bg-background">
+                      <Repeat className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

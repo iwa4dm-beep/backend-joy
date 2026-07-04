@@ -1116,10 +1116,59 @@ export const usage = {
     api<{ webhook: UsageWebhook }>("/usage/v1/webhooks", { method: "POST", body: JSON.stringify(body) }),
   deleteWebhook: (id: string) =>
     api<{ ok: boolean }>(`/usage/v1/webhooks/${id}`, { method: "DELETE" }),
+
+  // Phase 29 — webhook delivery attempts + on-demand redelivery.
+  deliveries: (webhookId: string, params: { limit?: number; offset?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.limit)  qs.set("limit",  String(params.limit));
+    if (params.offset) qs.set("offset", String(params.offset));
+    return api<{ deliveries: UsageWebhookDelivery[] }>(
+      `/usage/v1/webhooks/${webhookId}/deliveries${qs.size ? `?${qs}` : ""}`);
+  },
+  redeliver: (webhookId: string, deliveryId: string) =>
+    api<{ ok: boolean }>(`/usage/v1/webhooks/${webhookId}/redeliver/${deliveryId}`, { method: "POST" }),
+
+  // Phase 29 — quota-alert SSE (replaces the 15s polling banner refresh).
+  // Fires "quota.alert" events for the caller's workspace as they happen,
+  // plus a snapshot of currently-unresolved alerts on connect.
+  streamAlerts(opts: { onEvent: (payload: AlertEventPayload) => void; onError?: (e: Error) => void }): () => void {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
+        const res = await fetch(cfg.url.replace(/\/$/, "") + `/usage/v1/alerts/stream`, {
+          signal: controller.signal, headers: { accept: "text/event-stream", ...bearer(false) },
+        });
+        if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+        for (;;) {
+          const { value, done } = await reader.read(); if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const parts = buf.split("\n\n"); buf = parts.pop() ?? "";
+          for (const p of parts) {
+            const dataLine = p.split("\n").find(l => l.startsWith("data: "));
+            if (!dataLine) continue;
+            try { opts.onEvent(JSON.parse(dataLine.slice(6))); } catch { /* ignore */ }
+          }
+        }
+      } catch (e) { if ((e as Error).name !== "AbortError") opts.onError?.(e as Error); }
+    })();
+    return () => controller.abort();
+  },
 };
 
 export type QuotaAlert = { id: string; metric: UsageMetric; pct: number; used: number; hard_limit: number | null; triggered_at: string; notified: boolean; resolved_at: string | null };
 export type UsageWebhook = { id: string; url: string; events: string[]; active: boolean; last_status: number | null; last_error: string | null; last_delivered_at: string | null; created_at: string };
+export type UsageWebhookDelivery = {
+  id: string; webhook_id: string; alert_id: string | null; event: string;
+  attempt: number; status_code: number | null; response_time_ms: number | null;
+  error: string | null; delivered_at: string; next_retry_at: string | null;
+  succeeded: boolean; payload_hash: string;
+};
+export type AlertEventPayload = {
+  type: "quota.alert"; workspace_id: string; alert_id: string;
+  metric: UsageMetric; pct: number; used: number; hard_limit: number | null; triggered_at: string;
+};
 
 // -------------------- Phase 23: Realtime v2 --------------------
 export type Rt2Channel = { id: string; name: string; kind: "broadcast"|"presence"; created_at: string; members?: number };
@@ -1145,22 +1194,28 @@ export const rt2 = {
       { method: "DELETE" }),
   /**
    * Presence subscription with heartbeat + auto-resubscribe on failure.
-   * - Sends join() every `heartbeatMs` (default 20s) so the member row stays fresh (< 5 min TTL).
+   * - Sends join() every `heartbeatMs` (default 20s) so the member row stays fresh.
    * - Polls presence roster every `pollMs` (default 3s).
-   * - On any failure, retries with exponential backoff (capped at 30s).
-   * - On page unload / cancel, sends leave() best-effort.
+   * - On any failure, retries with jittered exponential backoff (capped at `maxBackoffMs`, default 30s).
+   * - Gives up after `maxAttempts` consecutive failures (default 8) and emits `onStatus("failed")`.
+   * - `onStatus(state, attempt, lastError)` fires on every state change: connecting, live, retrying, failed.
    * Returns an unsubscribe function.
    */
   subscribePresence(name: string, member_key: string, opts: {
     metadata?: Record<string, unknown>;
     heartbeatMs?: number;
     pollMs?: number;
+    maxAttempts?: number;
+    maxBackoffMs?: number;
     onMembers?: (m: Rt2Member[]) => void;
     onReconnect?: (attempt: number) => void;
     onError?: (err: Error) => void;
+    onStatus?: (state: "connecting" | "live" | "retrying" | "failed", attempt: number, lastError?: Error) => void;
   } = {}) {
     const heartbeatMs = opts.heartbeatMs ?? 20_000;
     const pollMs = opts.pollMs ?? 3_000;
+    const maxAttempts = opts.maxAttempts ?? 8;
+    const maxBackoffMs = opts.maxBackoffMs ?? 30_000;
     let stopped = false; let attempt = 0;
     let hbTimer: ReturnType<typeof setInterval> | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -1169,15 +1224,22 @@ export const rt2 = {
       if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     };
+    // Jittered exponential backoff — full-jitter variant to spread reconnects.
+    const backoff = () => {
+      const base = Math.min(maxBackoffMs, 500 * 2 ** attempt);
+      return Math.floor(Math.random() * base);
+    };
 
-    const backoff = () => Math.min(30_000, 500 * 2 ** attempt);
+    opts.onStatus?.("connecting", 0);
 
     const start = async () => {
       while (!stopped) {
         try {
           await rt2.join(name, member_key, opts.metadata ?? {});
-          if (attempt > 0) opts.onReconnect?.(attempt);
+          const wasRetrying = attempt > 0;
+          if (wasRetrying) opts.onReconnect?.(attempt);
           attempt = 0;
+          opts.onStatus?.("live", 0);
           hbTimer = setInterval(() => {
             rt2.join(name, member_key, opts.metadata ?? {}).catch((e) => opts.onError?.(e as Error));
           }, heartbeatMs);
@@ -1185,15 +1247,17 @@ export const rt2 = {
             try { const r = await rt2.presence(name); opts.onMembers?.(r.members); }
             catch (e) { opts.onError?.(e as Error); }
           }, pollMs);
-          // Wait until a poll fails — we detect via a promise that never resolves; timers handle themselves.
           await new Promise<void>((resolve) => {
             const iv = setInterval(() => { if (stopped) { clearInterval(iv); resolve(); } }, 250);
           });
           return;
         } catch (e) {
           clearTimers();
-          opts.onError?.(e as Error);
+          const err = e as Error;
+          opts.onError?.(err);
           attempt++;
+          if (attempt >= maxAttempts) { opts.onStatus?.("failed", attempt, err); return; }
+          opts.onStatus?.("retrying", attempt, err);
           await new Promise(r => setTimeout(r, backoff()));
         }
       }
@@ -1264,6 +1328,19 @@ export type FnCatalog = { id: string; slug: string; display_name: string|null; r
 // -------------------- Phase 24: Backups --------------------
 export type BackupExport = { id: string; kind: "full"|"schema"|"table"; target: string|null; status: "pending"|"running"|"done"|"failed"; bytes: number; download_path: string|null; error: string|null; created_at: string; finished_at: string|null };
 export type BackupRestore = { id: string; export_id?: string; dry_run: boolean; status: "pending"|"running"|"done"|"failed"|"canceled"; progress: number; applied_statements: number; total_statements: number; log?: string; error: string|null; created_at: string; finished_at: string|null };
+export type BackupColumnDiff = {
+  table: string; column: string;
+  source_type: string | null; target_type: string | null;
+  nullable_change?: string;
+  action: "add" | "drop" | "retype" | "nullable";
+};
+export type BackupCompat = {
+  target_schema: string;
+  source_tables: number; target_tables: number;
+  added_tables: string[]; removed_tables: string[];
+  columns: BackupColumnDiff[];
+  compatible: boolean;
+};
 
 export const backups = {
   list:   ()                                                     => api<{ exports: BackupExport[] }>("/backups/v1"),
@@ -1271,6 +1348,13 @@ export const backups = {
     api<{ export: BackupExport }>("/backups/v1", { method: "POST", body: JSON.stringify({ kind, target }) }),
   get:    (id: string) => api<{ export: BackupExport }>(`/backups/v1/${id}`),
   cancel: (id: string) => api<{ ok: boolean }>(`/backups/v1/${id}/cancel`, { method: "POST" }),
+  // Phase 30 — schema compatibility diff for the restore wizard.
+  compat: (exportId: string, params: { target_branch_id?: string; target_schema?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.target_branch_id) qs.set("target_branch_id", params.target_branch_id);
+    if (params.target_schema)    qs.set("target_schema",    params.target_schema);
+    return api<BackupCompat>(`/backups/v1/${exportId}/compat${qs.size ? `?${qs}` : ""}`);
+  },
   // Restore workflow (Phase 25) — dry_run by default, requires confirm='RESTORE' for live.
   restores: (exportId: string) => api<{ restores: BackupRestore[] }>(`/backups/v1/${exportId}/restores`),
   startRestore: (exportId: string, opts: { dry_run?: boolean; confirm?: string; target_branch_id?: string; create_branch?: string; allow_incompatible?: boolean } = {}) =>

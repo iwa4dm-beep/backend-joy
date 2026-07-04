@@ -1,13 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { backups, branching, isLive, type BackupExport, type BackupRestore, type DbBranch } from "@/lib/pluto/live";
+import { backups, branching, isLive, type BackupExport, type BackupRestore, type DbBranch, type BackupCompat } from "@/lib/pluto/live";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Archive, RefreshCw, Play, X, RotateCcw, ShieldAlert, GitBranch } from "lucide-react";
+import { Archive, RefreshCw, Play, X, RotateCcw, ShieldAlert, GitBranch, Diff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { PaginatedTable } from "@/components/pluto/PaginatedTable";
+import { usePaginatedTable } from "@/lib/pluto/usePaginatedTable";
 
 export const Route = createFileRoute("/dashboard/backups")({ component: BackupsPage });
 
@@ -32,6 +34,9 @@ function BackupsPage() {
   const [targetBranchId, setTargetBranchId] = useState<string>("");
   const [newBranchName, setNewBranchName] = useState<string>("");
   const [allowIncompat, setAllowIncompat] = useState(false);
+  const [compat, setCompat] = useState<BackupCompat | null>(null);
+  const [compatLoading, setCompatLoading] = useState(false);
+  const [compatAck, setCompatAck] = useState(false);
 
   async function refresh() {
     if (!isLive()) return;
@@ -42,6 +47,22 @@ function BackupsPage() {
   useEffect(() => () => { stopRef.current?.(); }, []);
   useEffect(() => { refresh(); const t = setInterval(refresh, 4000); return () => clearInterval(t); }, []);
   useEffect(() => { if (isLive()) branching.list().then(r => setBranches(r.branches)).catch(() => undefined); }, [wizard]);
+
+  // Reset compatibility diff when the target changes so stale results don't
+  // authorise a restore against a different branch.
+  useEffect(() => { setCompat(null); setCompatAck(false); }, [wizard?.id, targetMode, targetBranchId, newBranchName]);
+
+  async function loadCompat() {
+    if (!wizard) return;
+    setCompatLoading(true);
+    try {
+      const c = await backups.compat(wizard.id, {
+        target_branch_id: targetMode === "existing" ? targetBranchId : undefined,
+      });
+      setCompat(c); setCompatAck(false);
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setCompatLoading(false); }
+  }
 
   async function start() {
     try { await backups.start(kind, target || undefined); toast.success("Export started"); setTarget(""); refresh(); }
@@ -101,28 +122,9 @@ function BackupsPage() {
       <Card>
         <CardHeader><CardTitle className="text-sm">Recent exports</CardTitle></CardHeader>
         <CardContent>
-          <div className="space-y-1">
-            {rows.map(r => (
-              <div key={r.id} className="grid grid-cols-[80px,80px,1fr,100px,180px,140px] gap-2 items-center text-xs p-2 border border-border rounded-md">
-                <span>{r.kind}</span>
-                <Badge variant={r.status === "done" ? "default" : r.status === "failed" ? "destructive" : "secondary"}>{r.status}</Badge>
-                <span className="truncate text-muted-foreground">{r.target ?? "*"} {r.download_path && `· ${r.download_path}`} {r.error && `· ${r.error}`}</span>
-                <span>{fmtBytes(r.bytes)}</span>
-                <span className="text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span>
-                <div className="flex gap-1 justify-end">
-                  {r.status === "done" && (
-                    <Button size="sm" variant="outline" onClick={() => { setWizard(r); setDryRun(true); setConfirm(""); setRestore(null); setRestoreLog(""); }}>
-                      <RotateCcw className="h-3 w-3 mr-1" /> Restore
-                    </Button>
-                  )}
-                  {(r.status === "pending" || r.status === "running") && (
-                    <Button size="sm" variant="ghost" onClick={() => cancel(r.id)}><X className="h-3 w-3" /></Button>
-                  )}
-                </div>
-              </div>
-            ))}
-            {rows.length === 0 && <div className="text-xs text-muted-foreground">No exports yet.</div>}
-          </div>
+          <ExportsTable rows={rows}
+            onRestore={(r) => { setWizard(r); setDryRun(true); setConfirm(""); setRestore(null); setRestoreLog(""); }}
+            onCancel={cancel} />
         </CardContent>
       </Card>
 
@@ -160,10 +162,16 @@ function BackupsPage() {
                 <Input placeholder="new-branch-name" value={newBranchName} onChange={e => setNewBranchName(e.target.value)} />
               )}
               <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <input type="checkbox" checked={allowIncompat} onChange={e => setAllowIncompat(e.target.checked)} />
+                <input type="checkbox" checked={allowIncompat}
+                       disabled={!!(compat && !compat.compatible && !compatAck)}
+                       onChange={e => setAllowIncompat(e.target.checked)} />
                 Allow restore over incompatible schema (skips safety check)
+                {compat && !compat.compatible && !compatAck && <span className="text-destructive">— review diff first</span>}
               </label>
             </div>
+
+            <CompatibilityPanel compat={compat} loading={compatLoading} onLoad={loadCompat}
+              ack={compatAck} onAck={() => setCompatAck(true)} />
 
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} />
@@ -176,11 +184,13 @@ function BackupsPage() {
               </div>
             )}
             <div className="flex gap-2">
-              <Button size="sm" onClick={beginRestore} disabled={restore?.status === "running" || restore?.status === "pending"}>
+              <Button size="sm" data-testid="restore-apply" onClick={beginRestore}
+                disabled={restore?.status === "running" || restore?.status === "pending"
+                          || (!dryRun && compat != null && !compat.compatible && !compatAck)}>
                 <Play className="h-4 w-4 mr-1" /> {dryRun ? "Run dry-run" : "Apply restore"}
               </Button>
               {restore && restore.status !== "done" && restore.status !== "failed" && (
-                <Button size="sm" variant="ghost" onClick={async () => { await backups.cancelRestore(restore.id); }}>Cancel</Button>
+                <Button size="sm" variant="ghost" data-testid="restore-cancel" onClick={async () => { await backups.cancelRestore(restore.id); }}>Cancel</Button>
               )}
             </div>
             {restore && (
@@ -196,6 +206,116 @@ function BackupsPage() {
             )}
           </CardContent>
         </Card>
+      )}
+    </div>
+  );
+}
+
+function ExportsTable({ rows, onRestore, onCancel }: {
+  rows: BackupExport[];
+  onRestore: (r: BackupExport) => void;
+  onCancel: (id: string) => Promise<void>;
+}) {
+  const t = usePaginatedTable(rows, { pageSize: 15, defaultSort: { key: "created_at", dir: "desc" } });
+  return (
+    <PaginatedTable
+      rows={t.rows} sorted={t.sorted}
+      page={t.page} pageSize={t.pageSize} totalPages={t.totalPages}
+      sortKey={t.sortKey} sortDir={t.sortDir}
+      onPage={t.setPage} onSort={t.toggleSort}
+      csvFilename="backup-exports.csv"
+      csvColumns={["created_at","kind","status","target","bytes","download_path","error"]}
+      columns={[
+        { key: "kind", label: "kind", className: "w-20" },
+        { key: "status", label: "status", className: "w-24",
+          render: (r) => <Badge variant={r.status === "done" ? "default" : r.status === "failed" ? "destructive" : "secondary"}>{r.status}</Badge> },
+        { key: "target", label: "target / path",
+          render: (r) => <span className="truncate text-muted-foreground">{r.target ?? "*"}{r.download_path ? ` · ${r.download_path}` : ""}{r.error ? ` · ${r.error}` : ""}</span> },
+        { key: "bytes", label: "size", className: "w-24",
+          render: (r) => <span>{fmtBytes(r.bytes)}</span> },
+        { key: "created_at", label: "created", className: "w-44",
+          render: (r) => <span className="text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span> },
+        { key: "id", label: "", className: "w-32",
+          render: (r) => (
+            <div className="flex gap-1 justify-end">
+              {r.status === "done" && (
+                <Button size="sm" variant="outline" onClick={() => onRestore(r)}>
+                  <RotateCcw className="h-3 w-3 mr-1" /> Restore
+                </Button>
+              )}
+              {(r.status === "pending" || r.status === "running") && (
+                <Button size="sm" variant="ghost" onClick={() => onCancel(r.id)}><X className="h-3 w-3" /></Button>
+              )}
+            </div>
+          ) },
+      ]}
+      empty="No exports yet."
+    />
+  );
+}
+
+function CompatibilityPanel({ compat, loading, onLoad, ack, onAck }: {
+  compat: BackupCompat | null; loading: boolean;
+  onLoad: () => Promise<void> | void;
+  ack: boolean; onAck: () => void;
+}) {
+  return (
+    <div className="space-y-2 p-3 rounded-md border border-border" data-testid="compat-panel">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-medium flex items-center gap-1"><Diff className="h-3 w-3" /> Schema compatibility</div>
+        <Button size="sm" variant="outline" onClick={() => void onLoad()} disabled={loading}>
+          {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Diff className="h-3 w-3 mr-1" />}
+          {compat ? "Re-check" : "Check compatibility"}
+        </Button>
+      </div>
+      {!compat && !loading && (
+        <div className="text-[11px] text-muted-foreground">
+          Compare the export's DDL against the target schema before you apply.
+        </div>
+      )}
+      {compat && (
+        <div className="space-y-2 text-[11px]">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={compat.compatible ? "default" : "destructive"}>
+              {compat.compatible ? "compatible" : "incompatible"}
+            </Badge>
+            <span className="text-muted-foreground">target: <span className="font-mono">{compat.target_schema}</span></span>
+            <span className="text-muted-foreground">source: {compat.source_tables} tables · target: {compat.target_tables} tables</span>
+          </div>
+          {compat.added_tables.length > 0 && (
+            <div><span className="font-medium text-emerald-600">+ tables to create:</span> <span className="font-mono">{compat.added_tables.join(", ")}</span></div>
+          )}
+          {compat.removed_tables.length > 0 && (
+            <div><span className="font-medium text-destructive">− tables in target not in export:</span> <span className="font-mono">{compat.removed_tables.join(", ")}</span></div>
+          )}
+          {compat.columns.length > 0 && (
+            <div className="overflow-hidden border border-border rounded">
+              <div className="grid grid-cols-[60px,1fr,1fr,120px,120px] gap-2 bg-muted/40 px-2 py-1 text-[10px] font-medium">
+                <span>action</span><span>table</span><span>column</span><span>source</span><span>target</span>
+              </div>
+              <div className="max-h-[220px] overflow-y-auto">
+                {compat.columns.map((c, i) => (
+                  <div key={i} className="grid grid-cols-[60px,1fr,1fr,120px,120px] gap-2 px-2 py-1 border-t border-border">
+                    <Badge variant={c.action === "add" ? "default" : c.action === "drop" ? "destructive" : "secondary"}>{c.action}</Badge>
+                    <span className="font-mono truncate">{c.table}</span>
+                    <span className="font-mono truncate">{c.column}</span>
+                    <span className="text-muted-foreground truncate">{c.source_type ?? "—"}</span>
+                    <span className="text-muted-foreground truncate">{c.target_type ?? "—"}{c.nullable_change ? ` (${c.nullable_change})` : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!compat.compatible && !ack && (
+            <label className="flex items-center gap-2 text-[11px]">
+              <input type="checkbox" onChange={onAck} data-testid="compat-ack" />
+              I've reviewed the diff and want to proceed anyway.
+            </label>
+          )}
+          {!compat.compatible && ack && (
+            <div className="text-[11px] text-amber-600">Acknowledged — you may now enable "Allow restore over incompatible schema" and apply.</div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -467,6 +467,45 @@ export const usagePlugin: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // Delivery attempts (with retry status) for a given webhook.
+  app.get("/usage/v1/webhooks/:id/deliveries", { preHandler: requireApiKey }, async (req) => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { limit?: string; offset?: string };
+    const limit = Math.min(200, Number(query.limit ?? 50) || 50);
+    const offset = Math.max(0, Number(query.offset ?? 0) || 0);
+    const rows = await q(
+      `select d.id, d.webhook_id, d.alert_id, d.event, d.attempt, d.status_code,
+              d.response_time_ms, d.error, d.delivered_at, d.next_retry_at, d.succeeded,
+              d.payload_hash
+       from public.webhook_deliveries d
+       join public.workspace_webhooks w on w.id = d.webhook_id
+       where d.webhook_id=$1::uuid and w.workspace_id=$2::uuid
+       order by d.delivered_at desc limit $3 offset $4`,
+      [id, (req.headers["x-workspace-id"] as string) ?? null, limit, offset]);
+    return { deliveries: rows.rows };
+  });
+
+  // Re-deliver a specific attempt (reuses the exact stored payload).
+  app.post("/usage/v1/webhooks/:id/redeliver/:deliveryId",
+    { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+      const { id, deliveryId } = req.params as { id: string; deliveryId: string };
+      const ws = (req.headers["x-workspace-id"] as string) ?? null;
+      const src = await q<{ payload: string; event: string; alert_id: string | null;
+                            url: string; secret: string | null }>(
+        `select d.payload::text as payload, d.event, d.alert_id, w.url, w.secret
+         from public.webhook_deliveries d
+         join public.workspace_webhooks w on w.id = d.webhook_id
+         where d.id=$1::uuid and w.id=$2::uuid and w.workspace_id=$3::uuid limit 1`,
+        [deliveryId, id, ws]);
+      if (!src.rows[0]) { reply.code(404); return { error: "not_found" }; }
+      const { deliverWebhook } = await import("../../lib/metering.js");
+      void deliverWebhook(id, src.rows[0].url, src.rows[0].secret,
+        src.rows[0].payload, src.rows[0].alert_id, src.rows[0].event, 1);
+      const { audit } = await import("../../lib/audit.js");
+      await audit(req, { action: "webhook.redeliver", target: deliveryId });
+      return { ok: true };
+    });
+
   // Caller's effective workspace role — the dashboard uses this to gate UI.
   app.get("/me/v1/workspace-role", { preHandler: requireApiKey }, async (req) => {
     const role = await resolveWorkspaceRole(req);
@@ -562,12 +601,80 @@ export const usagePlugin: FastifyPluginAsync = async (app) => {
   });
 
   // Hook the ingest path so live subscribers repaint immediately.
-  // Hook the ingest path so live subscribers repaint immediately.
   app.addHook("onResponse", async (req) => {
     if (req.method !== "POST") return;
     if (!req.url || !req.url.startsWith("/usage/v1/events")) return;
     const ws = (req.headers["x-workspace-id"] as string) ?? null;
     if (ws) pushToWorkspace(ws, "ingest");
   });
+
+  // ---- SSE: workspace-scoped quota alerts (Phase 29) -------------------
+  // Single LISTEN pluto_broadcast connection multiplexed to per-workspace
+  // subscribers so dashboards see alerts within milliseconds of firing.
+  type AlertSub = (payload: string) => void;
+  const alertSubs = new Map<string, Set<AlertSub>>();
+  let alertListenerStarted = false;
+  async function ensureAlertListener() {
+    if (alertListenerStarted) return; alertListenerStarted = true;
+    const { default: pg } = await import("pg");
+    const { env } = await import("../../config.js");
+    const client = new pg.Client({ connectionString: env.DATABASE_URL });
+    await client.connect();
+    await client.query("listen pluto_broadcast");
+    client.on("notification", (msg) => {
+      if (!msg.payload) return;
+      try {
+        const evt = JSON.parse(msg.payload) as { channel: string; event: string; payload: { workspace_id?: string } };
+        if (evt.channel !== "system:usage_alert") return;
+        const ws = evt.payload?.workspace_id; if (!ws) return;
+        const set = alertSubs.get(ws); if (!set) return;
+        const wire = `event: ${evt.event}\ndata: ${JSON.stringify(evt.payload)}\n\n`;
+        for (const w of set) { try { w(wire); } catch { /* subscriber gone */ } }
+      } catch { /* bad payload — ignore */ }
+    });
+    client.on("error", (e) => { app.log.error({ err: e.message }, "alert_listener_pg_error"); });
+  }
+
+  app.get("/usage/v1/alerts/stream", { preHandler: requireApiKey }, async (req, reply) => {
+    const ws = (req.headers["x-workspace-id"] as string) ?? null;
+    if (!ws) { reply.code(400); return { error: "workspace_required" }; }
+    await ensureAlertListener();
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      "connection": "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    reply.raw.write(`: connected\n\n`);
+    const write: AlertSub = (payload) => reply.raw.write(payload);
+    let set = alertSubs.get(ws);
+    if (!set) { set = new Set(); alertSubs.set(ws, set); }
+    set.add(write);
+
+    // Immediately send any active/unresolved alerts as a snapshot.
+    try {
+      const snap = await q<{ id: string; metric: string; pct: number; used: number; hard_limit: number; triggered_at: Date }>(
+        `select id, metric, pct, used, hard_limit, triggered_at
+         from public.quota_alerts
+         where workspace_id=$1::uuid and resolved_at is null
+         order by triggered_at desc limit 20`, [ws]);
+      for (const r of snap.rows) {
+        write(`event: quota.alert\ndata: ${JSON.stringify({
+          type: "quota.alert", workspace_id: ws, alert_id: r.id,
+          metric: r.metric, pct: Number(r.pct), used: Number(r.used),
+          hard_limit: r.hard_limit, triggered_at: r.triggered_at,
+        })}\n\n`);
+      }
+    } catch { /* snapshot best-effort */ }
+
+    const hb = setInterval(() => { try { reply.raw.write(`: ping\n\n`); } catch { /* closed */ } }, 25_000);
+    req.raw.on("close", () => {
+      clearInterval(hb);
+      set!.delete(write);
+      if (!set!.size) alertSubs.delete(ws);
+      try { reply.raw.end(); } catch { /* already closed */ }
+    });
+  });
 };
+
 

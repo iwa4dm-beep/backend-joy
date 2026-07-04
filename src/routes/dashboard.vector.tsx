@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Search, Sparkles, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { PaginatedTable } from "@/components/pluto/PaginatedTable";
+import { usePaginatedTable } from "@/lib/pluto/usePaginatedTable";
 
 export const Route = createFileRoute("/dashboard/vector")({ component: VectorPage });
 
@@ -129,19 +131,34 @@ function VectorPage() {
                 </select>
                 <Button onClick={search} disabled={!active}>Search</Button>
               </div>
-              <div className="space-y-1 max-h-[400px] overflow-y-auto">
-                {matches.map(m => (
-                  <div key={m.id} className="text-xs p-2 rounded-md border border-border">
-                    <div className="flex justify-between"><span className="font-medium">score {m.score.toFixed(4)}</span><span className="text-muted-foreground">{m.external_id ?? m.id.slice(0,8)}</span></div>
-                    <div className="text-muted-foreground line-clamp-2">{m.content}</div>
-                  </div>
-                ))}
-                {matches.length === 0 && <div className="text-xs text-muted-foreground">No matches yet.</div>}
-              </div>
+              <MatchesTable matches={matches} />
             </CardContent>
           </Card>
         </div>
       </div>
     </div>
+  );
+}
+
+function MatchesTable({ matches }: { matches: VecMatch[] }) {
+  const t = usePaginatedTable(matches, { pageSize: 20, defaultSort: { key: "score", dir: "desc" } });
+  return (
+    <PaginatedTable
+      rows={t.rows} sorted={t.sorted}
+      page={t.page} pageSize={t.pageSize} totalPages={t.totalPages}
+      sortKey={t.sortKey} sortDir={t.sortDir}
+      onPage={t.setPage} onSort={t.toggleSort}
+      csvFilename="vector-matches.csv"
+      csvColumns={["id","external_id","score","content"]}
+      columns={[
+        { key: "score", label: "score", className: "w-20",
+          render: (r) => <span className="font-medium">{r.score.toFixed(4)}</span> },
+        { key: "external_id", label: "id", className: "w-40",
+          render: (r) => <span className="text-muted-foreground">{r.external_id ?? r.id.slice(0,8)}</span> },
+        { key: "content", label: "content",
+          render: (r) => <span className="line-clamp-2 text-muted-foreground">{r.content}</span> },
+      ]}
+      empty="No matches yet."
+    />
   );
 }
