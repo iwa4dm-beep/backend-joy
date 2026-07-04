@@ -80,6 +80,13 @@ export const aiPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
   const gatewayReady = !!(process.env.LOVABLE_AI_KEY || process.env.LOVABLE_API_KEY || process.env.OPENAI_API_KEY);
   app.log.info({ module: "ai", phase: "16.3", gatewayReady }, "ai registered (real handlers)");
 
+  // Every /ai/v1/* route requires an authenticated caller (workspace-scoped
+  // apikey, personal token, or service_role). Without this hook, /status,
+  // /providers and /usage leaked config to anonymous callers and crashed
+  // on `req.auth!.workspaceId` access. See docs/security/core-tables-rls.md
+  // for the broader access model.
+  app.addHook("preHandler", requireApiKey);
+
   app.get("/ai/v1/status", async () => ({
     module: "ai", phase: "16.3", gateway_ready: gatewayReady,
     vector_allow: readAllow(), drivers: ALLOWED_DRIVERS,
