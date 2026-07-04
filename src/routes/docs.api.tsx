@@ -79,31 +79,30 @@ function ApiDocsPage() {
       </div>
 
       <main className="flex-1 min-h-0">
-        {/* @ts-expect-error — RapiDoc is a custom element loaded at runtime */}
-        <rapi-doc
-          spec-url={specUrl}
-          render-style="focused"
-          layout="row"
-          theme="dark"
-          bg-color="hsl(222 47% 11%)"
-          text-color="hsl(210 40% 96%)"
-          primary-color="hsl(217 91% 60%)"
-          allow-authentication="true"
-          allow-server-selection="true"
-          allow-spec-url-load="false"
-          allow-spec-file-load="false"
-          persist-auth="true"
-          show-header="false"
-          style={{ height: "calc(100vh - 88px)", width: "100%" }}
-        >
-          <div slot="overview" className="p-4 text-sm">
-            <Radio className="inline h-4 w-4 mr-1" />
-            Pass <code>apikey: &lt;anon or service key&gt;</code> or
-            <code className="ml-1">authorization: Bearer plt_…</code> on every request.
-            Token scopes are managed in{" "}
-            <Link to="/dashboard/tokens" className="text-primary hover:underline">Dashboard → Tokens</Link>.
-          </div>
-        </rapi-doc>
+        {/* RapiDoc is a custom element registered at runtime by the CDN script above. */}
+        <div
+          ref={(el) => {
+            if (!el || el.firstChild) return;
+            const doc = document.createElement("rapi-doc");
+            doc.setAttribute("spec-url", specUrl);
+            doc.setAttribute("render-style", "focused");
+            doc.setAttribute("layout", "row");
+            doc.setAttribute("theme", "dark");
+            doc.setAttribute("bg-color", "hsl(222 47% 11%)");
+            doc.setAttribute("text-color", "hsl(210 40% 96%)");
+            doc.setAttribute("primary-color", "hsl(217 91% 60%)");
+            doc.setAttribute("allow-authentication", "true");
+            doc.setAttribute("allow-server-selection", "true");
+            doc.setAttribute("allow-spec-url-load", "false");
+            doc.setAttribute("allow-spec-file-load", "false");
+            doc.setAttribute("persist-auth", "true");
+            doc.setAttribute("show-header", "false");
+            doc.style.height = "calc(100vh - 88px)";
+            doc.style.width = "100%";
+            el.appendChild(doc);
+          }}
+        />
+
       </main>
     </div>
   );
