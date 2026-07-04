@@ -18,6 +18,7 @@ import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardVectorRouteImport } from './routes/dashboard.vector'
 import { Route as DashboardUsersRouteImport } from './routes/dashboard.users'
 import { Route as DashboardUsageRouteImport } from './routes/dashboard.usage'
+import { Route as DashboardTokensRouteImport } from './routes/dashboard.tokens'
 import { Route as DashboardStorageRouteImport } from './routes/dashboard.storage'
 import { Route as DashboardSqlRouteImport } from './routes/dashboard.sql'
 import { Route as DashboardSettingsRouteImport } from './routes/dashboard.settings'
@@ -84,6 +85,11 @@ const DashboardUsersRoute = DashboardUsersRouteImport.update({
 const DashboardUsageRoute = DashboardUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardTokensRoute = DashboardTokensRouteImport.update({
+  id: '/tokens',
+  path: '/tokens',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardStorageRoute = DashboardStorageRouteImport.update({
@@ -223,6 +229,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/sql': typeof DashboardSqlRoute
   '/dashboard/storage': typeof DashboardStorageRoute
+  '/dashboard/tokens': typeof DashboardTokensRoute
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/vector': typeof DashboardVectorRoute
@@ -255,6 +262,7 @@ export interface FileRoutesByTo {
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/sql': typeof DashboardSqlRoute
   '/dashboard/storage': typeof DashboardStorageRoute
+  '/dashboard/tokens': typeof DashboardTokensRoute
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/vector': typeof DashboardVectorRoute
@@ -289,6 +297,7 @@ export interface FileRoutesById {
   '/dashboard/settings': typeof DashboardSettingsRoute
   '/dashboard/sql': typeof DashboardSqlRoute
   '/dashboard/storage': typeof DashboardStorageRoute
+  '/dashboard/tokens': typeof DashboardTokensRoute
   '/dashboard/usage': typeof DashboardUsageRoute
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/vector': typeof DashboardVectorRoute
@@ -324,6 +333,7 @@ export interface FileRouteTypes {
     | '/dashboard/settings'
     | '/dashboard/sql'
     | '/dashboard/storage'
+    | '/dashboard/tokens'
     | '/dashboard/usage'
     | '/dashboard/users'
     | '/dashboard/vector'
@@ -356,6 +366,7 @@ export interface FileRouteTypes {
     | '/dashboard/settings'
     | '/dashboard/sql'
     | '/dashboard/storage'
+    | '/dashboard/tokens'
     | '/dashboard/usage'
     | '/dashboard/users'
     | '/dashboard/vector'
@@ -389,6 +400,7 @@ export interface FileRouteTypes {
     | '/dashboard/settings'
     | '/dashboard/sql'
     | '/dashboard/storage'
+    | '/dashboard/tokens'
     | '/dashboard/usage'
     | '/dashboard/users'
     | '/dashboard/vector'
@@ -466,6 +478,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/dashboard/usage'
       preLoaderRoute: typeof DashboardUsageRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/tokens': {
+      id: '/dashboard/tokens'
+      path: '/tokens'
+      fullPath: '/dashboard/tokens'
+      preLoaderRoute: typeof DashboardTokensRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/storage': {
@@ -648,6 +667,7 @@ interface DashboardRouteChildren {
   DashboardSettingsRoute: typeof DashboardSettingsRoute
   DashboardSqlRoute: typeof DashboardSqlRoute
   DashboardStorageRoute: typeof DashboardStorageRoute
+  DashboardTokensRoute: typeof DashboardTokensRoute
   DashboardUsageRoute: typeof DashboardUsageRoute
   DashboardUsersRoute: typeof DashboardUsersRoute
   DashboardVectorRoute: typeof DashboardVectorRoute
@@ -679,6 +699,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardSettingsRoute: DashboardSettingsRoute,
   DashboardSqlRoute: DashboardSqlRoute,
   DashboardStorageRoute: DashboardStorageRoute,
+  DashboardTokensRoute: DashboardTokensRoute,
   DashboardUsageRoute: DashboardUsageRoute,
   DashboardUsersRoute: DashboardUsersRoute,
   DashboardVectorRoute: DashboardVectorRoute,
