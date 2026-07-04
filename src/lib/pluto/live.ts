@@ -1592,3 +1592,96 @@ export const tokens = {
     return j as { workspace_id: string | null; scopes: string[] };
   },
 };
+
+
+// ============================================================
+// Phase 32 — Storage extensions: image transforms + TUS uploads
+// ============================================================
+
+export type ImageTransformParams = {
+  width?: number; height?: number;
+  resize?: "cover" | "contain" | "fill";
+  quality?: number;
+  format?: "webp" | "jpeg" | "png" | "avif" | "original";
+};
+
+export const storageV2 = {
+  /**
+   * Build a URL to the image-render endpoint. The dashboard uses this to
+   * preview transforms without downloading the source client-side.
+   */
+  renderUrl(bucket: string, key: string, params: ImageTransformParams = {}): string {
+    const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) qs.set(k, String(v));
+    const base = cfg.url.replace(/\/$/, "");
+    const q = qs.toString();
+    return `${base}/storage/v1/render/image/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}${q ? `?${q}` : ""}`;
+  },
+
+  async purgeRenderCache(bucket: string): Promise<{ ok: boolean; purged: number }> {
+    return api(`/storage/v1/render/cache/${encodeURIComponent(bucket)}`, { method: "DELETE" });
+  },
+
+  /**
+   * Minimal TUS 1.0.0 client. Streams the file to
+   * `/storage/v1/upload/resumable` in `chunkSize`-sized parts, resuming
+   * from the server-reported offset on reconnect. Rejects on protocol or
+   * HTTP error; resolves with the final object descriptor on completion.
+   */
+  async uploadResumable(input: {
+    bucket: string;
+    key: string;
+    file: Blob;
+    contentType?: string;
+    chunkSize?: number;                // default 5 MiB
+    onProgress?: (uploaded: number, total: number) => void;
+  }): Promise<{ id: string; bucket: string; key: string; size: number }> {
+    const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
+    const base = cfg.url.replace(/\/$/, "");
+    const chunkSize = input.chunkSize ?? 5 * 1024 * 1024;
+    const size = input.file.size;
+    const meta = [
+      ["bucket", input.bucket],
+      ["filename", input.key],
+      ["contentType", input.contentType ?? input.file.type ?? "application/octet-stream"],
+    ].map(([k, v]) => `${k} ${btoa(v)}`).join(",");
+    const headers = { ...bearer(), "Tus-Resumable": "1.0.0" };
+
+    const createRes = await fetch(`${base}/storage/v1/upload/resumable`, {
+      method: "POST",
+      headers: { ...headers, "Upload-Length": String(size), "Upload-Metadata": meta },
+    });
+    if (createRes.status !== 201) throw new Error(`tus_create_${createRes.status}`);
+    const location = createRes.headers.get("Location");
+    if (!location) throw new Error("tus_no_location");
+    const uploadUrl = location.startsWith("http") ? location : `${base}${location}`;
+
+    let offset = 0;
+    while (offset < size) {
+      const end = Math.min(offset + chunkSize, size);
+      const chunk = input.file.slice(offset, end);
+      const patchRes = await fetch(uploadUrl, {
+        method: "PATCH",
+        headers: {
+          ...headers,
+          "Content-Type": "application/offset+octet-stream",
+          "Upload-Offset": String(offset),
+        },
+        body: chunk,
+      });
+      if (patchRes.status === 409) {
+        // Resume from server-reported offset.
+        const head = await fetch(uploadUrl, { method: "HEAD", headers });
+        offset = Number(head.headers.get("Upload-Offset") ?? offset);
+        continue;
+      }
+      if (patchRes.status !== 204) throw new Error(`tus_patch_${patchRes.status}`);
+      offset = Number(patchRes.headers.get("Upload-Offset") ?? end);
+      input.onProgress?.(offset, size);
+    }
+
+    const id = uploadUrl.split("/").pop() ?? "";
+    return { id, bucket: input.bucket, key: input.key, size };
+  },
+};
