@@ -58,6 +58,7 @@ function FunctionsPage() {
   async function invoke() {
     setInvokeErr(null);
     if (jsonErr) { setInvokeErr(`Invalid JSON: ${jsonErr}`); toast.error("Fix payload JSON first"); return; }
+    setInvoking(true);
     try {
       const body = invokePayload.trim() ? JSON.parse(invokePayload) : {};
       const r = await edgeV2.invoke(slug, body); setInvokeResult(r);
@@ -65,6 +66,7 @@ function FunctionsPage() {
       else toast.success(`Invoked ${slug} → ${r.status_code} in ${r.duration_ms}ms`);
       await refresh();
     } catch (e) { setInvokeErr((e as Error).message); toast.error((e as Error).message); }
+    finally { setInvoking(false); }
   }
 
   // Preview upcoming cron runs (client-side, mirrors backend nextRun MVP).
