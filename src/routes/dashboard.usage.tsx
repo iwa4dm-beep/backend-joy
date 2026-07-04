@@ -157,6 +157,22 @@ function UsagePage() {
           Set <code>VITE_PLUTO_URL</code> to a running Pluto instance to see live usage.
         </div>
       )}
+      {alerts.length > 0 && (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 p-3 text-xs space-y-2">
+          <div className="flex items-center gap-2 font-medium text-red-600 dark:text-red-400">
+            <Bell className="h-4 w-4" /> {alerts.length} active quota alert{alerts.length > 1 ? "s" : ""}
+          </div>
+          {alerts.slice(0, 5).map(a => (
+            <div key={a.id} className="flex items-center justify-between gap-2">
+              <span><strong>{a.metric}</strong> at {Number(a.pct).toFixed(1)}% ({a.used.toLocaleString(undefined, { maximumFractionDigits: 2 })}/{a.hard_limit ?? "∞"}) · {new Date(a.triggered_at).toLocaleString()}</span>
+              {canAdmin && (
+                <button className="text-[11px] px-2 py-0.5 border border-border rounded hover:bg-background"
+                        onClick={async () => { await usage.resolveAlert(a.id); void loadAlerts(); }}>Resolve</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {(["day", "month"] as const).map((p) => (
           <button key={p} onClick={() => setPeriod(p)}
