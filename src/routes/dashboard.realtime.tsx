@@ -158,6 +158,8 @@ function RealtimePage() {
               </CardContent>
             </Card>
           </div>
+
+          <CdcPanel />
         </div>
       </div>
     </div>
