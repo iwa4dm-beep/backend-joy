@@ -1241,7 +1241,7 @@ export const edgeV2 = {
     api<{ function: FnCatalog }>("/fn/v2/functions", { method: "POST", body: JSON.stringify(body) }),
   deleteFunction: (slug: string) => api<{ ok: boolean }>(`/fn/v2/functions/${encodeURIComponent(slug)}`, { method: "DELETE" }),
   invoke:         (slug: string, payload: Record<string, unknown> = {}, simulate_error = false) =>
-    api<{ ok: boolean; status_code: number; duration_ms: number; echoed: Record<string, unknown> }>(
+    api<{ ok: boolean; status_code: number; duration_ms: number; echoed: Record<string, unknown>; error: { message: string; type?: string; stack?: string } | null }>(
       `/fn/v2/functions/${encodeURIComponent(slug)}/invoke`,
       { method: "POST", body: JSON.stringify({ payload, simulate_error }) }),
 };
