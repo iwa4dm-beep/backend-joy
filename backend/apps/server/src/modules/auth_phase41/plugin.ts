@@ -79,7 +79,7 @@ export async function authPhase41Plugin(app: FastifyInstance) {
 
       const link = `${appBase(req)}/auth/v1/magic-link/verify?token=${token}` +
                    (body.data.redirect_to ? `&redirect_to=${encodeURIComponent(body.data.redirect_to)}` : "");
-      await emailProvider.send({
+      await emailProvider().send({
         to: email,
         subject: "Your sign-in link",
         text: `Click to sign in (valid for ${MAGIC_TTL_MIN} min):\n\n${link}\n`,
@@ -97,14 +97,14 @@ export async function authPhase41Plugin(app: FastifyInstance) {
 
     const hashed = sha256(q.data.token);
     const row = await db.selectFrom("magic_link_tokens" as never).selectAll()
-      .where("token_hash" as never, "=", hashed).executeTakeFirst() as
+      .where("token_hash" as never, "=", hashed as never).executeTakeFirst() as
       | { id: string; user_id: string; email: string; expires_at: Date; used_at: Date | null } | undefined;
     if (!row || row.used_at || row.expires_at < new Date()) {
       return reply.code(401).send({ error: "invalid_or_expired" });
     }
     await db.updateTable("magic_link_tokens" as never)
       .set({ used_at: new Date() } as never)
-      .where("id" as never, "=", row.id).execute();
+      .where("id" as never, "=", row.id as never).execute();
 
     const user = await db.selectFrom("users").selectAll().where("id", "=", row.user_id).executeTakeFirst();
     if (!user) return reply.code(404).send({ error: "user_not_found" });
