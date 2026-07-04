@@ -89,6 +89,8 @@ export const edgeV2Plugin: FastifyPluginAsync = async (app) => {
          do update set value_cipher=excluded.value_cipher
          returning id, function_slug, name, created_at`,
         [ws, b.function_slug, b.name, encrypt(b.value)]);
+      const { audit } = await import("../../lib/audit.js");
+      await audit(req, { action: "fn.secret.set", target: `${b.function_slug}:${b.name}` });
       return { secret: r.rows[0] };
     } catch (e) { reply.code(400); return { error: (e as Error).message }; }
   });
