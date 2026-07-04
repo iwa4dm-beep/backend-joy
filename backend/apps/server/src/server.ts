@@ -191,6 +191,8 @@ async function main() {
   await app.register(dataApiV4Plugin);      // Phase 59 — RPC-style typed functions, cursor pagination, streaming JSON
   const { realtimeV5Plugin } = await import("./modules/realtime_v5/plugin.js");
   await app.register(realtimeV5Plugin);     // Phase 60 — presence sharding, room-level backpressure, ordered delivery
+  const { vectorV3Plugin } = await import("./modules/vector_v3/plugin.js");
+  await app.register(vectorV3Plugin);       // Phase 61 — hybrid rerankers, per-tenant HNSW tuning, streaming embeddings
   startLogRetentionSweeper(app.log);
 
 
