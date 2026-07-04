@@ -33,7 +33,7 @@ describe("clamav client", () => {
 describe("storage_v2 plugin exports", () => {
   it("is a Fastify plugin factory", async () => {
     vi.doMock("../lib/pgraw.js", () => ({ pgraw: vi.fn(async () => ({ rows: [] })) }));
-    vi.doMock("../lib/storage.js", () => ({ storage: { putObject: vi.fn(), getObject: vi.fn(), deleteObject: vi.fn() } }));
+    vi.doMock("../lib/storage.js", () => ({ storage: { put: vi.fn(), get: vi.fn(), remove: vi.fn() } }));
     const mod = await import("../modules/storage_v2/plugin.js");
     expect(typeof mod.storageV2Plugin).toBe("function");
   });
