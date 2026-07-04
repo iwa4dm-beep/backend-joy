@@ -1376,7 +1376,7 @@ export const tokens = {
   async whoami(bearer: string): Promise<{ workspace_id: string | null; scopes: string[] }> {
     const cfg = liveConfig(); if (!cfg) throw new Error("Pluto backend not configured");
     const res = await fetch(cfg.url.replace(/\/$/, "") + `/tokens/v1/whoami`, {
-      headers: { apikey: cfg.anon, Authorization: `Bearer ${bearer}` },
+      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${bearer}` },
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((j as { error?: string }).error ?? `HTTP ${res.status}`);
