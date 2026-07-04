@@ -199,7 +199,7 @@ export const edgeV4Plugin: FastifyPluginAsync = async (app) => {
     await db.insertInto("fn_v4_secrets" as never).values({
       workspace_id: ws, slug: body.data.slug ?? null,
       name: body.data.name, ciphertext,
-    } as never).onConflict((c: any) =>
+    } as never).onConflict((c: any): any =>
       (c as { columns: (k: string[]) => { doUpdateSet: (u: unknown) => unknown } })
         .columns(["workspace_id", "slug", "name"])
         .doUpdateSet({ ciphertext, updated_at: new Date() })).execute();
@@ -318,7 +318,7 @@ export const edgeV4Plugin: FastifyPluginAsync = async (app) => {
     const due = await db.selectFrom("fn_v4_cron" as never).selectAll()
       .where("enabled" as never, "=", true as never)
       .where("next_run_at" as never, "<=", now as never)
-      .limit(50).execute() as
+      .limit(50).execute() as unknown as
       Array<{ id: string; workspace_id: string | null; slug: string; cron_expr: string }>;
     for (const c of due) {
       try {
