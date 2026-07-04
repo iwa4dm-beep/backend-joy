@@ -1685,3 +1685,44 @@ export const storageV2 = {
     return { id, bucket: input.bucket, key: input.key, size };
   },
 };
+
+
+// ============================================================
+// Phase 33 — Postgres CDC (change data capture) admin + subscribe
+// ============================================================
+
+export type CdcTable = {
+  schema_name: string; table_name: string; enabled: boolean;
+  created_at: string; updated_at: string;
+};
+export type CdcEventRow = {
+  id: number; commit_ts: string; schema_name: string; table_name: string;
+  op: "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE";
+  row_pk: unknown; new_row: unknown; old_row: unknown; lsn: string | null;
+};
+
+export const cdc = {
+  listTables: () => api<{ tables: CdcTable[] }>("/rt/v2/cdc/tables"),
+  enableTable: (schema: string, table: string) =>
+    api<{ ok: true }>("/rt/v2/cdc/tables",
+      { method: "POST", body: JSON.stringify({ schema, table }) }),
+  disableTable: (schema: string, table: string) =>
+    api<{ ok: true }>(`/rt/v2/cdc/tables/${encodeURIComponent(schema)}.${encodeURIComponent(table)}`,
+      { method: "DELETE" }),
+  slotLag: () => api<{ slot: string; lag_bytes: number | null }>("/rt/v2/cdc/slot-lag"),
+  events: (params: { schema?: string; table?: string; since_id?: number; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.schema)   qs.set("schema",   params.schema);
+    if (params.table)    qs.set("table",    params.table);
+    if (params.since_id !== undefined) qs.set("since_id", String(params.since_id));
+    if (params.limit)    qs.set("limit",    String(params.limit));
+    return api<{ events: CdcEventRow[] }>(`/rt/v2/cdc/events${qs.toString() ? `?${qs}` : ""}`);
+  },
+  /** Validate a subscription payload before opening a websocket. */
+  validateSubscribe: (input: { schema?: string; table: string; filter?: string }) =>
+    api<{ ok: true; channel: string; filter: unknown }>("/rt/v2/cdc/subscribe", {
+      method: "POST",
+      body: JSON.stringify({ event: "postgres_changes", schema: input.schema ?? "public",
+                              table: input.table, filter: input.filter }),
+    }),
+};
