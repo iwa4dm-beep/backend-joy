@@ -170,9 +170,14 @@ function FunctionsPage() {
           <CardContent className="space-y-3">
             <div className="flex gap-2">
               <Input placeholder="NAME (UPPER_SNAKE)" value={secName} onChange={e => setSecName(e.target.value.toUpperCase())} />
-              <Input placeholder="value" type="password" value={secVal} onChange={e => setSecVal(e.target.value)} />
+              <Input placeholder="value (masked)" type={showSecret ? "text" : "password"} autoComplete="off"
+                     value={secVal} onChange={e => setSecVal(e.target.value)} />
+              <Button size="sm" variant="outline" onClick={() => setShowSecret(v => !v)} title={showSecret ? "Hide" : "Reveal while typing"}>
+                {showSecret ? "Hide" : "Show"}
+              </Button>
               <Button size="sm" onClick={addSecret}><Plus className="h-4 w-4" /> Save</Button>
             </div>
+            <div className="text-[11px] text-muted-foreground">Secret values are AES-256-GCM encrypted at rest and never returned by the API.</div>
             <div className="space-y-1">
               {secrets.map(s => (
                 <div key={s.id} className="flex items-center justify-between p-2 border border-border rounded-md text-sm">
