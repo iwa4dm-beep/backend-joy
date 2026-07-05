@@ -134,9 +134,19 @@ function PlutoAdminPage() {
   }
   async function revokeKey(id: string) {
     if (!selected) return;
+    if (!confirm("Revoke this API key? Clients using it will immediately fail.")) return;
     try { await api(url, token, `/admin/v1/projects/${selected}/keys/${id}`, { method: "DELETE" }); await loadKeys(selected); }
     catch (e: any) { setErr(e.message); }
   }
+  async function rotateKey(id: string) {
+    if (!selected) return;
+    if (!confirm("Rotate this key? The old key will be revoked and a replacement minted (shown once).")) return;
+    try {
+      const r = await api<ApiKey & { api_key: string }>(url, token, `/admin/v1/projects/${selected}/keys/${id}/rotate`, { method: "POST" });
+      setMinted(r.api_key); await loadKeys(selected);
+    } catch (e: any) { setErr(e.message); }
+  }
+
 
   return (
     <div className="space-y-6">
