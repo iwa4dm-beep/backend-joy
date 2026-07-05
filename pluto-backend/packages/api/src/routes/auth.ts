@@ -4,6 +4,9 @@ import { z } from 'zod';
 import { randomBytes, createHash } from 'node:crypto';
 import { getSql } from '../db/pool.js';
 import type { Config } from '../config.js';
+import { authOps } from '../observability/metrics.js';
+import { emailEnabled, newToken, sendMail, verificationEmail, recoveryEmail } from '../email/mailer.js';
+
 
 const emailSchema = z.string().trim().toLowerCase().email().max(255);
 const passwordSchema = z.string().min(8).max(72);
