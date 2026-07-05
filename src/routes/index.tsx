@@ -1092,6 +1092,21 @@ function TerminalCard() {
               <option value="name">name (a→z)</option>
             </select>
           </label>
+          <label className="flex items-center gap-1">
+            <span>search</span>
+            <input
+              ref={searchRef}
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="name… (press /)"
+              aria-label="Search modules by name"
+              className="w-40 rounded border border-border bg-background px-1.5 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <span aria-live="polite" className="text-muted-foreground">
+            showing {sortedFiltered.length} / {probes.length}
+          </span>
         </div>
 
         <div className="mt-3 text-muted-foreground" aria-hidden="true">module              status   latency   http   try</div>
