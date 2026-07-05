@@ -5,7 +5,7 @@ import {
   ShieldCheck, Sparkles, Terminal, Waves, Workflow, Zap, HelpCircle,
   ChevronDown,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 
 export const Route = createFileRoute("/")({
@@ -393,40 +393,55 @@ async function probeWithRetry(url: string, path: string, signal: AbortSignal): P
   return { name: "", path, status: "down", code: last.code, latency_ms: last.latency_ms, error: last.error, attempts: MAX_ATTEMPTS };
 }
 
-const HISTORY_MAX = 20;
-// Retention policy: drop points older than 24h even if under the count cap,
-// so a laptop opened after a long break doesn't render stale probes as "trend".
-const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Defaults; user-configurable via retention settings UI, persisted in localStorage.
+const HISTORY_MAX_DEFAULT = 20;
+const HISTORY_MAX_AGE_HOURS_DEFAULT = 24;
 const HISTORY_STORAGE_KEY = "pluto.terminal.history.v1";
+const REFRESH_STORAGE_KEY = "pluto.terminal.refreshMs.v1";
+const RETENTION_STORAGE_KEY = "pluto.terminal.retention.v1";
+type Retention = { max: number; maxAgeHours: number };
 type HistoryModule = { name: string; status: ModuleProbe["status"]; code?: number; latency_ms?: number; error?: string; attempts?: number };
 type HistoryPoint = { ts: number; up: number; down: number; total: number; avg_latency_ms: number; modules: HistoryModule[] };
 
-function pruneHistory(h: HistoryPoint[]): HistoryPoint[] {
-  const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
-  return h.filter((p) => p.ts >= cutoff).slice(-HISTORY_MAX);
+function pruneHistory(h: HistoryPoint[], r: Retention): HistoryPoint[] {
+  const cutoff = Date.now() - r.maxAgeHours * 60 * 60 * 1000;
+  return h.filter((p) => p.ts >= cutoff).slice(-r.max);
 }
 
-function loadHistory(): HistoryPoint[] {
+function loadRawHistory(): HistoryPoint[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const valid = parsed.filter((h): h is HistoryPoint =>
+    return parsed.filter((h): h is HistoryPoint =>
       h && typeof h.ts === "number" && Array.isArray(h.modules)
     );
-    const pruned = pruneHistory(valid);
-    // Rewrite storage if we dropped anything so growth stays bounded across reloads.
-    if (pruned.length !== valid.length) {
-      try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(pruned)); } catch { /* quota */ }
-    }
-    return pruned;
   } catch { return []; }
 }
 
 function saveHistory(h: HistoryPoint[]) {
   try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(h)); } catch { /* quota */ }
+}
+
+function loadRefreshMs(): number {
+  if (typeof window === "undefined") return 0;
+  const raw = Number(localStorage.getItem(REFRESH_STORAGE_KEY) ?? "0");
+  return REFRESH_OPTIONS.some((o) => o.value === raw) ? raw : 0;
+}
+
+function loadRetention(): Retention {
+  if (typeof window === "undefined") return { max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT };
+  try {
+    const raw = JSON.parse(localStorage.getItem(RETENTION_STORAGE_KEY) ?? "null");
+    const max = Number(raw?.max);
+    const maxAgeHours = Number(raw?.maxAgeHours);
+    return {
+      max: Number.isFinite(max) && max >= 5 && max <= 500 ? Math.round(max) : HISTORY_MAX_DEFAULT,
+      maxAgeHours: Number.isFinite(maxAgeHours) && maxAgeHours >= 1 && maxAgeHours <= 720 ? maxAgeHours : HISTORY_MAX_AGE_HOURS_DEFAULT,
+    };
+  } catch { return { max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT }; }
 }
 
 
@@ -438,17 +453,43 @@ function TerminalCard() {
   const [tick, setTick] = useState(0);
   const [nonce, setNonce] = useState(0);
   const [refreshMs, setRefreshMs] = useState<number>(0);
+  const [retention, setRetention] = useState<Retention>({ max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT });
+  const [showRetention, setShowRetention] = useState(false);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "up" | "down" | "pending" | "errors">("all");
   const [sortBy, setSortBy] = useState<"default" | "status" | "latency" | "name">("default");
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const retentionRef = useRef<Retention>({ max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT });
+  useEffect(() => { retentionRef.current = retention; }, [retention]);
   const cmd = "git clone pluto-baas && cd pluto-baas && docker compose up -d";
   const apiUrl = (import.meta.env.VITE_PLUTO_URL as string | undefined) ?? "http://localhost:3000";
 
-  // Hydrate persisted history once
-  useEffect(() => { setHistory(loadHistory()); }, []);
+  // Hydrate persisted state once
+  useEffect(() => {
+    const r = loadRetention();
+    setRetention(r);
+    setRefreshMs(loadRefreshMs());
+    setHistory(pruneHistory(loadRawHistory(), r));
+  }, []);
+
+  // Persist refresh interval selection
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(REFRESH_STORAGE_KEY, String(refreshMs)); } catch { /* ignore */ }
+  }, [refreshMs]);
+
+  // Persist retention + re-prune when settings change
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(RETENTION_STORAGE_KEY, JSON.stringify(retention)); } catch { /* ignore */ }
+    setHistory((h) => {
+      const next = pruneHistory(h, retention);
+      if (next.length !== h.length) saveHistory(next);
+      return next;
+    });
+  }, [retention]);
 
   // Probe run
   useEffect(() => {
@@ -481,7 +522,7 @@ function TerminalCard() {
         })),
       };
       setHistory((h) => {
-        const next = pruneHistory([...h, point]);
+        const next = pruneHistory([...h, point], retentionRef.current);
         saveHistory(next);
         return next;
       });
@@ -602,6 +643,57 @@ function TerminalCard() {
     try { localStorage.removeItem(HISTORY_STORAGE_KEY); } catch { /* ignore */ }
   }
 
+  // Filter + sort — single source of truth for both render and history CSV export.
+  const sortedFiltered = useMemo(() => {
+    const filtered = probes.filter((p) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "errors") return !!p.error;
+      return p.status === statusFilter;
+    });
+    const statusRank: Record<ModuleProbe["status"], number> = { down: 0, pending: 1, up: 2 };
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "status") return statusRank[a.status] - statusRank[b.status];
+      if (sortBy === "latency") return (b.latency_ms ?? 0) - (a.latency_ms ?? 0);
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      return 0;
+    });
+  }, [probes, statusFilter, sortBy]);
+
+  function exportHistoryCsv() {
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const names = new Set(sortedFiltered.map((p) => p.name));
+    const columns = ["timestamp", "iso_timestamp", "module", "status", "http_code", "latency_ms", "attempts", "error"] as const;
+    const rows: string[] = [];
+    for (const point of history) {
+      // Preserve the sortedFiltered order within each timestamp bucket.
+      for (const p of sortedFiltered) {
+        const m = point.modules.find((mm) => mm.name === p.name);
+        if (!m || !names.has(m.name)) continue;
+        rows.push([
+          point.ts,
+          new Date(point.ts).toISOString(),
+          m.name,
+          m.status,
+          m.code ?? "",
+          m.latency_ms ?? "",
+          m.attempts ?? "",
+          m.error ?? "",
+        ].map(esc).join(","));
+      }
+    }
+    const csv = "\uFEFF" + [columns.map(esc).join(","), ...rows].join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pluto-history-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const headerColor =
     ready.kind === "ok" ? "text-primary" :
     ready.kind === "degraded" ? "text-amber-500" :
@@ -671,6 +763,25 @@ function TerminalCard() {
           >
             csv
           </button>
+          <button
+            type="button"
+            onClick={exportHistoryCsv}
+            disabled={history.length === 0}
+            aria-label="Download history CSV for currently filtered and sorted modules"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            history csv
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowRetention((v) => !v)}
+            aria-expanded={showRetention}
+            aria-controls="terminal-retention-panel"
+            aria-label="Configure history retention"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            retention
+          </button>
           {history.length > 0 && (
             <button
               type="button"
@@ -691,6 +802,47 @@ function TerminalCard() {
           </button>
         </div>
       </div>
+      {showRetention && (
+        <div
+          id="terminal-retention-panel"
+          role="region"
+          aria-label="History retention settings"
+          className="flex flex-wrap items-end gap-3 border-b border-border bg-muted/20 px-4 py-3 text-xs"
+        >
+          <label className="flex flex-col gap-1">
+            <span className="text-muted-foreground">max points (5–500)</span>
+            <input
+              type="number" min={5} max={500} step={1} value={retention.max}
+              onChange={(e) => {
+                const n = Math.max(5, Math.min(500, Math.round(Number(e.target.value) || HISTORY_MAX_DEFAULT)));
+                setRetention((r) => ({ ...r, max: n }));
+              }}
+              className="w-24 rounded border border-border bg-background px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-muted-foreground">max age (hours, 1–720)</span>
+            <input
+              type="number" min={1} max={720} step={1} value={retention.maxAgeHours}
+              onChange={(e) => {
+                const n = Math.max(1, Math.min(720, Number(e.target.value) || HISTORY_MAX_AGE_HOURS_DEFAULT));
+                setRetention((r) => ({ ...r, maxAgeHours: n }));
+              }}
+              className="w-24 rounded border border-border bg-background px-2 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => setRetention({ max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT })}
+            className="rounded border border-border px-2 py-1 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            reset defaults
+          </button>
+          <span className="text-muted-foreground">
+            currently keeping {history.length} / {retention.max} points · saved to localStorage
+          </span>
+        </div>
+      )}
       <pre aria-live="polite" aria-atomic="true" className="overflow-x-auto p-5 font-mono text-xs leading-relaxed sm:text-sm">
         <div><span className="text-emerald-500" aria-hidden="true">$</span> git clone pluto-baas && cd pluto-baas && docker compose up -d</div>
         <div className="mt-3 text-muted-foreground">
@@ -743,18 +895,7 @@ function TerminalCard() {
         <div className="text-muted-foreground" aria-hidden="true">──────              ──────   ───────   ────   ───</div>
         <ul aria-label="Module status list" className="list-none">
           {(() => {
-            const filtered = probes.filter((p) => {
-              if (statusFilter === "all") return true;
-              if (statusFilter === "errors") return !!p.error;
-              return p.status === statusFilter;
-            });
-            const statusRank: Record<ModuleProbe["status"], number> = { down: 0, pending: 1, up: 2 };
-            const sorted = [...filtered].sort((a, b) => {
-              if (sortBy === "status") return statusRank[a.status] - statusRank[b.status];
-              if (sortBy === "latency") return (b.latency_ms ?? 0) - (a.latency_ms ?? 0);
-              if (sortBy === "name") return a.name.localeCompare(b.name);
-              return 0;
-            });
+            const sorted = sortedFiltered;
             if (sorted.length === 0) {
               return <li className="mt-1 text-muted-foreground">  no modules match this filter</li>;
             }
@@ -842,6 +983,27 @@ function ModuleDetails({
   const innerRef = useRef<HTMLDivElement | null>(null);
   // Move focus into the panel on open so screen readers announce it and Esc works.
   useEffect(() => { innerRef.current?.focus(); }, []);
+
+  // Keyboard-only walkthrough: Tab / Shift+Tab cycle within the panel (focus trap),
+  // Escape closes and returns focus to the trigger (handled by onClose).
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+    if (e.key !== "Tab") return;
+    const root = innerRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => !el.hasAttribute("aria-hidden"));
+    if (focusables.length === 0) { e.preventDefault(); root.focus(); return; }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey && (active === first || active === root)) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+  }
+
   return (
     <div
       id={id}
@@ -849,7 +1011,8 @@ function ModuleDetails({
       role="region"
       aria-labelledby={labelledBy}
       tabIndex={-1}
-      onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
+      onKeyDown={onKeyDown}
+      data-testid="module-details-panel"
       className="mx-1 my-1 rounded-md border border-border bg-muted/30 p-3 text-[11px] leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="mb-2 flex items-center justify-between">
