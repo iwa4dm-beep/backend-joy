@@ -651,6 +651,60 @@ function TerminalCard() {
   );
 }
 
+function TrendChart({ history }: { history: HistoryPoint[] }) {
+  const W = 320;
+  const H = 56;
+  const PAD_X = 4;
+  const PAD_Y = 6;
+  const n = history.length;
+  const maxLat = Math.max(50, ...history.map((h) => h.avg_latency_ms));
+  const total = history[history.length - 1]?.total ?? 1;
+
+  const x = (i: number) => n === 1 ? W / 2 : PAD_X + (i * (W - PAD_X * 2)) / (n - 1);
+  const yLat = (v: number) => H - PAD_Y - (v / maxLat) * (H - PAD_Y * 2);
+  const yUp = (up: number) => H - PAD_Y - (up / total) * (H - PAD_Y * 2);
+
+  const latPath = history.map((h, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${yLat(h.avg_latency_ms).toFixed(1)}`).join(" ");
+  const upPath = history.map((h, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${yUp(h.up).toFixed(1)}`).join(" ");
+  const latest = history[history.length - 1];
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>trend · last {n} probe{n === 1 ? "" : "s"}</span>
+        <span>
+          <span className="text-emerald-500">■</span> up {latest.up}/{latest.total}
+          {"  "}
+          <span className="text-primary">■</span> avg {latest.avg_latency_ms}ms (max {maxLat}ms)
+        </span>
+      </div>
+      <svg
+        role="img"
+        aria-label={`Latency and uptime trend across the last ${n} refreshes. Current average latency ${latest.avg_latency_ms}ms, ${latest.up} of ${latest.total} modules up.`}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="block h-14 w-full rounded border border-border bg-muted/20"
+      >
+        <path d={upPath} fill="none" stroke="currentColor" strokeWidth="1.25" className="text-emerald-500 opacity-70" />
+        <path d={latPath} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" />
+        {history.map((h, i) => (
+          <circle
+            key={h.ts}
+            cx={x(i)}
+            cy={yLat(h.avg_latency_ms)}
+            r={i === n - 1 ? 2.5 : 1.5}
+            className={h.down > 0 ? "fill-destructive" : "fill-primary"}
+          >
+            <title>{`${new Date(h.ts).toLocaleTimeString()} — ${h.up}/${h.total} up · avg ${h.avg_latency_ms}ms`}</title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+
+
 
 
 function StatsBar() {
