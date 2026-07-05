@@ -8,7 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Copy, KeyRound, Loader2, LogIn, Plus, RefreshCw, Server, Trash2, UserPlus } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, LogIn, Plus, RefreshCw, RotateCw, Server, Trash2, UserPlus } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export const Route = createFileRoute("/dashboard/pluto-admin")({
   component: PlutoAdminPage,
