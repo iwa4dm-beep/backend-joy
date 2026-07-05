@@ -5,6 +5,7 @@
 // stub when the backend isn't configured (dev). Eliminates the
 // `localhost:3000` "Failed to fetch" errors on fresh installs.
 import { createFileRoute } from "@tanstack/react-router";
+import { recordError, recordSuccess, validateSecrets } from "@/lib/pluto/upstream-status";
 
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -17,15 +18,17 @@ async function handle({ request, params }: { request: Request; params: { _splat?
   const url = new URL(request.url);
 
   if (!upstream) {
-    // Graceful offline stub — probes see a well-formed 503 instead of a
-    // network error, and TerminalCard renders "backend not configured"
-    // rather than the misleading "Failed to fetch".
+    const issues = validateSecrets();
+    // Graceful offline stub — probes see a well-formed 200 with offline:true
+    // instead of a network error, and TerminalCard renders "backend not
+    // configured" rather than the misleading "Failed to fetch".
     return new Response(
       JSON.stringify({
         ok: false,
         offline: true,
         path: `/${splat}`,
         reason: "PLUTO_UPSTREAM_URL not set — configure the Fastify backend URL in project secrets to enable live probes.",
+        issues,
       }),
       {
         status: 200,
@@ -55,23 +58,31 @@ async function handle({ request, params }: { request: Request; params: { _splat?
     upstreamRes.headers.forEach((value, key) => {
       if (!HOP_BY_HOP.has(key.toLowerCase())) respHeaders.set(key, value);
     });
+    if (upstreamRes.ok) {
+      recordSuccess(`/${splat}`);
+    } else {
+      recordError(`/${splat}`, `upstream returned ${upstreamRes.status}`);
+    }
     return new Response(upstreamRes.body, {
       status: upstreamRes.status,
       statusText: upstreamRes.statusText,
       headers: respHeaders,
     });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    recordError(`/${splat}`, msg);
     return new Response(
       JSON.stringify({
         ok: false,
         offline: true,
-        error: err instanceof Error ? err.message : String(err),
+        error: msg,
         target,
       }),
       { status: 200, headers: { "content-type": "application/json", "x-pluto-offline": "1" } },
     );
   }
 }
+
 
 export const Route = createFileRoute("/api/pluto/$")({
   server: {
