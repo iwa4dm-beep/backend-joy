@@ -22,18 +22,32 @@ export const Route = createFileRoute("/")({
       { name: "twitter:description", content: "Auth, REST, Realtime, Storage, Vector, Edge, Jobs — one docker compose away." },
     ],
     links: [{ rel: "canonical", href: "https://backend-joy.lovable.app/" }],
-    scripts: [{
-      type: "application/ld+json",
-      children: JSON.stringify({
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        name: "Pluto BaaS",
-        applicationCategory: "DeveloperApplication",
-        operatingSystem: "Linux, macOS, Windows (Docker)",
-        offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-        description: "Open-source self-hosted Backend-as-a-Service with authentication, auto-generated REST + GraphQL, realtime, storage, vector search and edge functions.",
-      }),
-    }],
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: "Pluto BaaS",
+          applicationCategory: "DeveloperApplication",
+          operatingSystem: "Linux, macOS, Windows (Docker)",
+          offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+          description: "Open-source self-hosted Backend-as-a-Service with authentication, auto-generated REST + GraphQL, realtime, storage, vector search and edge functions.",
+        }),
+      },
+      {
+        type: "application/ld+json",
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          mainEntity: faqs.map((f) => ({
+            "@type": "Question",
+            name: f.q,
+            acceptedAnswer: { "@type": "Answer", text: f.a },
+          })),
+        }),
+      },
+    ],
   }),
   component: Landing,
 });
@@ -120,7 +134,7 @@ const plans = [
     price: "Free",
     priceHint: "MIT licensed · forever",
     tagline: "Run Pluto on your own hardware or VPS.",
-    cta: { label: "Read the docs", to: "/docs/api" as const },
+    cta: { label: "Start Self-Hosted setup", plan: "self-hosted" as const },
     highlight: false,
     features: [
       "All 8 canonical modules",
@@ -135,7 +149,7 @@ const plans = [
     price: "$19",
     priceHint: "per project / month",
     tagline: "Managed Pluto with predictable pricing for prototypes and side-projects.",
-    cta: { label: "Start free trial", to: "/auth" as const },
+    cta: { label: "Start free trial", plan: "starter" as const },
     highlight: true,
     features: [
       "10k monthly active users",
@@ -151,7 +165,7 @@ const plans = [
     price: "$99",
     priceHint: "per project / month",
     tagline: "Production workloads with team seats, higher quotas and priority support.",
-    cta: { label: "Contact sales", to: "/dashboard" as const },
+    cta: { label: "Set up Business plan", plan: "business" as const },
     highlight: false,
     features: [
       "100k monthly active users",
@@ -164,6 +178,7 @@ const plans = [
     deploy: "Render · Fly · dedicated infra",
   },
 ];
+
 
 const faqs = [
   {
@@ -300,44 +315,115 @@ function Hero() {
   );
 }
 
-type ReadyResult =
-  | { state: "loading" }
-  | { state: "ok"; uptime_s: number; checks: Record<string, { ok: boolean; latency_ms?: number; error?: string }> }
-  | { state: "degraded"; uptime_s?: number; checks: Record<string, { ok: boolean; latency_ms?: number; error?: string }> }
-  | { state: "unreachable"; url: string; error: string };
+type ModuleProbe = {
+  name: string;
+  path: string;
+  status: "pending" | "up" | "down";
+  code?: number;
+  latency_ms?: number;
+  error?: string;
+};
+
+type ReadyState =
+  | { kind: "loading" }
+  | { kind: "ok"; uptime_s: number; version?: string }
+  | { kind: "degraded"; uptime_s?: number }
+  | { kind: "unreachable"; error: string };
+
+const MODULE_PROBES: { name: string; path: string }[] = [
+  { name: "core",     path: "/readyz" },
+  { name: "auth",     path: "/auth/v1/health" },
+  { name: "rest",     path: "/rest/v1/" },
+  { name: "storage",  path: "/storage/v1/" },
+  { name: "realtime", path: "/realtime/v1/" },
+  { name: "edge",     path: "/functions/v1/" },
+  { name: "jobs",     path: "/jobs/v1/" },
+  { name: "admin",    path: "/admin/v1/stats" },
+];
+
+async function probe(url: string, path: string, signal: AbortSignal): Promise<ModuleProbe> {
+  const t0 = performance.now();
+  try {
+    const r = await fetch(`${url.replace(/\/$/, "")}${path}`, {
+      signal, method: "GET", headers: { accept: "application/json" },
+    });
+    const latency_ms = Math.round(performance.now() - t0);
+    // Any HTTP response < 500 counts as "reachable" — 401/403/404 still
+    // mean the module is running and answering.
+    const up = r.status < 500;
+    return { name: "", path, status: up ? "up" : "down", code: r.status, latency_ms };
+  } catch (e) {
+    return { name: "", path, status: "down", latency_ms: Math.round(performance.now() - t0), error: (e as Error).message || "network error" };
+  }
+}
 
 function TerminalCard() {
   const [copied, setCopied] = useState(false);
-  const [ready, setReady] = useState<ReadyResult>({ state: "loading" });
+  const [ready, setReady] = useState<ReadyState>({ kind: "loading" });
+  const [probes, setProbes] = useState<ModuleProbe[]>(MODULE_PROBES.map((m) => ({ ...m, status: "pending" as const })));
+  const [ts, setTs] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
   const cmd = "git clone pluto-baas && cd pluto-baas && docker compose up -d";
-
   const apiUrl = (import.meta.env.VITE_PLUTO_URL as string | undefined) ?? "http://localhost:3000";
 
   useEffect(() => {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
-    fetch(`${apiUrl.replace(/\/$/, "")}/readyz`, { signal: ctrl.signal, headers: { accept: "application/json" } })
-      .then(async (r) => {
-        clearTimeout(t);
-        const body = await r.json().catch(() => ({}));
-        if (r.ok && body.ok) {
-          setReady({ state: "ok", uptime_s: body.uptime_s ?? 0, checks: body.checks ?? {} });
-        } else {
-          setReady({ state: "degraded", uptime_s: body.uptime_s, checks: body.checks ?? {} });
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    let cancelled = false;
+    setReady({ kind: "loading" });
+    setProbes(MODULE_PROBES.map((m) => ({ ...m, status: "pending" as const })));
+
+    (async () => {
+      const results = await Promise.all(
+        MODULE_PROBES.map(async (m) => {
+          const p = await probe(apiUrl, m.path, ctrl.signal);
+          return { ...p, name: m.name };
+        })
+      );
+      if (cancelled) return;
+      setProbes(results);
+
+      const core = results[0];
+      if (!core || core.status === "down") {
+        setReady({ kind: "unreachable", error: core?.error ?? `HTTP ${core?.code}` });
+      } else {
+        // Fetch readyz body for uptime + version
+        try {
+          const r = await fetch(`${apiUrl.replace(/\/$/, "")}/readyz`, { signal: ctrl.signal });
+          const body = await r.json().catch(() => ({}));
+          const allUp = results.every((x) => x.status === "up");
+          setReady(
+            r.ok && body.ok && allUp
+              ? { kind: "ok", uptime_s: body.uptime_s ?? 0 }
+              : { kind: "degraded", uptime_s: body.uptime_s }
+          );
+        } catch {
+          setReady({ kind: "degraded" });
         }
-      })
-      .catch((e) => {
-        clearTimeout(t);
-        setReady({ state: "unreachable", url: apiUrl, error: (e as Error).message || "network error" });
-      });
-    return () => { clearTimeout(t); ctrl.abort(); };
-  }, [apiUrl]);
+      }
+      setTs(new Date().toLocaleTimeString());
+    })();
+
+    return () => { cancelled = true; clearTimeout(timeout); ctrl.abort(); };
+  }, [apiUrl, nonce]);
 
   function copy() {
     void navigator.clipboard.writeText(cmd);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
+
+  const headerColor =
+    ready.kind === "ok" ? "text-primary" :
+    ready.kind === "degraded" ? "text-amber-500" :
+    ready.kind === "unreachable" ? "text-destructive" :
+    "text-muted-foreground";
+
+  const headerLabel =
+    ready.kind === "ok" ? `✓ all systems operational · uptime ${ready.uptime_s}s` :
+    ready.kind === "degraded" ? "⚠ degraded — some modules unreachable" :
+    ready.kind === "unreachable" ? "✗ backend unreachable" :
+    "→ probing modules...";
 
   return (
     <div className="mx-auto mt-14 max-w-3xl overflow-hidden rounded-xl border border-border bg-card/70 shadow-2xl shadow-primary/5 backdrop-blur">
@@ -348,57 +434,60 @@ function TerminalCard() {
           <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-emerald-500/60" />
           <span className="ml-3 text-xs text-muted-foreground">~ / pluto-quickstart</span>
         </div>
-        <button
-          type="button"
-          onClick={copy}
-          aria-label={copied ? "Command copied" : "Copy quickstart command"}
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Copy className="h-3 w-3" aria-hidden="true" /> {copied ? "copied" : "copy"}
-        </button>
-      </div>
-      <pre aria-live="polite" className="overflow-x-auto p-5 font-mono text-xs leading-relaxed sm:text-sm">
-        <div><span className="text-emerald-500" aria-hidden="true">$</span> git clone pluto-baas && cd pluto-baas</div>
-        <div><span className="text-emerald-500" aria-hidden="true">$</span> docker compose up -d</div>
-        <div className="mt-3 text-muted-foreground">
-          <span className="text-emerald-500" aria-hidden="true">$</span> curl {apiUrl}/readyz
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setNonce((n) => n + 1)}
+            aria-label="Re-run module probes"
+            className="rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            refresh
+          </button>
+          <button
+            type="button"
+            onClick={copy}
+            aria-label={copied ? "Command copied" : "Copy quickstart command"}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Copy className="h-3 w-3" aria-hidden="true" /> {copied ? "copied" : "copy"}
+          </button>
         </div>
-        <ReadyzOutput ready={ready} />
+      </div>
+      <pre aria-live="polite" aria-atomic="true" className="overflow-x-auto p-5 font-mono text-xs leading-relaxed sm:text-sm">
+        <div><span className="text-emerald-500" aria-hidden="true">$</span> git clone pluto-baas && cd pluto-baas && docker compose up -d</div>
+        <div className="mt-3 text-muted-foreground">
+          <span className="text-emerald-500" aria-hidden="true">$</span> pluto status --url {apiUrl}
+        </div>
+        <div className={`mt-1 ${headerColor}`}>{headerLabel}{ts ? `  [${ts}]` : ""}</div>
+
+        {ready.kind === "unreachable" && (
+          <div className="mt-1 text-muted-foreground">  set VITE_PLUTO_URL, or run `docker compose up -d`</div>
+        )}
+
+        <div className="mt-3 text-muted-foreground">module              status   latency   http</div>
+        <div className="text-muted-foreground">──────              ──────   ───────   ────</div>
+        {probes.map((p) => {
+          const color =
+            p.status === "up"   ? "text-emerald-500" :
+            p.status === "down" ? "text-destructive" :
+            "text-muted-foreground";
+          const glyph = p.status === "up" ? "✓" : p.status === "down" ? "✗" : "…";
+          return (
+            <div key={p.name} className={color}>
+              {"  "}{glyph} {p.name.padEnd(18)}{" "}
+              <span>{p.status.padEnd(8)}</span>
+              <span className="text-muted-foreground">
+                {typeof p.latency_ms === "number" ? `${p.latency_ms}ms`.padEnd(9) : "—        "}
+                {p.code ? p.code : p.error ? "err" : ""}
+              </span>
+            </div>
+          );
+        })}
       </pre>
     </div>
   );
 }
 
-function ReadyzOutput({ ready }: { ready: ReadyResult }) {
-  if (ready.state === "loading") {
-    return <div className="mt-1 text-muted-foreground">→ checking {`{ ... }`}</div>;
-  }
-  if (ready.state === "unreachable") {
-    return (
-      <>
-        <div className="mt-1 text-amber-500">⚠ backend unreachable at {ready.url}</div>
-        <div className="text-muted-foreground">  set VITE_PLUTO_URL, or run `docker compose up -d`</div>
-      </>
-    );
-  }
-  const color = ready.state === "ok" ? "text-primary" : "text-amber-500";
-  const badge = ready.state === "ok" ? "ok" : "degraded";
-  return (
-    <>
-      <div className={`mt-1 ${color}`}>
-        → {`{ "ok": ${ready.state === "ok"}, "status": "${badge}"${ready.state === "ok" ? `, "uptime_s": ${ready.uptime_s}` : ""} }`}
-      </div>
-      <div className="mt-1 text-muted-foreground">checks:</div>
-      {Object.entries(ready.checks).map(([name, c]) => (
-        <div key={name} className="text-muted-foreground">
-          {c.ok ? "  ✓" : "  ✗"} {name.padEnd(10)}
-          {c.ok ? " ok" : ` ${c.error ?? "failed"}`}
-          {typeof c.latency_ms === "number" ? `  (${c.latency_ms}ms)` : ""}
-        </div>
-      ))}
-    </>
-  );
-}
 
 function StatsBar() {
   return (
@@ -577,7 +666,8 @@ function PricingSection() {
                 <span className="font-medium text-foreground">Deploy:</span> {p.deploy}
               </div>
               <Link
-                to={p.cta.to}
+                to="/dashboard"
+                search={{ plan: p.cta.plan } as never}
                 className={`mt-6 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-4 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   p.highlight
                     ? "bg-primary text-primary-foreground hover:bg-primary/90"
