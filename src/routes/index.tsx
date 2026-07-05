@@ -585,7 +585,7 @@ function TerminalCard() {
       const tag = t?.tagName;
       if (t?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
         if (e.key === "Escape" && tag === "INPUT" && t === searchRef.current) {
-          setSearch(""); t.blur();
+          setSearch(""); (t as HTMLInputElement).blur();
         }
         return;
       }
