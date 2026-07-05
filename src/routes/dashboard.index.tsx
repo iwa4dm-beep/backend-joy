@@ -1,43 +1,22 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Database, Files, ScrollText, Users, Sparkles, X } from "lucide-react";
+import { Database, Files, ScrollText, Users } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { pluto } from "@/lib/pluto/client";
 import { isLive, live } from "@/lib/pluto/live";
+import { OnboardingWizard, type Plan } from "@/components/pluto/OnboardingWizard";
 
-type Plan = "self-hosted" | "starter" | "business";
-const PLAN_INFO: Record<Plan, { title: string; steps: string[]; nextTo: string; nextLabel: string }> = {
-  "self-hosted": {
-    title: "Self-Hosted onboarding",
-    steps: [
-      "Clone the repo and run `docker compose up -d`",
-      "Open http://localhost:8080 and finish first-run setup",
-      "Copy the anon key from Projects → Keys into your frontend .env",
-    ],
-    nextTo: "/dashboard/projects",
-    nextLabel: "Create your first project",
-  },
-  starter: {
-    title: "Cloud Starter — 14-day trial",
-    steps: [
-      "Create a project (region + Postgres size)",
-      "Add your production domain to the CORS whitelist",
-      "Copy the anon key and wire the SDK into your frontend",
-    ],
-    nextTo: "/dashboard/projects",
-    nextLabel: "Provision Starter project",
-  },
-  business: {
-    title: "Business onboarding",
-    steps: [
-      "Invite teammates and assign RBAC roles",
-      "Enable SAML SSO and audit-log export in Enterprise settings",
-      "Schedule a deployment call with our team",
-    ],
-    nextTo: "/dashboard/enterprise",
-    nextLabel: "Configure Business features",
-  },
-};
+const STORAGE_KEY = "pluto.onboarding.v1";
+
+function readPersistedPlan(): Plan | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as { plan?: unknown };
+    return raw.plan === "self-hosted" || raw.plan === "starter" || raw.plan === "business"
+      ? raw.plan
+      : undefined;
+  } catch { return undefined; }
+}
 
 export const Route = createFileRoute("/dashboard/")({
   validateSearch: (s: Record<string, unknown>): { plan?: Plan } => {
