@@ -62,6 +62,7 @@ async function main() {
   await authRoutes(app, cfg);
   await restRoutes(app, cfg);
   await storageRoutes(app, cfg);
+  await realtimeRoutes(app, cfg);
 
 
   // Root
