@@ -279,7 +279,7 @@ export async function complianceRoutes(app: FastifyInstance, cfg: Config) {
     const fromId = (last?.to_id ?? 0) + 1;
     const prevHash = last?.chain_hash ?? '0'.repeat(64);
     const rows = await sql<any[]>`
-      select id, actor_id, action, target, detail, created_at
+      select id, actor_id, project_id, action, resource_type, resource_id, params, result, created_at
       from admin.audit_log
       where id >= ${fromId}
       order by id asc limit 5000`;
@@ -305,7 +305,7 @@ export async function complianceRoutes(app: FastifyInstance, cfg: Config) {
     let prev = '0'.repeat(64);
     for (const s of seals) {
       if (s.prev_hash !== prev) issues.push({ seal: s.id, kind: 'chain_break' });
-      const rows = await sql<any[]>`select id, actor_id, action, target, detail, created_at from admin.audit_log where id between ${s.from_id} and ${s.to_id} order by id asc`;
+      const rows = await sql<any[]>`select id, actor_id, project_id, action, resource_type, resource_id, params, result, created_at from admin.audit_log where id between ${s.from_id} and ${s.to_id} order by id asc`;
       const h = createHash('sha256'); h.update(prev);
       for (const r of rows) h.update(JSON.stringify(r));
       if (h.digest('hex') !== s.chain_hash) issues.push({ seal: s.id, kind: 'hash_mismatch' });
