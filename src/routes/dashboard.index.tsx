@@ -223,6 +223,53 @@ function Overview() {
         </div>
       </section>
 
+      {/* Live backend health strip — probes api.timescard.cloud every 30s */}
+      <Link
+        to="/dashboard/backend-status"
+        aria-label="Open backend status page"
+        className={`mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 transition hover:shadow-sm ${
+          healthAllOk
+            ? "border-emerald-500/30 bg-emerald-500/5 hover:border-emerald-500/50"
+            : healthAnyDown
+            ? "border-rose-500/30 bg-rose-500/5 hover:border-rose-500/50"
+            : "border-border bg-card"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          {healthAllOk ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-500" aria-hidden="true" />
+          ) : healthAnyDown ? (
+            <XCircle className="h-5 w-5 text-rose-500" aria-hidden="true" />
+          ) : (
+            <Activity className="h-5 w-5 animate-pulse text-muted-foreground" aria-hidden="true" />
+          )}
+          <span className="text-sm font-medium text-foreground">{healthLabel}</span>
+          {health.ms != null && <span className="text-xs text-muted-foreground">· {health.ms} ms</span>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {[
+            { name: "/livez", ok: health.live },
+            { name: "/readyz", ok: health.ready },
+            { name: "/health/migrations", ok: health.mig },
+          ].map((h) => (
+            <span
+              key={h.name}
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono ${
+                h.ok === true
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : h.ok === false
+                  ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {h.ok === true ? "✓" : h.ok === false ? "✕" : "…"} {h.name}
+            </span>
+          ))}
+          <span className="text-muted-foreground">→ details</span>
+        </div>
+      </Link>
+
+
       {activePlan && !dismissed && (
         <OnboardingWizard
           initialPlan={activePlan}
