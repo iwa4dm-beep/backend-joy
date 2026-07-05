@@ -689,27 +689,109 @@ function TerminalCard() {
 
 
 
-        <div className="mt-3 text-muted-foreground">module              status   latency   http   try</div>
-        <div className="text-muted-foreground">──────              ──────   ───────   ────   ───</div>
-        {probes.map((p) => {
-          const color =
-            p.status === "up"   ? "text-emerald-500" :
-            p.status === "down" ? "text-destructive" :
-            "text-muted-foreground";
-          const glyph = p.status === "up" ? "✓" : p.status === "down" ? "✗" : "…";
-          return (
-            <div key={p.name} className={color}>
-              {"  "}{glyph} {p.name.padEnd(18)}{" "}
-              <span>{p.status.padEnd(8)}</span>
-              <span className="text-muted-foreground">
-                {typeof p.latency_ms === "number" ? `${p.latency_ms}ms`.padEnd(9) : "—        "}
-                {(p.code ? String(p.code) : p.error ? "err" : "—").padEnd(6)}
-                {p.attempts ? `${p.attempts}/${MAX_ATTEMPTS}` : ""}
-              </span>
-            </div>
-          );
-        })}
+        <div className="mt-3 text-muted-foreground" aria-hidden="true">module              status   latency   http   try</div>
+        <div className="text-muted-foreground" aria-hidden="true">──────              ──────   ───────   ────   ───</div>
+        <ul aria-label="Module status list" className="list-none">
+          {probes.map((p) => {
+            const color =
+              p.status === "up"   ? "text-emerald-500" :
+              p.status === "down" ? "text-destructive" :
+              "text-muted-foreground";
+            const glyph = p.status === "up" ? "✓" : p.status === "down" ? "✗" : "…";
+            const isOpen = expanded === p.name;
+            const moduleHistory = history
+              .map((h) => ({ ts: h.ts, m: h.modules.find((m) => m.name === p.name) }))
+              .filter((x): x is { ts: number; m: HistoryModule } => !!x.m);
+            const panelId = `mod-${p.name}-panel`;
+            return (
+              <li key={p.name}>
+                <button
+                  type="button"
+                  onClick={() => setExpanded(isOpen ? null : p.name)}
+                  aria-expanded={isOpen}
+                  aria-controls={panelId}
+                  className={`flex w-full items-center gap-2 rounded px-1 text-left hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color}`}
+                >
+                  <ChevronDown className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${isOpen ? "" : "-rotate-90"}`} aria-hidden="true" />
+                  <span aria-hidden="true">{glyph}</span>
+                  <span className="whitespace-pre">{p.name.padEnd(18)}</span>
+                  <span className="whitespace-pre">{p.status.padEnd(8)}</span>
+                  <span className="whitespace-pre text-muted-foreground">
+                    {typeof p.latency_ms === "number" ? `${p.latency_ms}ms`.padEnd(9) : "—        "}
+                    {(p.code ? String(p.code) : p.error ? "err" : "—").padEnd(6)}
+                    {p.attempts ? `${p.attempts}/${MAX_ATTEMPTS}` : ""}
+                  </span>
+                </button>
+                {isOpen && (
+                  <ModuleDetails id={panelId} probe={p} history={moduleHistory} apiUrl={apiUrl} />
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </pre>
+    </div>
+  );
+}
+
+function ModuleDetails({
+  id, probe, history, apiUrl,
+}: { id: string; probe: ModuleProbe; history: { ts: number; m: HistoryModule }[]; apiUrl: string }) {
+  const codeCounts = history.reduce<Record<string, number>>((acc, { m }) => {
+    const key = m.code ? String(m.code) : m.error ? "err" : "—";
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const codes = Object.entries(codeCounts).sort((a, b) => b[1] - a[1]);
+  const recent = history.slice(-8).reverse();
+  return (
+    <div
+      id={id}
+      role="region"
+      aria-label={`Details for ${probe.name}`}
+      className="mx-1 my-1 rounded-md border border-border bg-muted/30 p-3 text-[11px] leading-relaxed"
+    >
+      <div className="grid gap-x-3 gap-y-1 sm:grid-cols-[auto_1fr]">
+        <span className="text-muted-foreground">endpoint</span>
+        <code className="whitespace-pre-wrap break-all">{apiUrl.replace(/\/$/, "")}{probe.path}</code>
+        <span className="text-muted-foreground">latest attempts</span>
+        <span>{probe.attempts ?? 0} / {MAX_ATTEMPTS}</span>
+        <span className="text-muted-foreground">latest error</span>
+        <span className={probe.error ? "text-destructive" : "text-muted-foreground"}>
+          {probe.error ?? "none"}
+        </span>
+      </div>
+      {codes.length > 0 && (
+        <div className="mt-2">
+          <div className="text-muted-foreground">http code distribution</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {codes.map(([c, n]) => (
+              <span key={c} className={`rounded border border-border px-1.5 py-0.5 ${c === "err" ? "text-destructive" : c.startsWith("2") ? "text-emerald-500" : "text-amber-500"}`}>
+                {c} × {n}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {recent.length > 0 && (
+        <div className="mt-2">
+          <div className="text-muted-foreground">recent probes (newest first)</div>
+          <ul className="mt-1 space-y-0.5">
+            {recent.map(({ ts, m }) => (
+              <li key={ts} className="grid grid-cols-[auto_auto_auto_1fr] gap-x-2">
+                <span className="text-muted-foreground">{new Date(ts).toLocaleTimeString()}</span>
+                <span className={m.status === "up" ? "text-emerald-500" : m.status === "down" ? "text-destructive" : "text-muted-foreground"}>
+                  {m.status}
+                </span>
+                <span>{typeof m.latency_ms === "number" ? `${m.latency_ms}ms` : "—"}</span>
+                <span className="text-muted-foreground truncate">
+                  {m.code ? `HTTP ${m.code}` : m.error ? m.error : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
