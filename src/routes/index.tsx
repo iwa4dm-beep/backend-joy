@@ -455,8 +455,16 @@ function TerminalCard() {
         avg_latency_ms: upList.length
           ? Math.round(upList.reduce((a, r) => a + (r.latency_ms ?? 0), 0) / upList.length)
           : 0,
+        modules: results.map((r) => ({
+          name: r.name, status: r.status,
+          code: r.code, latency_ms: r.latency_ms, error: r.error, attempts: r.attempts,
+        })),
       };
-      setHistory((h) => [...h, point].slice(-HISTORY_MAX));
+      setHistory((h) => {
+        const next = [...h, point].slice(-HISTORY_MAX);
+        saveHistory(next);
+        return next;
+      });
 
       const core = results[0];
       if (!core || core.status === "down") {
