@@ -31,6 +31,7 @@ import { Route as DashboardRealtimeRouteImport } from './routes/dashboard.realti
 import { Route as DashboardRbacRouteImport } from './routes/dashboard.rbac'
 import { Route as DashboardProjectsRouteImport } from './routes/dashboard.projects'
 import { Route as DashboardPlutoSchemaRouteImport } from './routes/dashboard.pluto-schema'
+import { Route as DashboardPlutoMigrationsRouteImport } from './routes/dashboard.pluto-migrations'
 import { Route as DashboardPlutoFunctionsRouteImport } from './routes/dashboard.pluto-functions'
 import { Route as DashboardPlutoAuditRouteImport } from './routes/dashboard.pluto-audit'
 import { Route as DashboardPlutoAdminRouteImport } from './routes/dashboard.pluto-admin'
@@ -171,6 +172,12 @@ const DashboardPlutoSchemaRoute = DashboardPlutoSchemaRouteImport.update({
   path: '/pluto-schema',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardPlutoMigrationsRoute =
+  DashboardPlutoMigrationsRouteImport.update({
+    id: '/pluto-migrations',
+    path: '/pluto-migrations',
+    getParentRoute: () => DashboardRoute,
+  } as any)
 const DashboardPlutoFunctionsRoute = DashboardPlutoFunctionsRouteImport.update({
   id: '/pluto-functions',
   path: '/pluto-functions',
@@ -349,6 +356,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/pluto-admin': typeof DashboardPlutoAdminRoute
   '/dashboard/pluto-audit': typeof DashboardPlutoAuditRoute
   '/dashboard/pluto-functions': typeof DashboardPlutoFunctionsRoute
+  '/dashboard/pluto-migrations': typeof DashboardPlutoMigrationsRoute
   '/dashboard/pluto-schema': typeof DashboardPlutoSchemaRoute
   '/dashboard/projects': typeof DashboardProjectsRoute
   '/dashboard/rbac': typeof DashboardRbacRoute
@@ -401,6 +409,7 @@ export interface FileRoutesByTo {
   '/dashboard/pluto-admin': typeof DashboardPlutoAdminRoute
   '/dashboard/pluto-audit': typeof DashboardPlutoAuditRoute
   '/dashboard/pluto-functions': typeof DashboardPlutoFunctionsRoute
+  '/dashboard/pluto-migrations': typeof DashboardPlutoMigrationsRoute
   '/dashboard/pluto-schema': typeof DashboardPlutoSchemaRoute
   '/dashboard/projects': typeof DashboardProjectsRoute
   '/dashboard/rbac': typeof DashboardRbacRoute
@@ -455,6 +464,7 @@ export interface FileRoutesById {
   '/dashboard/pluto-admin': typeof DashboardPlutoAdminRoute
   '/dashboard/pluto-audit': typeof DashboardPlutoAuditRoute
   '/dashboard/pluto-functions': typeof DashboardPlutoFunctionsRoute
+  '/dashboard/pluto-migrations': typeof DashboardPlutoMigrationsRoute
   '/dashboard/pluto-schema': typeof DashboardPlutoSchemaRoute
   '/dashboard/projects': typeof DashboardProjectsRoute
   '/dashboard/rbac': typeof DashboardRbacRoute
@@ -510,6 +520,7 @@ export interface FileRouteTypes {
     | '/dashboard/pluto-admin'
     | '/dashboard/pluto-audit'
     | '/dashboard/pluto-functions'
+    | '/dashboard/pluto-migrations'
     | '/dashboard/pluto-schema'
     | '/dashboard/projects'
     | '/dashboard/rbac'
@@ -562,6 +573,7 @@ export interface FileRouteTypes {
     | '/dashboard/pluto-admin'
     | '/dashboard/pluto-audit'
     | '/dashboard/pluto-functions'
+    | '/dashboard/pluto-migrations'
     | '/dashboard/pluto-schema'
     | '/dashboard/projects'
     | '/dashboard/rbac'
@@ -615,6 +627,7 @@ export interface FileRouteTypes {
     | '/dashboard/pluto-admin'
     | '/dashboard/pluto-audit'
     | '/dashboard/pluto-functions'
+    | '/dashboard/pluto-migrations'
     | '/dashboard/pluto-schema'
     | '/dashboard/projects'
     | '/dashboard/rbac'
@@ -803,6 +816,13 @@ declare module '@tanstack/react-router' {
       path: '/pluto-schema'
       fullPath: '/dashboard/pluto-schema'
       preLoaderRoute: typeof DashboardPlutoSchemaRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/pluto-migrations': {
+      id: '/dashboard/pluto-migrations'
+      path: '/pluto-migrations'
+      fullPath: '/dashboard/pluto-migrations'
+      preLoaderRoute: typeof DashboardPlutoMigrationsRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/pluto-functions': {
@@ -1050,6 +1070,7 @@ interface DashboardRouteChildren {
   DashboardPlutoAdminRoute: typeof DashboardPlutoAdminRoute
   DashboardPlutoAuditRoute: typeof DashboardPlutoAuditRoute
   DashboardPlutoFunctionsRoute: typeof DashboardPlutoFunctionsRoute
+  DashboardPlutoMigrationsRoute: typeof DashboardPlutoMigrationsRoute
   DashboardPlutoSchemaRoute: typeof DashboardPlutoSchemaRoute
   DashboardProjectsRoute: typeof DashboardProjectsRoute
   DashboardRbacRoute: typeof DashboardRbacRoute
@@ -1091,6 +1112,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardPlutoAdminRoute: DashboardPlutoAdminRoute,
   DashboardPlutoAuditRoute: DashboardPlutoAuditRoute,
   DashboardPlutoFunctionsRoute: DashboardPlutoFunctionsRoute,
+  DashboardPlutoMigrationsRoute: DashboardPlutoMigrationsRoute,
   DashboardPlutoSchemaRoute: DashboardPlutoSchemaRoute,
   DashboardProjectsRoute: DashboardProjectsRoute,
   DashboardRbacRoute: DashboardRbacRoute,
