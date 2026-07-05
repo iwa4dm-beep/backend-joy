@@ -643,6 +643,57 @@ function TerminalCard() {
     try { localStorage.removeItem(HISTORY_STORAGE_KEY); } catch { /* ignore */ }
   }
 
+  // Filter + sort — single source of truth for both render and history CSV export.
+  const sortedFiltered = useMemo(() => {
+    const filtered = probes.filter((p) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "errors") return !!p.error;
+      return p.status === statusFilter;
+    });
+    const statusRank: Record<ModuleProbe["status"], number> = { down: 0, pending: 1, up: 2 };
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "status") return statusRank[a.status] - statusRank[b.status];
+      if (sortBy === "latency") return (b.latency_ms ?? 0) - (a.latency_ms ?? 0);
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      return 0;
+    });
+  }, [probes, statusFilter, sortBy]);
+
+  function exportHistoryCsv() {
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const names = new Set(sortedFiltered.map((p) => p.name));
+    const columns = ["timestamp", "iso_timestamp", "module", "status", "http_code", "latency_ms", "attempts", "error"] as const;
+    const rows: string[] = [];
+    for (const point of history) {
+      // Preserve the sortedFiltered order within each timestamp bucket.
+      for (const p of sortedFiltered) {
+        const m = point.modules.find((mm) => mm.name === p.name);
+        if (!m || !names.has(m.name)) continue;
+        rows.push([
+          point.ts,
+          new Date(point.ts).toISOString(),
+          m.name,
+          m.status,
+          m.code ?? "",
+          m.latency_ms ?? "",
+          m.attempts ?? "",
+          m.error ?? "",
+        ].map(esc).join(","));
+      }
+    }
+    const csv = "\uFEFF" + [columns.map(esc).join(","), ...rows].join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pluto-history-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const headerColor =
     ready.kind === "ok" ? "text-primary" :
     ready.kind === "degraded" ? "text-amber-500" :
