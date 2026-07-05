@@ -912,6 +912,37 @@ function TerminalCard() {
           {history.length > 0 && (
             <button
               type="button"
+              onClick={exportHistoryJson}
+              aria-label="Download full history as JSON"
+              className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              history json
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            aria-label="Import history from JSON file"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            import
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="sr-only"
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importHistoryFromFile(f);
+              e.target.value = "";
+            }}
+          />
+          {history.length > 0 && (
+            <button
+              type="button"
               onClick={clearHistory}
               aria-label="Clear persisted probe history"
               className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -919,6 +950,24 @@ function TerminalCard() {
               clear history
             </button>
           )}
+          <button
+            type="button"
+            onClick={copySnapshotJson}
+            aria-label={copiedJson ? "Snapshot JSON copied to clipboard" : "Copy snapshot JSON to clipboard"}
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {copiedJson ? "copied ✓" : "copy json"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHelp((v) => !v)}
+            aria-expanded={showHelp}
+            aria-controls="terminal-help-panel"
+            aria-label="Toggle keyboard shortcut help"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            ?
+          </button>
           <button
             type="button"
             onClick={copy}
@@ -929,6 +978,33 @@ function TerminalCard() {
           </button>
         </div>
       </div>
+      {/* Screen-reader-only live region: announces overall status transitions and import results. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announceMsg}
+      </div>
+      {importMsg && (
+        <div role="status" className="border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+          {importMsg}
+        </div>
+      )}
+      {showHelp && (
+        <div
+          id="terminal-help-panel"
+          role="region"
+          aria-label="Keyboard shortcuts"
+          className="border-b border-border bg-muted/20 px-4 py-3 text-xs"
+        >
+          <div className="mb-1 font-medium">keyboard shortcuts</div>
+          <ul className="grid gap-1 text-muted-foreground sm:grid-cols-2">
+            <li><kbd className="rounded border border-border bg-background px-1">r</kbd> — refresh all module probes</li>
+            <li><kbd className="rounded border border-border bg-background px-1">/</kbd> — focus module search</li>
+            <li><kbd className="rounded border border-border bg-background px-1">?</kbd> — toggle this help panel</li>
+            <li><kbd className="rounded border border-border bg-background px-1">Esc</kbd> — close module details / clear search</li>
+            <li><kbd className="rounded border border-border bg-background px-1">→</kbd> / <kbd className="rounded border border-border bg-background px-1">←</kbd> — expand / collapse focused module</li>
+            <li><kbd className="rounded border border-border bg-background px-1">Tab</kbd> — cycles inside open module details</li>
+          </ul>
+        </div>
+      )}
       {showRetention && (
         <div
           id="terminal-retention-panel"
