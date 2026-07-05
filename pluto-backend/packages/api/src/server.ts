@@ -9,6 +9,8 @@ import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { restRoutes } from './routes/rest.js';
 import { storageRoutes } from './routes/storage.js';
+import { realtimeRoutes } from './routes/realtime.js';
+
 
 
 async function main() {
