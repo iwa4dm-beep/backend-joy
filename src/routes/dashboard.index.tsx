@@ -18,10 +18,53 @@ function readPersistedPlan(): Plan | undefined {
   } catch { return undefined; }
 }
 
+const PLAN_SEO: Record<Plan, { title: string; description: string }> = {
+  "self-hosted": {
+    title: "Self-Hosted onboarding — Pluto BaaS Dashboard",
+    description: "Set up a self-hosted Pluto instance with Docker Compose, Fly, Railway or Render. MIT-licensed, unlimited scale, generated .env in 4 steps.",
+  },
+  starter: {
+    title: "Cloud Starter onboarding — Pluto BaaS Dashboard",
+    description: "Launch a managed Pluto Cloud Starter project — 10k MAU, 10 GB Postgres, 500k Edge invocations, 1-click deploy to Fly or Railway.",
+  },
+  business: {
+    title: "Business onboarding — Pluto BaaS Dashboard",
+    description: "Provision Pluto Business — 100k MAU, read replicas, SAML SSO, audit log export, dedicated regions on Render or Fly.",
+  },
+};
+const DEFAULT_SEO = {
+  title: "Dashboard — Pluto BaaS",
+  description: "Manage your Pluto BaaS projects: users, tables, storage buckets, logs, keys, RLS and more.",
+};
+
 export const Route = createFileRoute("/dashboard/")({
   validateSearch: (s: Record<string, unknown>): { plan?: Plan } => {
     const p = s.plan;
     return p === "self-hosted" || p === "starter" || p === "business" ? { plan: p } : {};
+  },
+  loaderDeps: ({ search }) => ({ plan: search.plan }),
+  loader: ({ deps }) => ({ plan: deps.plan }),
+  head: ({ loaderData }) => {
+    const plan = loaderData?.plan;
+    const seo = plan ? PLAN_SEO[plan] : DEFAULT_SEO;
+    const url = plan
+      ? `https://backend-joy.lovable.app/dashboard?plan=${plan}`
+      : "https://backend-joy.lovable.app/dashboard";
+    return {
+      meta: [
+        { title: seo.title },
+        { name: "description", content: seo.description },
+        { name: "robots", content: "noindex" },
+        { property: "og:title", content: seo.title },
+        { property: "og:description", content: seo.description },
+        { property: "og:type", content: "website" },
+        { property: "og:url", content: url },
+        { name: "twitter:card", content: "summary_large_image" },
+        { name: "twitter:title", content: seo.title },
+        { name: "twitter:description", content: seo.description },
+      ],
+      links: [{ rel: "canonical", href: url }],
+    };
   },
   component: Overview,
 });
