@@ -113,18 +113,31 @@ export async function authRoutes(app: FastifyInstance, cfg: Config) {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = signupBody.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
+    if (!parsed.success) { authOps.inc({ op: 'signup', result: 'fail' }); return reply.code(400).send({ error: 'validation', issues: parsed.error.issues }); }
     const { email, password, data } = parsed.data;
 
     const existing = await sql`SELECT id FROM auth.users WHERE lower(email) = ${email} LIMIT 1`;
-    if (existing.length) return reply.code(409).send({ error: 'user_already_exists', message: 'Email already registered' });
+    if (existing.length) { authOps.inc({ op: 'signup', result: 'fail' }); return reply.code(409).send({ error: 'user_already_exists', message: 'Email already registered' }); }
 
     const encrypted_password = await argon2.hash(password, { type: argon2.argon2id });
+    const emailAutoConfirm = !emailEnabled(); // when SMTP off, auto-confirm (dev mode)
     const [user] = await sql`
       INSERT INTO auth.users (email, encrypted_password, raw_user_meta_data, email_confirmed_at)
-      VALUES (${email}, ${encrypted_password}, ${sql.json(data || {})}, now())
+      VALUES (${email}, ${encrypted_password}, ${sql.json(data || {})}, ${emailAutoConfirm ? sql`now()` : null})
       RETURNING *
     `;
+
+    // Send verification email if SMTP configured
+    if (emailEnabled()) {
+      const { token, hash } = newToken();
+      const expires_at = new Date(Date.now() + 24 * 3600 * 1000);
+      await sql`INSERT INTO auth.email_tokens (user_id, type, token_hash, expires_at)
+                VALUES (${user.id}, 'signup', ${hash}, ${expires_at})`;
+      const { subject, html } = verificationEmail(token, email);
+      await sendMail(cfg, email, subject, html, 'signup');
+    }
+
+    authOps.inc({ op: 'signup', result: 'ok' });
     const session = await issueSession(app, cfg, user);
     reply.code(201).send(session);
   });
