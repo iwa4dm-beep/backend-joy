@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   Check, ChevronRight, ChevronLeft, Copy, Cloud, Container,
-  Rocket, Server, Sparkles, X,
+  Rocket, Server, Sparkles, X, AlertTriangle, Download,
 } from "lucide-react";
 
 export type Plan = "self-hosted" | "starter" | "business";
@@ -90,6 +90,54 @@ function generateEnv(o: { plan: Plan; target: Target; projectName: string; regio
   ].join("\n");
 }
 
+const REQUIRED_ENV_KEYS = [
+  "PLUTO_URL",
+  "PLUTO_REGION",
+  "PLUTO_ANON_KEY",
+  "PLUTO_SERVICE_ROLE_KEY",
+  "PLUTO_JWT_SECRET",
+  "VITE_PLUTO_URL",
+  "VITE_PLUTO_ANON_KEY",
+];
+
+type EnvIssue = { key: string; reason: string };
+
+function validateEnv(envText: string): EnvIssue[] {
+  const issues: EnvIssue[] = [];
+  const map = new Map<string, string>();
+  for (const line of envText.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq === -1) continue;
+    const k = t.slice(0, eq).trim();
+    // Strip trailing inline comment
+    const v = t.slice(eq + 1).replace(/\s+#.*$/, "").trim();
+    map.set(k, v);
+  }
+  for (const k of REQUIRED_ENV_KEYS) {
+    const v = map.get(k);
+    if (v === undefined) { issues.push({ key: k, reason: "missing" }); continue; }
+    if (!v) { issues.push({ key: k, reason: "empty" }); continue; }
+    if (/YOUR[-_ ]|CHANGE[-_ ]?ME|<.*>/i.test(v)) issues.push({ key: k, reason: "placeholder value" });
+    if ((k.endsWith("_KEY") || k.endsWith("_SECRET")) && v.length < 16) issues.push({ key: k, reason: "too short (<16 chars)" });
+    if (k.endsWith("URL") && !/^https?:\/\//.test(v)) issues.push({ key: k, reason: "must start with http(s)://" });
+  }
+  return issues;
+}
+
+function downloadFile(name: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan; onDismiss: () => void }) {
   const persisted = useMemo(loadPersisted, []);
   const startsFromPersisted = persisted.plan === initialPlan;
@@ -136,6 +184,43 @@ export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan
     serviceKey: keys.service,
     jwt: keys.jwt,
   });
+
+  const envIssues = useMemo(() => validateEnv(envText), [envText]);
+  const projectNameMissing = !projectName.trim();
+
+  const deployCommands = (() => {
+    const meta = TARGET_META[target];
+    const deployUrl = meta.deployUrl.replace("YOUR-APP", slug(projectName || "my-app"));
+    return `# 1. deploy\n${meta.command}\n\n# 2. wait for readiness\ncurl ${deployUrl}/readyz\n\n# 3. finish setup in Dashboard`;
+  })();
+
+  function downloadReport() {
+    const stamp = new Date().toISOString();
+    const lines = [
+      `Pluto BaaS — Onboarding Report`,
+      `generated: ${stamp}`,
+      ``,
+      `Plan:         ${PLAN_META[plan].title} (${plan})`,
+      `Target:       ${TARGET_META[target].title} (${target})`,
+      `Project name: ${projectName || "(unset)"}`,
+      `Slug:         ${slug(projectName || "my-app")}`,
+      `Region:       ${region}`,
+      ``,
+      `── Validation ──`,
+      envIssues.length === 0
+        ? `OK — all ${REQUIRED_ENV_KEYS.length} required env keys present.`
+        : envIssues.map((i) => `WARN ${i.key}: ${i.reason}`).join("\n"),
+      ``,
+      `── .env ──`,
+      envText,
+      ``,
+      `── Deploy commands ──`,
+      deployCommands,
+      ``,
+    ];
+    const safeName = slug(projectName || "my-app");
+    downloadFile(`pluto-onboarding-${safeName}-${stamp.replace(/[:.]/g, "-")}.txt`, lines.join("\n"), "text/plain");
+  }
 
   const steps: { title: string; render: () => React.ReactNode }[] = [
     {
@@ -228,6 +313,32 @@ export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan
               <code>{envText}</code>
             </pre>
           </div>
+
+          {projectNameMissing && (
+            <div role="alert" className="mt-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden="true" />
+              <span>Project name is empty — go back to step 2 to set it before finishing.</span>
+            </div>
+          )}
+
+          {envIssues.length > 0 ? (
+            <div role="alert" className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs">
+              <div className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                {envIssues.length} issue{envIssues.length === 1 ? "" : "s"} in generated .env
+              </div>
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-muted-foreground">
+                {envIssues.map((i) => (
+                  <li key={i.key}><code className="font-mono">{i.key}</code> — {i.reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-500">
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              All {REQUIRED_ENV_KEYS.length} required env keys look good.
+            </div>
+          )}
         </div>
       ),
     },
@@ -256,7 +367,23 @@ export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan
               >
                 {plan === "business" ? "Enterprise settings" : "Run smoke tests"}
               </Link>
+              <button
+                type="button"
+                onClick={downloadReport}
+                aria-label="Download onboarding report as text file"
+                className="inline-flex items-center gap-1.5 rounded-md border border-input px-3.5 py-2 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden="true" /> Download report
+              </button>
             </div>
+            {envIssues.length > 0 && (
+              <div role="alert" className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden="true" />
+                <span>
+                  {envIssues.length} unresolved .env issue{envIssues.length === 1 ? "" : "s"} — review step 3 before deploying.
+                </span>
+              </div>
+            )}
           </div>
         );
       },

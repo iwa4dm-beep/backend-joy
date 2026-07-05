@@ -392,6 +392,9 @@ async function probeWithRetry(url: string, path: string, signal: AbortSignal): P
   return { name: "", path, status: "down", code: last.code, latency_ms: last.latency_ms, error: last.error, attempts: MAX_ATTEMPTS };
 }
 
+const HISTORY_MAX = 20;
+type HistoryPoint = { ts: number; up: number; down: number; total: number; avg_latency_ms: number };
+
 function TerminalCard() {
   const [copied, setCopied] = useState(false);
   const [ready, setReady] = useState<ReadyState>({ kind: "loading" });
@@ -400,6 +403,7 @@ function TerminalCard() {
   const [tick, setTick] = useState(0);
   const [nonce, setNonce] = useState(0);
   const [refreshMs, setRefreshMs] = useState<number>(0);
+  const [history, setHistory] = useState<HistoryPoint[]>([]);
   const cmd = "git clone pluto-baas && cd pluto-baas && docker compose up -d";
   const apiUrl = (import.meta.env.VITE_PLUTO_URL as string | undefined) ?? "http://localhost:3000";
 
@@ -419,6 +423,17 @@ function TerminalCard() {
       );
       if (cancelled) return;
       setProbes(results);
+      const upList = results.filter((r) => r.status === "up");
+      const point: HistoryPoint = {
+        ts: Date.now(),
+        up: upList.length,
+        down: results.filter((r) => r.status === "down").length,
+        total: results.length,
+        avg_latency_ms: upList.length
+          ? Math.round(upList.reduce((a, r) => a + (r.latency_ms ?? 0), 0) / upList.length)
+          : 0,
+      };
+      setHistory((h) => [...h, point].slice(-HISTORY_MAX));
 
       const core = results[0];
       if (!core || core.status === "down") {
@@ -490,6 +505,30 @@ function TerminalCard() {
     URL.revokeObjectURL(url);
   }
 
+  function exportCsv() {
+    const esc = (v: string | number | null | undefined) => {
+      if (v === null || v === undefined) return "";
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ["generated_at", "api_url", "overall_status", "module", "path", "status", "http_code", "latency_ms", "attempts", "error"];
+    const generated = new Date().toISOString();
+    const rows = probes.map((p) => [
+      generated, apiUrl, ready.kind, p.name, p.path, p.status,
+      p.code ?? "", p.latency_ms ?? "", p.attempts ?? "", p.error ?? "",
+    ].map(esc).join(","));
+    const csv = [header.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pluto-status-${generated.replace(/[:.]/g, "-")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const headerColor =
     ready.kind === "ok" ? "text-primary" :
     ready.kind === "degraded" ? "text-amber-500" :
@@ -549,7 +588,15 @@ function TerminalCard() {
             aria-label="Download status snapshot as JSON"
             className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            export
+            json
+          </button>
+          <button
+            type="button"
+            onClick={exportCsv}
+            aria-label="Download status snapshot as CSV"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            csv
           </button>
           <button
             type="button"
@@ -575,6 +622,10 @@ function TerminalCard() {
           <div className="mt-1 text-muted-foreground">  set VITE_PLUTO_URL, or run `docker compose up -d`</div>
         )}
 
+        {history.length >= 2 && <TrendChart history={history} />}
+
+
+
         <div className="mt-3 text-muted-foreground">module              status   latency   http   try</div>
         <div className="text-muted-foreground">──────              ──────   ───────   ────   ───</div>
         {probes.map((p) => {
@@ -599,6 +650,60 @@ function TerminalCard() {
     </div>
   );
 }
+
+function TrendChart({ history }: { history: HistoryPoint[] }) {
+  const W = 320;
+  const H = 56;
+  const PAD_X = 4;
+  const PAD_Y = 6;
+  const n = history.length;
+  const maxLat = Math.max(50, ...history.map((h) => h.avg_latency_ms));
+  const total = history[history.length - 1]?.total ?? 1;
+
+  const x = (i: number) => n === 1 ? W / 2 : PAD_X + (i * (W - PAD_X * 2)) / (n - 1);
+  const yLat = (v: number) => H - PAD_Y - (v / maxLat) * (H - PAD_Y * 2);
+  const yUp = (up: number) => H - PAD_Y - (up / total) * (H - PAD_Y * 2);
+
+  const latPath = history.map((h, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${yLat(h.avg_latency_ms).toFixed(1)}`).join(" ");
+  const upPath = history.map((h, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${yUp(h.up).toFixed(1)}`).join(" ");
+  const latest = history[history.length - 1];
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>trend · last {n} probe{n === 1 ? "" : "s"}</span>
+        <span>
+          <span className="text-emerald-500">■</span> up {latest.up}/{latest.total}
+          {"  "}
+          <span className="text-primary">■</span> avg {latest.avg_latency_ms}ms (max {maxLat}ms)
+        </span>
+      </div>
+      <svg
+        role="img"
+        aria-label={`Latency and uptime trend across the last ${n} refreshes. Current average latency ${latest.avg_latency_ms}ms, ${latest.up} of ${latest.total} modules up.`}
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="block h-14 w-full rounded border border-border bg-muted/20"
+      >
+        <path d={upPath} fill="none" stroke="currentColor" strokeWidth="1.25" className="text-emerald-500 opacity-70" />
+        <path d={latPath} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" />
+        {history.map((h, i) => (
+          <circle
+            key={h.ts}
+            cx={x(i)}
+            cy={yLat(h.avg_latency_ms)}
+            r={i === n - 1 ? 2.5 : 1.5}
+            className={h.down > 0 ? "fill-destructive" : "fill-primary"}
+          >
+            <title>{`${new Date(h.ts).toLocaleTimeString()} — ${h.up}/${h.total} up · avg ${h.avg_latency_ms}ms`}</title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+
 
 
 
