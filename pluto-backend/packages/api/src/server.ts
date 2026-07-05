@@ -25,6 +25,10 @@ import { branchesRoutes } from './routes/branches.js';
 import { graphqlRoutes } from './routes/graphql.js';
 import { sdkRoutes } from './routes/sdk.js';
 import { authAdvancedRoutes } from './routes/auth-advanced.js';
+import { orgsRoutes } from './routes/orgs.js';
+import { realtimePlusRoutes } from './routes/realtime-plus.js';
+import { storagePlusRoutes } from './routes/storage-plus.js';
+import { functionsPlusRoutes } from './routes/functions-plus.js';
 import { metricsPlugin } from './observability/metrics.js';
 
 
@@ -99,6 +103,10 @@ async function main() {
   await graphqlRoutes(app, cfg);
   await sdkRoutes(app, cfg);
   await authAdvancedRoutes(app, cfg);
+  await orgsRoutes(app, cfg);
+  await realtimePlusRoutes(app, cfg);
+  await storagePlusRoutes(app, cfg);
+  await functionsPlusRoutes(app, cfg);
 
 
 
