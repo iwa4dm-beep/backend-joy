@@ -8,7 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Copy, KeyRound, Loader2, LogIn, Plus, RefreshCw, Server, Trash2, UserPlus } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, LogIn, Plus, RefreshCw, RotateCw, Server, Trash2, UserPlus } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export const Route = createFileRoute("/dashboard/pluto-admin")({
   component: PlutoAdminPage,
@@ -132,9 +134,19 @@ function PlutoAdminPage() {
   }
   async function revokeKey(id: string) {
     if (!selected) return;
+    if (!confirm("Revoke this API key? Clients using it will immediately fail.")) return;
     try { await api(url, token, `/admin/v1/projects/${selected}/keys/${id}`, { method: "DELETE" }); await loadKeys(selected); }
     catch (e: any) { setErr(e.message); }
   }
+  async function rotateKey(id: string) {
+    if (!selected) return;
+    if (!confirm("Rotate this key? The old key will be revoked and a replacement minted (shown once).")) return;
+    try {
+      const r = await api<ApiKey & { api_key: string }>(url, token, `/admin/v1/projects/${selected}/keys/${id}/rotate`, { method: "POST" });
+      setMinted(r.api_key); await loadKeys(selected);
+    } catch (e: any) { setErr(e.message); }
+  }
+
 
   return (
     <div className="space-y-6">
@@ -241,14 +253,7 @@ function PlutoAdminPage() {
                       </Select>
                       <Button onClick={createKey}><Plus className="h-4 w-4 mr-1"/>Mint</Button>
                     </div>
-                    {minted && (
-                      <Alert>
-                        <AlertDescription className="flex items-center justify-between gap-2">
-                          <code className="text-xs break-all">{minted}</code>
-                          <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(minted); }}><Copy className="h-4 w-4"/></Button>
-                        </AlertDescription>
-                      </Alert>
-                    )}
+                    <MintedKeyDialog value={minted} onClose={() => setMinted(null)} />
                     <ul className="divide-y">
                       {keys.map(k => (
                         <li key={k.id} className="py-2 flex items-center justify-between">
@@ -256,12 +261,20 @@ function PlutoAdminPage() {
                             <div className="font-medium">{k.name} <Badge variant="outline" className="ml-2">{k.role}</Badge></div>
                             <div className="text-xs text-muted-foreground font-mono">{k.key_prefix}… · {new Date(k.created_at).toLocaleString()}</div>
                           </div>
-                          {!k.revoked_at
-                            ? <Button size="sm" variant="ghost" onClick={() => revokeKey(k.id)}><Trash2 className="h-4 w-4 text-destructive"/></Button>
-                            : <Badge variant="destructive">revoked</Badge>}
+                          <div className="flex items-center gap-2">
+                            {k.revoked_at
+                              ? <Badge variant="destructive">revoked</Badge>
+                              : (
+                                <>
+                                  <Button size="sm" variant="outline" onClick={() => rotateKey(k.id)} title="Rotate"><RotateCw className="h-4 w-4 mr-1"/>Rotate</Button>
+                                  <Button size="sm" variant="ghost" onClick={() => revokeKey(k.id)} title="Revoke"><Trash2 className="h-4 w-4 text-destructive"/></Button>
+                                </>
+                              )}
+                          </div>
                         </li>
                       ))}
                     </ul>
+
                   </>
                 )}
               </CardContent>
@@ -284,5 +297,41 @@ function LoginRow({ onLogin, disabled }: { onLogin: (e: string, p: string) => vo
         {disabled ? <Loader2 className="h-4 w-4 animate-spin"/> : <><LogIn className="h-4 w-4 mr-1"/>Sign in</>}
       </Button>
     </div>
+  );
+}
+
+function MintedKeyDialog({ value, onClose }: { value: string | null; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const [ack, setAck] = useState(false);
+  useEffect(() => { if (value) { setCopied(false); setAck(false); } }, [value]);
+  if (!value) return null;
+  async function doCopy() {
+    try { await navigator.clipboard.writeText(value!); setCopied(true); } catch { /* ignore */ }
+  }
+  return (
+    <Dialog open={!!value} onOpenChange={(o) => { if (!o && ack) onClose(); }}>
+      <DialogContent className="sm:max-w-lg" onInteractOutside={(e) => e.preventDefault()}>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><KeyRound className="h-4 w-4"/> Copy your new API key</DialogTitle>
+          <DialogDescription>
+            This key is shown <b>once</b>. Store it in a secret manager now — you will not be able to view it again.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded-md border bg-muted/40 p-3 font-mono text-xs break-all select-all">{value}</div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={doCopy}>
+            {copied ? <Check className="h-4 w-4 mr-1"/> : <Copy className="h-4 w-4 mr-1"/>}
+            {copied ? "Copied" : "Copy to clipboard"}
+          </Button>
+        </div>
+        <label className="flex items-start gap-2 text-sm">
+          <Checkbox checked={ack} onCheckedChange={(v) => setAck(!!v)} />
+          <span>I have saved this key. I understand it cannot be recovered.</span>
+        </label>
+        <DialogFooter>
+          <Button disabled={!ack} onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

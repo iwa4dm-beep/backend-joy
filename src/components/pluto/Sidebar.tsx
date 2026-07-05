@@ -1,10 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Activity, Archive, Building2, Cloud, Database, Files, Gauge, GitBranch, Gauge as GaugeAlt, Globe, HeartPulse, KeyRound, LineChart, LogOut, Package, Radio, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, Sparkles, Terminal, Users, Waves, Zap } from "lucide-react";
+import { Activity, Archive, Building2, Cloud, Database, Files, Gauge, GitBranch, Gauge as GaugeAlt, Globe, HeartPulse, KeyRound, LineChart, LogOut, Package, Radio, Rocket, ScrollText, Search, Server, Settings, Shield, ShieldAlert, ShieldCheck, Sparkles, Terminal, Users, Waves, Zap } from "lucide-react";
 import { useAuth } from "@/lib/pluto/auth-context";
 import { WorkspaceSwitcher } from "@/components/pluto/WorkspaceSwitcher";
 
 const items = [
   { to: "/dashboard", label: "Overview", icon: Gauge },
+  { to: "/dashboard/pluto-admin", label: "Pluto Admin", icon: Server },
+  { to: "/dashboard/pluto-functions", label: "Pluto Functions", icon: Rocket },
   { to: "/dashboard/projects", label: "Projects & Keys", icon: KeyRound },
   { to: "/dashboard/workspaces", label: "Workspaces", icon: Building2 },
   { to: "/dashboard/api", label: "REST endpoints", icon: Radio },
