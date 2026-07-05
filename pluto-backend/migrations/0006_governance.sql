@@ -45,10 +45,21 @@ alter table admin.audit_log alter column result set default 'ok';
 alter table admin.audit_log alter column result set not null;
 
 do $$ begin
-  alter table admin.audit_log
-    add constraint audit_log_project_fk
-    foreign key (project_id) references admin.projects(id) on delete cascade;
-exception when duplicate_object then null; end $$;
+  if not exists (
+    select 1
+      from pg_constraint c
+      join pg_attribute a
+        on a.attrelid = c.conrelid
+       and a.attnum = any(c.conkey)
+     where c.conrelid = 'admin.audit_log'::regclass
+       and c.contype = 'f'
+       and a.attname = 'project_id'
+  ) then
+    alter table admin.audit_log
+      add constraint audit_log_project_fk
+      foreign key (project_id) references admin.projects(id) on delete cascade;
+  end if;
+end $$;
 
 do $$ begin
   alter table admin.audit_log

@@ -282,6 +282,7 @@ export async function complianceRoutes(app: FastifyInstance, cfg: Config) {
       select id, actor_id, project_id, action, resource_type, resource_id, params, result, created_at
       from admin.audit_log
       where id >= ${fromId}
+        and (${body.project_id ?? null}::uuid is null or project_id = ${body.project_id ?? null}::uuid)
       order by id asc limit 5000`;
     if (rows.length === 0) return { sealed: 0, from_id: fromId, to_id: fromId - 1 };
     const hasher = createHash('sha256');
@@ -305,7 +306,7 @@ export async function complianceRoutes(app: FastifyInstance, cfg: Config) {
     let prev = '0'.repeat(64);
     for (const s of seals) {
       if (s.prev_hash !== prev) issues.push({ seal: s.id, kind: 'chain_break' });
-      const rows = await sql<any[]>`select id, actor_id, project_id, action, resource_type, resource_id, params, result, created_at from admin.audit_log where id between ${s.from_id} and ${s.to_id} order by id asc`;
+      const rows = await sql<any[]>`select id, actor_id, project_id, action, resource_type, resource_id, params, result, created_at from admin.audit_log where id between ${s.from_id} and ${s.to_id} and (${s.project_id ?? null}::uuid is null or project_id = ${s.project_id ?? null}::uuid) order by id asc`;
       const h = createHash('sha256'); h.update(prev);
       for (const r of rows) h.update(JSON.stringify(r));
       if (h.digest('hex') !== s.chain_hash) issues.push({ seal: s.id, kind: 'hash_mismatch' });
