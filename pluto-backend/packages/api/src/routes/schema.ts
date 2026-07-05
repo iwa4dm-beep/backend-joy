@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { getSql } from '../db/pool.js';
 import type { Config } from '../config.js';
 import { requireAuth, requireProjectRole } from '../util/auth.js';
