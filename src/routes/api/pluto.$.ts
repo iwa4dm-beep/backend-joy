@@ -68,7 +68,7 @@ async function handle({ request, params }: { request: Request; params: { _splat?
         error: err instanceof Error ? err.message : String(err),
         target,
       }),
-      { status: 502, headers: { "content-type": "application/json" } },
+      { status: 200, headers: { "content-type": "application/json", "x-pluto-offline": "1" } },
     );
   }
 }
