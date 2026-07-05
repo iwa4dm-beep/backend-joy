@@ -393,9 +393,17 @@ async function probeWithRetry(url: string, path: string, signal: AbortSignal): P
 }
 
 const HISTORY_MAX = 20;
+// Retention policy: drop points older than 24h even if under the count cap,
+// so a laptop opened after a long break doesn't render stale probes as "trend".
+const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const HISTORY_STORAGE_KEY = "pluto.terminal.history.v1";
 type HistoryModule = { name: string; status: ModuleProbe["status"]; code?: number; latency_ms?: number; error?: string; attempts?: number };
 type HistoryPoint = { ts: number; up: number; down: number; total: number; avg_latency_ms: number; modules: HistoryModule[] };
+
+function pruneHistory(h: HistoryPoint[]): HistoryPoint[] {
+  const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
+  return h.filter((p) => p.ts >= cutoff).slice(-HISTORY_MAX);
+}
 
 function loadHistory(): HistoryPoint[] {
   if (typeof window === "undefined") return [];
@@ -404,15 +412,22 @@ function loadHistory(): HistoryPoint[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((h): h is HistoryPoint =>
+    const valid = parsed.filter((h): h is HistoryPoint =>
       h && typeof h.ts === "number" && Array.isArray(h.modules)
-    ).slice(-HISTORY_MAX);
+    );
+    const pruned = pruneHistory(valid);
+    // Rewrite storage if we dropped anything so growth stays bounded across reloads.
+    if (pruned.length !== valid.length) {
+      try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(pruned)); } catch { /* quota */ }
+    }
+    return pruned;
   } catch { return []; }
 }
 
 function saveHistory(h: HistoryPoint[]) {
   try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(h)); } catch { /* quota */ }
 }
+
 
 function TerminalCard() {
   const [copied, setCopied] = useState(false);
