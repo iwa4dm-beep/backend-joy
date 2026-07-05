@@ -19,12 +19,13 @@ export type AuditRow = {
 export async function logAudit(cfg: Config, row: AuditRow): Promise<void> {
   try {
     const sql = getSql(cfg);
+    const params = row.params ?? row.detail ?? row.metadata ?? {};
     await sql`
       insert into admin.audit_log
         (actor_id, project_id, action, resource_type, resource_id, params, result, duration_ms, error_message)
       values
         (${row.actor_id ?? null}, ${row.project_id ?? null}, ${row.action}, ${row.resource_type ?? 'unknown'},
-         ${row.resource_id ?? null}, ${sql.json((row.params ?? {}) as any)},
+         ${row.resource_id ?? row.target ?? null}, ${sql.json(params as any)},
          ${row.result ?? 'ok'}, ${row.duration_ms ?? null}, ${row.error_message ?? null})`;
   } catch {
     // Never let audit failures break the request.

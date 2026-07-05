@@ -6,7 +6,7 @@
 create table if not exists admin.audit_log (
   id             bigserial primary key,
   actor_id       uuid,
-  project_id     uuid,
+  project_id     uuid references admin.projects(id) on delete cascade,
   action         text not null,
   resource_type  text not null,
   resource_id    text,
@@ -16,6 +16,56 @@ create table if not exists admin.audit_log (
   error_message  text,
   created_at     timestamptz not null default now()
 );
+
+-- Earlier installs created admin.audit_log in 0001 with only target/metadata/ip.
+-- Bring those databases up to the Phase 9 shape before creating indexes or using
+-- the newer audit routes. Keep target/metadata/ip for backward compatibility.
+alter table admin.audit_log add column if not exists project_id uuid;
+alter table admin.audit_log add column if not exists resource_type text;
+alter table admin.audit_log add column if not exists resource_id text;
+alter table admin.audit_log add column if not exists params jsonb;
+alter table admin.audit_log add column if not exists result text;
+alter table admin.audit_log add column if not exists duration_ms integer;
+alter table admin.audit_log add column if not exists error_message text;
+
+update admin.audit_log
+   set resource_type = coalesce(resource_type, 'legacy'),
+       resource_id = coalesce(resource_id, target),
+       params = coalesce(params, metadata, '{}'::jsonb),
+       result = coalesce(result, 'ok')
+ where resource_type is null
+    or params is null
+    or result is null;
+
+alter table admin.audit_log alter column resource_type set default 'unknown';
+alter table admin.audit_log alter column resource_type set not null;
+alter table admin.audit_log alter column params set default '{}'::jsonb;
+alter table admin.audit_log alter column params set not null;
+alter table admin.audit_log alter column result set default 'ok';
+alter table admin.audit_log alter column result set not null;
+
+do $$ begin
+  if not exists (
+    select 1
+      from pg_constraint c
+      join pg_attribute a
+        on a.attrelid = c.conrelid
+       and a.attnum = any(c.conkey)
+     where c.conrelid = 'admin.audit_log'::regclass
+       and c.contype = 'f'
+       and a.attname = 'project_id'
+  ) then
+    alter table admin.audit_log
+      add constraint audit_log_project_fk
+      foreign key (project_id) references admin.projects(id) on delete cascade;
+  end if;
+end $$;
+
+do $$ begin
+  alter table admin.audit_log
+    add constraint audit_log_result_check
+    check (result in ('ok','error','blocked'));
+exception when duplicate_object then null; end $$;
 
 create index if not exists audit_log_created_at_idx on admin.audit_log (created_at desc);
 create index if not exists audit_log_project_idx    on admin.audit_log (project_id, created_at desc);
