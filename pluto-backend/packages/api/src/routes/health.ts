@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { HeadBucketCommand } from '@aws-sdk/client-s3';
-import { pingDb } from '../db/pool.js';
+import { pingDb, getSql } from '../db/pool.js';
 import { getS3 } from '../storage/s3.js';
 import type { Config } from '../config.js';
+
 
 const startTime = Date.now();
 
