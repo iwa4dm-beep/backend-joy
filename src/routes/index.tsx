@@ -622,12 +622,6 @@ function TerminalCard() {
     return () => clearInterval(id);
   }, []);
 
-  function copy() {
-    void navigator.clipboard.writeText(cmd);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
   function exportSnapshot() {
     const snapshot = {
       generated_at: new Date().toISOString(),
