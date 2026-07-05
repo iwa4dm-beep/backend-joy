@@ -114,6 +114,28 @@ function Overview() {
     })();
   }, []);
 
+  // Poll the real backend's public health endpoints every 30s
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      const t0 = performance.now();
+      const check = async (path: string) => {
+        try {
+          const r = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+          if (!r.ok) return false;
+          const j = await r.json().catch(() => ({} as any));
+          const s = (j as any).status;
+          return s === "ok" || s === "ready";
+        } catch { return false; }
+      };
+      const [l, r, m] = await Promise.all([check("/livez"), check("/readyz"), check("/health/migrations")]);
+      if (!cancelled) setHealth({ live: l, ready: r, mig: m, ms: Math.round(performance.now() - t0) });
+    };
+    probe();
+    const id = setInterval(probe, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // Accent hues drawn from theme's chart tokens for a consistent, meaningful palette:
   // users = identity (chart-1), tables = data (chart-2), buckets = files (chart-4), logs = activity (chart-5).
   const cards: {
