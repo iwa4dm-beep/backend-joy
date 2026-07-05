@@ -354,32 +354,39 @@ function Overview() {
             <Sparkles className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 id="connect-heading" className="text-sm font-semibold">Connect your frontend</h2>
           </div>
-          <span className="font-mono text-[11px] text-muted-foreground">@pluto/client</span>
+          <span className="font-mono text-[11px] text-muted-foreground">@pluto/js</span>
         </div>
         <div className="p-5">
           <p className="text-sm text-muted-foreground">
-            নিচের snippet দিয়ে যেকোনো app থেকে এই backend-এ connect করুন।
+            নিচের snippet দিয়ে যেকোনো frontend (React / Vue / Svelte / vanilla JS) থেকে এই backend-এ connect করুন। Supabase-compatible surface — migration trivial।
           </p>
           <pre className="mt-4 overflow-x-auto rounded-md border border-border bg-muted/30 p-4 font-mono text-xs leading-relaxed">
-            <code>{`import { createPlutoClient } from "@pluto/client";
+            <code>{`// npm i @pluto/js
+import { createClient } from "@pluto/js";
 
-const pluto = createPlutoClient({
-  url: "http://localhost:3000",
-  anonKey: "YOUR_PROJECT_ANON_KEY",
-});
+const pluto = createClient(
+  "${API_BASE}",
+  "YOUR_PUBLISHABLE_KEY"  // Dashboard → Tokens
+);
 
 // Auth
-await pluto.auth.signIn({ email, password });
+const { data, error } = await pluto.auth.signInWithPassword({ email, password });
 
-// Auto REST
-const { data } = await pluto
+// Data API (PostgREST-compatible)
+const { data: posts } = await pluto
   .from("posts")
-  .select("id, title")
+  .select("id, title, created_at")
   .order("created_at", { ascending: false });
 
 // Storage
-await pluto.storage.from("avatars").upload("me.png", file);`}</code>
+await pluto.storage.from("avatars").upload("me.png", file);
+
+// Realtime
+pluto.channel("room-1").on("broadcast", { event: "msg" }, console.log).subscribe();`}</code>
           </pre>
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            Base URL config: <code className="rounded bg-muted px-1 py-0.5 font-mono">VITE_PLUTO_API_URL</code> env var (defaults to <code className="font-mono">https://api.timescard.cloud</code>).
+          </p>
         </div>
       </section>
     </div>
