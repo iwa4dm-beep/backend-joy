@@ -61,6 +61,6 @@ TerminalCard probes on `/dashboard` will turn green.
 - [x] Phase 4 — `@pluto/js` SDK (auth + query builder + storage + realtime stub, Supabase-compatible)
 - [x] Phase 5 — Storage (`/storage/v1/*`) — buckets, uploads (multipart + raw), streaming download, HEAD, delete, signed upload/download URLs, public URLs, MIME + size limits, S3/MinIO backend
 - [x] Phase 6 — Realtime WebSocket (`/realtime/v1/websocket`) — postgres_changes (LISTEN/NOTIFY triggers), broadcast, presence; HTTP `/realtime/v1/broadcast` for server-side triggers
-- [ ] Phase 7 — Multi-tenant + admin
+- [x] Phase 7 — Multi-tenant + Admin (`/admin/v1/*`) — projects, RBAC members (owner/admin/developer/viewer), API keys (mint/list/revoke), superadmin bootstrap via `PLUTO_ROOT_EMAIL`, users list, audit log
 
 See `.lovable/plan.md` for the full blueprint.
