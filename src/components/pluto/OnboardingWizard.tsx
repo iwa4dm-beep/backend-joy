@@ -313,6 +313,32 @@ export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan
               <code>{envText}</code>
             </pre>
           </div>
+
+          {projectNameMissing && (
+            <div role="alert" className="mt-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden="true" />
+              <span>Project name is empty — go back to step 2 to set it before finishing.</span>
+            </div>
+          )}
+
+          {envIssues.length > 0 ? (
+            <div role="alert" className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs">
+              <div className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                {envIssues.length} issue{envIssues.length === 1 ? "" : "s"} in generated .env
+              </div>
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-muted-foreground">
+                {envIssues.map((i) => (
+                  <li key={i.key}><code className="font-mono">{i.key}</code> — {i.reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-500">
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              All {REQUIRED_ENV_KEYS.length} required env keys look good.
+            </div>
+          )}
         </div>
       ),
     },
