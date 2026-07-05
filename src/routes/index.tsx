@@ -835,18 +835,7 @@ function TerminalCard() {
         <div className="text-muted-foreground" aria-hidden="true">──────              ──────   ───────   ────   ───</div>
         <ul aria-label="Module status list" className="list-none">
           {(() => {
-            const filtered = probes.filter((p) => {
-              if (statusFilter === "all") return true;
-              if (statusFilter === "errors") return !!p.error;
-              return p.status === statusFilter;
-            });
-            const statusRank: Record<ModuleProbe["status"], number> = { down: 0, pending: 1, up: 2 };
-            const sorted = [...filtered].sort((a, b) => {
-              if (sortBy === "status") return statusRank[a.status] - statusRank[b.status];
-              if (sortBy === "latency") return (b.latency_ms ?? 0) - (a.latency_ms ?? 0);
-              if (sortBy === "name") return a.name.localeCompare(b.name);
-              return 0;
-            });
+            const sorted = sortedFiltered;
             if (sorted.length === 0) {
               return <li className="mt-1 text-muted-foreground">  no modules match this filter</li>;
             }
