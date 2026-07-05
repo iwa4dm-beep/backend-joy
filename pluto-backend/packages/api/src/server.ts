@@ -118,6 +118,9 @@ async function main() {
   await aiRoutes(app, cfg);
   await replicasRoutes(app, cfg);
   await complianceRoutes(app, cfg);
+  await vaultRoutes(app, cfg);
+  await studioRoutes(app, cfg);
+  await marketplaceRoutes(app, cfg);
 
 
 
