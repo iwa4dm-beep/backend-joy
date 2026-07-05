@@ -749,6 +749,78 @@ function TerminalCard() {
     URL.revokeObjectURL(url);
   }
 
+  // Copy the same JSON snapshot as exportSnapshot() straight to the clipboard —
+  // useful for pasting into a bug report without saving a file first.
+  async function copySnapshotJson() {
+    const snapshot = {
+      generated_at: new Date().toISOString(),
+      api_url: apiUrl,
+      status: ready.kind,
+      modules: probes.map((p) => ({
+        name: p.name, path: p.path, status: p.status,
+        http_code: p.code ?? null, latency_ms: p.latency_ms ?? null,
+        attempts: p.attempts ?? null, error: p.error ?? null,
+      })),
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
+      setCopiedJson(true);
+      setTimeout(() => setCopiedJson(false), 1500);
+    } catch { /* clipboard unavailable */ }
+  }
+
+  // Full-history backup — the CSV export loses structure across restarts, JSON keeps it.
+  function exportHistoryJson() {
+    const payload = { version: 1, exported_at: new Date().toISOString(), retention, history };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pluto-history-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Restore a previously exported history file — merged with current, deduped by ts, pruned.
+  async function importHistoryFromFile(file: File) {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as { history?: unknown };
+      const raw = Array.isArray(parsed?.history) ? parsed.history : Array.isArray(parsed) ? parsed : [];
+      const valid = (raw as unknown[]).filter((h): h is HistoryPoint =>
+        !!h && typeof (h as { ts?: unknown }).ts === "number" && Array.isArray((h as { modules?: unknown }).modules)
+      );
+      if (!valid.length) { setImportMsg("No valid history points found in file."); return; }
+      setHistory((current) => {
+        const byTs = new Map<number, HistoryPoint>();
+        for (const p of [...current, ...valid]) byTs.set(p.ts, p);
+        const merged = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+        const next = pruneHistory(merged, retentionRef.current);
+        saveHistory(next);
+        return next;
+      });
+      setImportMsg(`Imported ${valid.length} points.`);
+      setTimeout(() => setImportMsg(null), 3000);
+    } catch (e) {
+      setImportMsg(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Per-module re-probe — refreshes a single row without touching the others.
+  async function reprobeModule(name: string) {
+    const target = MODULE_PROBES.find((m) => m.name === name);
+    if (!target) return;
+    setReprobing((s) => { const n = new Set(s); n.add(name); return n; });
+    setProbes((ps) => ps.map((p) => p.name === name ? { ...p, status: "pending" as const } : p));
+    const ctrl = new AbortController();
+    try {
+      const r = await probeWithRetry(apiUrl, target.path, ctrl.signal);
+      setProbes((ps) => ps.map((p) => p.name === name ? { ...r, name } : p));
+    } finally {
+      setReprobing((s) => { const n = new Set(s); n.delete(name); return n; });
+    }
+  }
+
   const headerColor =
     ready.kind === "ok" ? "text-primary" :
     ready.kind === "degraded" ? "text-amber-500" :
