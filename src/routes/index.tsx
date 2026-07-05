@@ -393,40 +393,55 @@ async function probeWithRetry(url: string, path: string, signal: AbortSignal): P
   return { name: "", path, status: "down", code: last.code, latency_ms: last.latency_ms, error: last.error, attempts: MAX_ATTEMPTS };
 }
 
-const HISTORY_MAX = 20;
-// Retention policy: drop points older than 24h even if under the count cap,
-// so a laptop opened after a long break doesn't render stale probes as "trend".
-const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Defaults; user-configurable via retention settings UI, persisted in localStorage.
+const HISTORY_MAX_DEFAULT = 20;
+const HISTORY_MAX_AGE_HOURS_DEFAULT = 24;
 const HISTORY_STORAGE_KEY = "pluto.terminal.history.v1";
+const REFRESH_STORAGE_KEY = "pluto.terminal.refreshMs.v1";
+const RETENTION_STORAGE_KEY = "pluto.terminal.retention.v1";
+type Retention = { max: number; maxAgeHours: number };
 type HistoryModule = { name: string; status: ModuleProbe["status"]; code?: number; latency_ms?: number; error?: string; attempts?: number };
 type HistoryPoint = { ts: number; up: number; down: number; total: number; avg_latency_ms: number; modules: HistoryModule[] };
 
-function pruneHistory(h: HistoryPoint[]): HistoryPoint[] {
-  const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
-  return h.filter((p) => p.ts >= cutoff).slice(-HISTORY_MAX);
+function pruneHistory(h: HistoryPoint[], r: Retention): HistoryPoint[] {
+  const cutoff = Date.now() - r.maxAgeHours * 60 * 60 * 1000;
+  return h.filter((p) => p.ts >= cutoff).slice(-r.max);
 }
 
-function loadHistory(): HistoryPoint[] {
+function loadRawHistory(): HistoryPoint[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const valid = parsed.filter((h): h is HistoryPoint =>
+    return parsed.filter((h): h is HistoryPoint =>
       h && typeof h.ts === "number" && Array.isArray(h.modules)
     );
-    const pruned = pruneHistory(valid);
-    // Rewrite storage if we dropped anything so growth stays bounded across reloads.
-    if (pruned.length !== valid.length) {
-      try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(pruned)); } catch { /* quota */ }
-    }
-    return pruned;
   } catch { return []; }
 }
 
 function saveHistory(h: HistoryPoint[]) {
   try { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(h)); } catch { /* quota */ }
+}
+
+function loadRefreshMs(): number {
+  if (typeof window === "undefined") return 0;
+  const raw = Number(localStorage.getItem(REFRESH_STORAGE_KEY) ?? "0");
+  return REFRESH_OPTIONS.some((o) => o.value === raw) ? raw : 0;
+}
+
+function loadRetention(): Retention {
+  if (typeof window === "undefined") return { max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT };
+  try {
+    const raw = JSON.parse(localStorage.getItem(RETENTION_STORAGE_KEY) ?? "null");
+    const max = Number(raw?.max);
+    const maxAgeHours = Number(raw?.maxAgeHours);
+    return {
+      max: Number.isFinite(max) && max >= 5 && max <= 500 ? Math.round(max) : HISTORY_MAX_DEFAULT,
+      maxAgeHours: Number.isFinite(maxAgeHours) && maxAgeHours >= 1 && maxAgeHours <= 720 ? maxAgeHours : HISTORY_MAX_AGE_HOURS_DEFAULT,
+    };
+  } catch { return { max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT }; }
 }
 
 
