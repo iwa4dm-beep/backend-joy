@@ -588,7 +588,15 @@ function TerminalCard() {
             aria-label="Download status snapshot as JSON"
             className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            export
+            json
+          </button>
+          <button
+            type="button"
+            onClick={exportCsv}
+            aria-label="Download status snapshot as CSV"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            csv
           </button>
           <button
             type="button"
