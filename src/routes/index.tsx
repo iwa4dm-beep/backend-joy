@@ -578,7 +578,8 @@ function PricingSection() {
                 <span className="font-medium text-foreground">Deploy:</span> {p.deploy}
               </div>
               <Link
-                to={p.cta.to}
+                to="/dashboard"
+                search={{ plan: p.cta.plan } as never}
                 className={`mt-6 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-4 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   p.highlight
                     ? "bg-primary text-primary-foreground hover:bg-primary/90"
