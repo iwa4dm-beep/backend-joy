@@ -763,6 +763,25 @@ function TerminalCard() {
           >
             csv
           </button>
+          <button
+            type="button"
+            onClick={exportHistoryCsv}
+            disabled={history.length === 0}
+            aria-label="Download history CSV for currently filtered and sorted modules"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            history csv
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowRetention((v) => !v)}
+            aria-expanded={showRetention}
+            aria-controls="terminal-retention-panel"
+            aria-label="Configure history retention"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            retention
+          </button>
           {history.length > 0 && (
             <button
               type="button"
