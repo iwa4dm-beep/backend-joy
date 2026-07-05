@@ -23,7 +23,7 @@ export async function branchesRoutes(app: FastifyInstance, cfg: Config) {
   app.get('/admin/v1/branches', async (req) => {
     const actor = await requireAuth(req, cfg);
     const q = z.object({ project_id: z.string().uuid() }).parse(req.query);
-    await requireProjectRole(actor, q.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, q.project_id, actor, ['owner', 'admin', 'member']);
     return getSql(cfg)`
       select id, name, parent_branch, db_name, status, git_ref,
              promoted_at, error_message, created_at
@@ -36,7 +36,7 @@ export async function branchesRoutes(app: FastifyInstance, cfg: Config) {
   app.post('/admin/v1/branches', async (req, reply) => {
     const actor = await requireAuth(req, cfg);
     const body = createBody.parse(req.body);
-    await requireProjectRole(actor, body.project_id, ['owner', 'admin'], cfg);
+    await requireProjectRole(cfg, body.project_id, actor, ['owner', 'admin']);
     const sql = getSql(cfg);
 
     // Determine parent db: for parent='main', use the current db name;
@@ -94,7 +94,7 @@ export async function branchesRoutes(app: FastifyInstance, cfg: Config) {
     const sql = getSql(cfg);
     const [b] = await sql`select * from admin.branches where id=${id}`;
     if (!b) throw Object.assign(new Error('not_found'), { statusCode: 404 });
-    await requireProjectRole(actor, b.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, b.project_id, actor, ['owner', 'admin', 'member']);
 
     // We compare only object counts here — a real diff would compare pg_dump --schema-only.
     const tables = await sql`
@@ -125,7 +125,7 @@ export async function branchesRoutes(app: FastifyInstance, cfg: Config) {
     const sql = getSql(cfg);
     const [b] = await sql`select * from admin.branches where id=${id}`;
     if (!b) return reply.code(404).send({ error: 'not_found' });
-    await requireProjectRole(actor, b.project_id, ['owner'], cfg);
+    await requireProjectRole(cfg, b.project_id, actor, ['owner']);
 
     await sql`update admin.branches set status='promoting' where id=${id}`;
     // Real promotion: swap db names via RENAME DATABASE, or run pg_dump/restore.
@@ -146,7 +146,7 @@ export async function branchesRoutes(app: FastifyInstance, cfg: Config) {
     const sql = getSql(cfg);
     const [b] = await sql`select * from admin.branches where id=${id}`;
     if (!b) return { ok: true };
-    await requireProjectRole(actor, b.project_id, ['owner', 'admin'], cfg);
+    await requireProjectRole(cfg, b.project_id, actor, ['owner', 'admin']);
     try {
       await sql.unsafe(
         `select pg_terminate_backend(pid) from pg_stat_activity

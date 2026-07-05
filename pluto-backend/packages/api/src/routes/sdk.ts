@@ -115,7 +115,7 @@ export async function sdkRoutes(app: FastifyInstance, cfg: Config) {
       project_id: z.string().uuid(),
       schemas: z.string().optional(),   // csv
     }).parse(req.query);
-    await requireProjectRole(actor, q.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, q.project_id, actor, ['owner', 'admin', 'member']);
     const sql = getSql(cfg);
     const schemas = q.schemas ? q.schemas.split(',') : ['public'];
     const apiUrl = cfg.PUBLIC_API_URL ?? `http://${cfg.HOST}:${cfg.PORT}`;

@@ -99,7 +99,7 @@ export async function authAdvancedRoutes(app: FastifyInstance, cfg: Config) {
   app.get('/admin/v1/oauth/providers', async (req) => {
     const actor = await requireAuth(req, cfg);
     const q = z.object({ project_id: z.string().uuid() }).parse(req.query);
-    await requireProjectRole(actor, q.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, q.project_id, actor, ['owner', 'admin', 'member']);
     return getSql(cfg)`
       select id, provider, client_id, redirect_uri, scopes, enabled, created_at
         from admin.oauth_providers where project_id = ${q.project_id}`;
@@ -108,7 +108,7 @@ export async function authAdvancedRoutes(app: FastifyInstance, cfg: Config) {
   app.post('/admin/v1/oauth/providers', async (req) => {
     const actor = await requireAuth(req, cfg);
     const b = oauthBody.parse(req.body);
-    await requireProjectRole(actor, b.project_id, ['owner', 'admin'], cfg);
+    await requireProjectRole(cfg, b.project_id, actor, ['owner', 'admin']);
     const sql = getSql(cfg);
     const [row] = await sql`
       insert into admin.oauth_providers
@@ -133,7 +133,7 @@ export async function authAdvancedRoutes(app: FastifyInstance, cfg: Config) {
     const sql = getSql(cfg);
     const [p] = await sql`select project_id from admin.oauth_providers where id=${id}`;
     if (!p) return { ok: true };
-    await requireProjectRole(actor, p.project_id, ['owner', 'admin'], cfg);
+    await requireProjectRole(cfg, p.project_id, actor, ['owner', 'admin']);
     await sql`delete from admin.oauth_providers where id=${id}`;
     return { ok: true };
   });
@@ -288,7 +288,7 @@ export async function authAdvancedRoutes(app: FastifyInstance, cfg: Config) {
   app.get('/admin/v1/saml/providers', async (req) => {
     const actor = await requireAuth(req, cfg);
     const q = z.object({ project_id: z.string().uuid() }).parse(req.query);
-    await requireProjectRole(actor, q.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, q.project_id, actor, ['owner', 'admin', 'member']);
     return getSql(cfg)`
       select id, name, entity_id, sso_url, attribute_mapping, enabled, created_at
         from admin.saml_providers where project_id=${q.project_id}`;
@@ -297,7 +297,7 @@ export async function authAdvancedRoutes(app: FastifyInstance, cfg: Config) {
   app.post('/admin/v1/saml/providers', async (req) => {
     const actor = await requireAuth(req, cfg);
     const b = samlBody.parse(req.body);
-    await requireProjectRole(actor, b.project_id, ['owner', 'admin'], cfg);
+    await requireProjectRole(cfg, b.project_id, actor, ['owner', 'admin']);
     const sql = getSql(cfg);
     const [row] = await sql`
       insert into admin.saml_providers

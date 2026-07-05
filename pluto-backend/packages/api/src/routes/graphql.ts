@@ -96,7 +96,7 @@ export async function graphqlRoutes(app: FastifyInstance, cfg: Config) {
   app.get('/admin/v1/graphql/config', async (req) => {
     const actor = await requireAuth(req, cfg);
     const q = z.object({ project_id: z.string().uuid() }).parse(req.query);
-    await requireProjectRole(actor, q.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, q.project_id, actor, ['owner', 'admin', 'member']);
     const sql = getSql(cfg);
     const [row] = await sql`select * from admin.graphql_configs where project_id = ${q.project_id}`;
     return row ?? null;
@@ -109,7 +109,7 @@ export async function graphqlRoutes(app: FastifyInstance, cfg: Config) {
       schemas: z.array(z.string()).min(1).default(['public']),
       enable_subs: z.boolean().default(false),
     }).parse(req.body);
-    await requireProjectRole(actor, b.project_id, ['owner', 'admin'], cfg);
+    await requireProjectRole(cfg, b.project_id, actor, ['owner', 'admin']);
     const sql = getSql(cfg);
     const tables = await introspect(sql, b.schemas);
     const sdl = buildSdl(tables);
@@ -128,7 +128,7 @@ export async function graphqlRoutes(app: FastifyInstance, cfg: Config) {
   app.get('/admin/v1/graphql/sdl', async (req) => {
     const actor = await requireAuth(req, cfg);
     const q = z.object({ project_id: z.string().uuid() }).parse(req.query);
-    await requireProjectRole(actor, q.project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, q.project_id, actor, ['owner', 'admin', 'member']);
     const sql = getSql(cfg);
     const [row] = await sql`select cached_sdl from admin.graphql_configs where project_id = ${q.project_id}`;
     return { sdl: row?.cached_sdl ?? '' };
@@ -138,7 +138,7 @@ export async function graphqlRoutes(app: FastifyInstance, cfg: Config) {
   app.post('/graphql/v1/:project_id', async (req, reply) => {
     const actor = await requireAuth(req, cfg);
     const { project_id } = z.object({ project_id: z.string().uuid() }).parse(req.params);
-    await requireProjectRole(actor, project_id, ['owner', 'admin', 'member'], cfg);
+    await requireProjectRole(cfg, project_id, actor, ['owner', 'admin', 'member']);
     const body = z.object({ query: z.string(), variables: z.record(z.any()).optional() }).parse(req.body);
     const sql = getSql(cfg);
     const [cfgRow] = await sql`select * from admin.graphql_configs where project_id = ${project_id}`;
