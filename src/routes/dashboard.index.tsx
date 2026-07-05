@@ -1,13 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
-  Activity, ArrowUpRight, Database, Files, KeyRound, Radio,
-  ScrollText, ShieldCheck, Sparkles, Terminal, Users, Waves,
+  Activity, ArrowUpRight, CheckCircle2, Database, Files, Heart, KeyRound, Radio,
+  ScrollText, ShieldCheck, Sparkles, Terminal, Users, Waves, XCircle,
 } from "lucide-react";
 
 import { pluto } from "@/lib/pluto/client";
 import { isLive, live } from "@/lib/pluto/live";
 import { OnboardingWizard, type Plan } from "@/components/pluto/OnboardingWizard";
+
+const API_BASE = (import.meta.env.VITE_PLUTO_API_URL as string) || "https://api.timescard.cloud";
 
 const STORAGE_KEY = "pluto.onboarding.v1";
 
