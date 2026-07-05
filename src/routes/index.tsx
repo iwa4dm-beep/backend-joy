@@ -463,6 +463,17 @@ function TerminalCard() {
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const retentionRef = useRef<Retention>({ max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT });
   useEffect(() => { retentionRef.current = retention; }, [retention]);
+  // Feature: text search over module names, keyboard shortcut help, aria-live announcer,
+  // per-module re-probe tracking. Refs let global shortcuts focus the search input.
+  const [search, setSearch] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
+  const [announceMsg, setAnnounceMsg] = useState("");
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [reprobing, setReprobing] = useState<Set<string>>(() => new Set());
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const prevReadyKindRef = useRef<ReadyState["kind"] | null>(null);
   const cmd = "git clone pluto-baas && cd pluto-baas && docker compose up -d";
   const apiUrl = (import.meta.env.VITE_PLUTO_URL as string | undefined) ?? "http://localhost:3000";
 
@@ -550,24 +561,66 @@ function TerminalCard() {
     return () => { cancelled = true; ctrl.abort(); };
   }, [apiUrl, nonce]);
 
-  // Auto-refresh
+  // Auto-refresh — pauses while the tab is hidden (Page Visibility API) to
+  // avoid burning cycles when the user isn't watching, and resumes on focus.
   useEffect(() => {
     if (!refreshMs) return;
-    const id = setInterval(() => setNonce((n) => n + 1), refreshMs);
-    return () => clearInterval(id);
+    let id: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (id) return;
+      id = setInterval(() => setNonce((n) => n + 1), refreshMs);
+    };
+    const stop = () => { if (id) { clearInterval(id); id = null; } };
+    const onVis = () => (document.hidden ? stop() : start());
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
   }, [refreshMs]);
 
-  // "last updated Xs ago" ticker
+  // Global keyboard shortcuts: `r` re-probe, `/` focus module search, `?` toggle help.
+  // Skips when typing in a form field so we don't hijack user input.
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (t?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+        if (e.key === "Escape" && tag === "INPUT" && t === searchRef.current) {
+          setSearch(""); (t as HTMLInputElement).blur();
+        }
+        return;
+      }
+      if (e.key === "r" || e.key === "R") { e.preventDefault(); setNonce((n) => n + 1); }
+      else if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); }
+      else if (e.key === "?") { e.preventDefault(); setShowHelp((v) => !v); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Announce overall status transitions (ok → degraded, etc.) to screen readers.
+  useEffect(() => {
+    const prev = prevReadyKindRef.current;
+    if (prev && prev !== ready.kind && ready.kind !== "loading") {
+      const label =
+        ready.kind === "ok" ? "All systems operational" :
+        ready.kind === "degraded" ? "Backend degraded — some modules unreachable" :
+        ready.kind === "unreachable" ? "Backend unreachable" : "";
+      if (label) setAnnounceMsg(`${label} at ${new Date().toLocaleTimeString()}`);
+    }
+    prevReadyKindRef.current = ready.kind;
+  }, [ready]);
 
   function copy() {
     void navigator.clipboard.writeText(cmd);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
+
+  // "last updated Xs ago" ticker
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   function exportSnapshot() {
     const snapshot = {
@@ -645,7 +698,9 @@ function TerminalCard() {
 
   // Filter + sort — single source of truth for both render and history CSV export.
   const sortedFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
     const filtered = probes.filter((p) => {
+      if (q && !p.name.toLowerCase().includes(q)) return false;
       if (statusFilter === "all") return true;
       if (statusFilter === "errors") return !!p.error;
       return p.status === statusFilter;
@@ -657,7 +712,7 @@ function TerminalCard() {
       if (sortBy === "name") return a.name.localeCompare(b.name);
       return 0;
     });
-  }, [probes, statusFilter, sortBy]);
+  }, [probes, statusFilter, sortBy, search]);
 
   function exportHistoryCsv() {
     const esc = (v: unknown) => {
@@ -692,6 +747,78 @@ function TerminalCard() {
     a.download = `pluto-history-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  // Copy the same JSON snapshot as exportSnapshot() straight to the clipboard —
+  // useful for pasting into a bug report without saving a file first.
+  async function copySnapshotJson() {
+    const snapshot = {
+      generated_at: new Date().toISOString(),
+      api_url: apiUrl,
+      status: ready.kind,
+      modules: probes.map((p) => ({
+        name: p.name, path: p.path, status: p.status,
+        http_code: p.code ?? null, latency_ms: p.latency_ms ?? null,
+        attempts: p.attempts ?? null, error: p.error ?? null,
+      })),
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
+      setCopiedJson(true);
+      setTimeout(() => setCopiedJson(false), 1500);
+    } catch { /* clipboard unavailable */ }
+  }
+
+  // Full-history backup — the CSV export loses structure across restarts, JSON keeps it.
+  function exportHistoryJson() {
+    const payload = { version: 1, exported_at: new Date().toISOString(), retention, history };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pluto-history-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Restore a previously exported history file — merged with current, deduped by ts, pruned.
+  async function importHistoryFromFile(file: File) {
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as { history?: unknown };
+      const raw = Array.isArray(parsed?.history) ? parsed.history : Array.isArray(parsed) ? parsed : [];
+      const valid = (raw as unknown[]).filter((h): h is HistoryPoint =>
+        !!h && typeof (h as { ts?: unknown }).ts === "number" && Array.isArray((h as { modules?: unknown }).modules)
+      );
+      if (!valid.length) { setImportMsg("No valid history points found in file."); return; }
+      setHistory((current) => {
+        const byTs = new Map<number, HistoryPoint>();
+        for (const p of [...current, ...valid]) byTs.set(p.ts, p);
+        const merged = [...byTs.values()].sort((a, b) => a.ts - b.ts);
+        const next = pruneHistory(merged, retentionRef.current);
+        saveHistory(next);
+        return next;
+      });
+      setImportMsg(`Imported ${valid.length} points.`);
+      setTimeout(() => setImportMsg(null), 3000);
+    } catch (e) {
+      setImportMsg(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Per-module re-probe — refreshes a single row without touching the others.
+  async function reprobeModule(name: string) {
+    const target = MODULE_PROBES.find((m) => m.name === name);
+    if (!target) return;
+    setReprobing((s) => { const n = new Set(s); n.add(name); return n; });
+    setProbes((ps) => ps.map((p) => p.name === name ? { ...p, status: "pending" as const } : p));
+    const ctrl = new AbortController();
+    try {
+      const r = await probeWithRetry(apiUrl, target.path, ctrl.signal);
+      setProbes((ps) => ps.map((p) => p.name === name ? { ...r, name } : p));
+    } finally {
+      setReprobing((s) => { const n = new Set(s); n.delete(name); return n; });
+    }
   }
 
   const headerColor =
@@ -785,6 +912,37 @@ function TerminalCard() {
           {history.length > 0 && (
             <button
               type="button"
+              onClick={exportHistoryJson}
+              aria-label="Download full history as JSON"
+              className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              history json
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            aria-label="Import history from JSON file"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            import
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="sr-only"
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importHistoryFromFile(f);
+              e.target.value = "";
+            }}
+          />
+          {history.length > 0 && (
+            <button
+              type="button"
               onClick={clearHistory}
               aria-label="Clear persisted probe history"
               className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -792,6 +950,24 @@ function TerminalCard() {
               clear history
             </button>
           )}
+          <button
+            type="button"
+            onClick={copySnapshotJson}
+            aria-label={copiedJson ? "Snapshot JSON copied to clipboard" : "Copy snapshot JSON to clipboard"}
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {copiedJson ? "copied ✓" : "copy json"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHelp((v) => !v)}
+            aria-expanded={showHelp}
+            aria-controls="terminal-help-panel"
+            aria-label="Toggle keyboard shortcut help"
+            className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            ?
+          </button>
           <button
             type="button"
             onClick={copy}
@@ -802,6 +978,33 @@ function TerminalCard() {
           </button>
         </div>
       </div>
+      {/* Screen-reader-only live region: announces overall status transitions and import results. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announceMsg}
+      </div>
+      {importMsg && (
+        <div role="status" className="border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+          {importMsg}
+        </div>
+      )}
+      {showHelp && (
+        <div
+          id="terminal-help-panel"
+          role="region"
+          aria-label="Keyboard shortcuts"
+          className="border-b border-border bg-muted/20 px-4 py-3 text-xs"
+        >
+          <div className="mb-1 font-medium">keyboard shortcuts</div>
+          <ul className="grid gap-1 text-muted-foreground sm:grid-cols-2">
+            <li><kbd className="rounded border border-border bg-background px-1">r</kbd> — refresh all module probes</li>
+            <li><kbd className="rounded border border-border bg-background px-1">/</kbd> — focus module search</li>
+            <li><kbd className="rounded border border-border bg-background px-1">?</kbd> — toggle this help panel</li>
+            <li><kbd className="rounded border border-border bg-background px-1">Esc</kbd> — close module details / clear search</li>
+            <li><kbd className="rounded border border-border bg-background px-1">→</kbd> / <kbd className="rounded border border-border bg-background px-1">←</kbd> — expand / collapse focused module</li>
+            <li><kbd className="rounded border border-border bg-background px-1">Tab</kbd> — cycles inside open module details</li>
+          </ul>
+        </div>
+      )}
       {showRetention && (
         <div
           id="terminal-retention-panel"
@@ -889,6 +1092,21 @@ function TerminalCard() {
               <option value="name">name (a→z)</option>
             </select>
           </label>
+          <label className="flex items-center gap-1">
+            <span>search</span>
+            <input
+              ref={searchRef}
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="name… (press /)"
+              aria-label="Search modules by name"
+              className="w-40 rounded border border-border bg-background px-1.5 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <span aria-live="polite" className="text-muted-foreground">
+            showing {sortedFiltered.length} / {probes.length}
+          </span>
         </div>
 
         <div className="mt-3 text-muted-foreground" aria-hidden="true">module              status   latency   http   try</div>
@@ -944,6 +1162,8 @@ function TerminalCard() {
                       probe={p}
                       history={moduleHistory}
                       apiUrl={apiUrl}
+                      reprobing={reprobing.has(p.name)}
+                      onReprobe={() => reprobeModule(p.name)}
                       panelRef={(el) => { panelRefs.current[p.name] = el; }}
                       onClose={() => {
                         setExpanded(null);
@@ -963,7 +1183,7 @@ function TerminalCard() {
 }
 
 function ModuleDetails({
-  id, labelledBy, probe, history, apiUrl, onClose, panelRef,
+  id, labelledBy, probe, history, apiUrl, onClose, panelRef, onReprobe, reprobing,
 }: {
   id: string;
   labelledBy: string;
@@ -971,6 +1191,8 @@ function ModuleDetails({
   history: { ts: number; m: HistoryModule }[];
   apiUrl: string;
   onClose: () => void;
+  onReprobe?: () => void;
+  reprobing?: boolean;
   panelRef?: (el: HTMLDivElement | null) => void;
 }) {
   const codeCounts = history.reduce<Record<string, number>>((acc, { m }) => {
@@ -980,6 +1202,15 @@ function ModuleDetails({
   }, {});
   const codes = Object.entries(codeCounts).sort((a, b) => b[1] - a[1]);
   const recent = history.slice(-8).reverse();
+  // Uptime % over the retained window — quick health signal without opening the trend chart.
+  const upCount = history.filter(({ m }) => m.status === "up").length;
+  const uptimePct = history.length ? Math.round((upCount / history.length) * 100) : null;
+  const uptimeColor =
+    uptimePct === null ? "text-muted-foreground" :
+    uptimePct >= 99 ? "text-emerald-500" :
+    uptimePct >= 90 ? "text-amber-500" : "text-destructive";
+  const fullUrl = `${apiUrl.replace(/\/$/, "")}${probe.path}`;
+  const [endpointCopied, setEndpointCopied] = useState(false);
   const innerRef = useRef<HTMLDivElement | null>(null);
   // Move focus into the panel on open so screen readers announce it and Esc works.
   useEffect(() => { innerRef.current?.focus(); }, []);
@@ -1004,6 +1235,14 @@ function ModuleDetails({
     else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
   }
 
+  async function copyEndpoint() {
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+      setEndpointCopied(true);
+      setTimeout(() => setEndpointCopied(false), 1200);
+    } catch { /* ignore */ }
+  }
+
   return (
     <div
       id={id}
@@ -1015,27 +1254,53 @@ function ModuleDetails({
       data-testid="module-details-panel"
       className="mx-1 my-1 rounded-md border border-border bg-muted/30 p-3 text-[11px] leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <span className="text-muted-foreground">module details · press Esc to close</span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={`Close ${probe.name} details`}
-          className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          close
-        </button>
+        <div className="flex items-center gap-1">
+          {onReprobe && (
+            <button
+              type="button"
+              onClick={onReprobe}
+              disabled={reprobing}
+              aria-label={`Re-probe ${probe.name} now`}
+              className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {reprobing ? "re-probing…" : "re-probe"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={copyEndpoint}
+            aria-label={endpointCopied ? "Endpoint copied" : "Copy endpoint URL"}
+            className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {endpointCopied ? "copied ✓" : "copy url"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={`Close ${probe.name} details`}
+            className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            close
+          </button>
+        </div>
       </div>
       <div className="grid gap-x-3 gap-y-1 sm:grid-cols-[auto_1fr]">
         <span className="text-muted-foreground">endpoint</span>
-        <code className="whitespace-pre-wrap break-all">{apiUrl.replace(/\/$/, "")}{probe.path}</code>
+        <code className="whitespace-pre-wrap break-all">{fullUrl}</code>
         <span className="text-muted-foreground">latest attempts</span>
         <span>{probe.attempts ?? 0} / {MAX_ATTEMPTS}</span>
         <span className="text-muted-foreground">latest error</span>
         <span className={probe.error ? "text-destructive" : "text-muted-foreground"}>
           {probe.error ?? "none"}
         </span>
+        <span className="text-muted-foreground">uptime (window)</span>
+        <span className={uptimeColor}>
+          {uptimePct === null ? "—" : `${uptimePct}% · ${upCount}/${history.length} probes`}
+        </span>
       </div>
+      {history.length >= 2 && <ModuleSparkline points={history} />}
       {codes.length > 0 && (
         <div className="mt-2">
           <div className="text-muted-foreground">http code distribution</div>
@@ -1067,6 +1332,40 @@ function ModuleDetails({
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+function ModuleSparkline({ points }: { points: { ts: number; m: HistoryModule }[] }) {
+  const W = 240, H = 36, PAD_X = 3, PAD_Y = 4;
+  const n = points.length;
+  const lats = points.map((p) => p.m.latency_ms ?? 0);
+  const maxLat = Math.max(50, ...lats);
+  const x = (i: number) => n === 1 ? W / 2 : PAD_X + (i * (W - PAD_X * 2)) / (n - 1);
+  const y = (v: number) => H - PAD_Y - ((v / maxLat) * (H - PAD_Y * 2));
+  const path = lats.map((v, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
+  const lastLat = lats[lats.length - 1];
+  const label = `Latency sparkline: ${n} points, latest ${lastLat}ms, peak ${Math.max(...lats)}ms`;
+  return (
+    <div className="mt-2">
+      <div className="text-muted-foreground">latency trend ({n} probes · peak {Math.max(...lats)}ms)</div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={label}
+        className="mt-1 h-8 w-full"
+      >
+        <path d={path} fill="none" stroke="currentColor" strokeWidth="1.25" className="text-primary" />
+        {points.map((p, i) => (
+          <circle
+            key={p.ts}
+            cx={x(i)} cy={y(p.m.latency_ms ?? 0)} r={1.5}
+            className={p.m.status === "up" ? "fill-emerald-500" : p.m.status === "down" ? "fill-destructive" : "fill-muted-foreground"}
+          />
+        ))}
+      </svg>
     </div>
   );
 }
