@@ -453,6 +453,8 @@ function TerminalCard() {
   const [tick, setTick] = useState(0);
   const [nonce, setNonce] = useState(0);
   const [refreshMs, setRefreshMs] = useState<number>(0);
+  const [retention, setRetention] = useState<Retention>({ max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT });
+  const [showRetention, setShowRetention] = useState(false);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "up" | "down" | "pending" | "errors">("all");
@@ -462,8 +464,30 @@ function TerminalCard() {
   const cmd = "git clone pluto-baas && cd pluto-baas && docker compose up -d";
   const apiUrl = (import.meta.env.VITE_PLUTO_URL as string | undefined) ?? "http://localhost:3000";
 
-  // Hydrate persisted history once
-  useEffect(() => { setHistory(loadHistory()); }, []);
+  // Hydrate persisted state once
+  useEffect(() => {
+    const r = loadRetention();
+    setRetention(r);
+    setRefreshMs(loadRefreshMs());
+    setHistory(pruneHistory(loadRawHistory(), r));
+  }, []);
+
+  // Persist refresh interval selection
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(REFRESH_STORAGE_KEY, String(refreshMs)); } catch { /* ignore */ }
+  }, [refreshMs]);
+
+  // Persist retention + re-prune when settings change
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(RETENTION_STORAGE_KEY, JSON.stringify(retention)); } catch { /* ignore */ }
+    setHistory((h) => {
+      const next = pruneHistory(h, retention);
+      if (next.length !== h.length) saveHistory(next);
+      return next;
+    });
+  }, [retention]);
 
   // Probe run
   useEffect(() => {
