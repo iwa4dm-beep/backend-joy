@@ -463,6 +463,17 @@ function TerminalCard() {
   const panelRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const retentionRef = useRef<Retention>({ max: HISTORY_MAX_DEFAULT, maxAgeHours: HISTORY_MAX_AGE_HOURS_DEFAULT });
   useEffect(() => { retentionRef.current = retention; }, [retention]);
+  // Feature: text search over module names, keyboard shortcut help, aria-live announcer,
+  // per-module re-probe tracking. Refs let global shortcuts focus the search input.
+  const [search, setSearch] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
+  const [announceMsg, setAnnounceMsg] = useState("");
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [reprobing, setReprobing] = useState<Set<string>>(() => new Set());
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const prevReadyKindRef = useRef<ReadyState["kind"] | null>(null);
   const cmd = "git clone pluto-baas && cd pluto-baas && docker compose up -d";
   const apiUrl = (import.meta.env.VITE_PLUTO_URL as string | undefined) ?? "http://localhost:3000";
 
