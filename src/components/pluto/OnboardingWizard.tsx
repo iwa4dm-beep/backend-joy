@@ -367,7 +367,23 @@ export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan
               >
                 {plan === "business" ? "Enterprise settings" : "Run smoke tests"}
               </Link>
+              <button
+                type="button"
+                onClick={downloadReport}
+                aria-label="Download onboarding report as text file"
+                className="inline-flex items-center gap-1.5 rounded-md border border-input px-3.5 py-2 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden="true" /> Download report
+              </button>
             </div>
+            {envIssues.length > 0 && (
+              <div role="alert" className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden="true" />
+                <span>
+                  {envIssues.length} unresolved .env issue{envIssues.length === 1 ? "" : "s"} — review step 3 before deploying.
+                </span>
+              </div>
+            )}
           </div>
         );
       },
