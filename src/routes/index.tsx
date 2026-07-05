@@ -476,7 +476,7 @@ function TerminalCard() {
         })),
       };
       setHistory((h) => {
-        const next = [...h, point].slice(-HISTORY_MAX);
+        const next = pruneHistory([...h, point]);
         saveHistory(next);
         return next;
       });
