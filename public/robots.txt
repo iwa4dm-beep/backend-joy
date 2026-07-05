@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+Disallow: /dashboard
+Disallow: /auth
+
+Sitemap: https://backend-joy.lovable.app/sitemap.xml
