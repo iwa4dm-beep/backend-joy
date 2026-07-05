@@ -53,6 +53,7 @@ import { Route as AuthResetPasswordRouteImport } from './routes/auth.reset-passw
 import { Route as AuthPhoneRouteImport } from './routes/auth.phone'
 import { Route as AuthForgotRouteImport } from './routes/auth.forgot'
 import { Route as AuthConfirmEmailRouteImport } from './routes/auth.confirm-email'
+import { Route as ApiPlutoStatusRouteImport } from './routes/api/pluto.status'
 import { Route as ApiPlutoSplatRouteImport } from './routes/api/pluto.$'
 
 const StatusRoute = StatusRouteImport.update({
@@ -275,6 +276,11 @@ const AuthConfirmEmailRoute = AuthConfirmEmailRouteImport.update({
   path: '/confirm-email',
   getParentRoute: () => AuthRoute,
 } as any)
+const ApiPlutoStatusRoute = ApiPlutoStatusRouteImport.update({
+  id: '/api/pluto/status',
+  path: '/api/pluto/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPlutoSplatRoute = ApiPlutoSplatRouteImport.update({
   id: '/api/pluto/$',
   path: '/api/pluto/$',
@@ -327,6 +333,7 @@ export interface FileRoutesByFullPath {
   '/docs/api': typeof DocsApiRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/pluto/$': typeof ApiPlutoSplatRoute
+  '/api/pluto/status': typeof ApiPlutoStatusRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -373,6 +380,7 @@ export interface FileRoutesByTo {
   '/docs/api': typeof DocsApiRoute
   '/dashboard': typeof DashboardIndexRoute
   '/api/pluto/$': typeof ApiPlutoSplatRoute
+  '/api/pluto/status': typeof ApiPlutoStatusRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -421,6 +429,7 @@ export interface FileRoutesById {
   '/docs/api': typeof DocsApiRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/pluto/$': typeof ApiPlutoSplatRoute
+  '/api/pluto/status': typeof ApiPlutoStatusRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -470,6 +479,7 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/dashboard/'
     | '/api/pluto/$'
+    | '/api/pluto/status'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -516,6 +526,7 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/dashboard'
     | '/api/pluto/$'
+    | '/api/pluto/status'
   id:
     | '__root__'
     | '/'
@@ -563,6 +574,7 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/dashboard/'
     | '/api/pluto/$'
+    | '/api/pluto/status'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -573,6 +585,7 @@ export interface RootRouteChildren {
   StatusRoute: typeof StatusRoute
   DocsApiRoute: typeof DocsApiRoute
   ApiPlutoSplatRoute: typeof ApiPlutoSplatRoute
+  ApiPlutoStatusRoute: typeof ApiPlutoStatusRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -885,6 +898,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthConfirmEmailRouteImport
       parentRoute: typeof AuthRoute
     }
+    '/api/pluto/status': {
+      id: '/api/pluto/status'
+      path: '/api/pluto/status'
+      fullPath: '/api/pluto/status'
+      preLoaderRoute: typeof ApiPlutoStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/pluto/$': {
       id: '/api/pluto/$'
       path: '/api/pluto/$'
@@ -997,6 +1017,7 @@ const rootRouteChildren: RootRouteChildren = {
   StatusRoute: StatusRoute,
   DocsApiRoute: DocsApiRoute,
   ApiPlutoSplatRoute: ApiPlutoSplatRoute,
+  ApiPlutoStatusRoute: ApiPlutoStatusRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
