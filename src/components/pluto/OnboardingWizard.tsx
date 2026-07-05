@@ -277,17 +277,8 @@ export function OnboardingWizard({ initialPlan, onDismiss }: { initialPlan: Plan
     root.file(".env.local", envText);
     root.file("deploy.sh", `#!/usr/bin/env bash\nset -euo pipefail\n\n${deployCommands}\n`);
     root.file(
-      "README.txt",
-      [
-        `Pluto BaaS onboarding package`,
-        `Generated: ${stamp}`,
-        ``,
-        `Files:`,
-        `- report.json  — machine-readable summary`,
-        `- report.md    — human-readable summary`,
-        `- .env.local   — generated environment (rotate keys before production)`,
-        `- deploy.sh    — deploy commands for ${TARGET_META[target].title}`,
-      ].join("\n")
+      "README.md",
+      buildReadmeMarkdown(),
     );
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
