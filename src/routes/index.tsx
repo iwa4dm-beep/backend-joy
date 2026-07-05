@@ -698,7 +698,9 @@ function TerminalCard() {
 
   // Filter + sort — single source of truth for both render and history CSV export.
   const sortedFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
     const filtered = probes.filter((p) => {
+      if (q && !p.name.toLowerCase().includes(q)) return false;
       if (statusFilter === "all") return true;
       if (statusFilter === "errors") return !!p.error;
       return p.status === statusFilter;
@@ -710,7 +712,7 @@ function TerminalCard() {
       if (sortBy === "name") return a.name.localeCompare(b.name);
       return 0;
     });
-  }, [probes, statusFilter, sortBy]);
+  }, [probes, statusFilter, sortBy, search]);
 
   function exportHistoryCsv() {
     const esc = (v: unknown) => {
