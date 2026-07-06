@@ -36,8 +36,11 @@ const report = {
   applied_before: [],
   pending: [],
   results: [],   // { file, ok, duration_ms, error? }
-  summary: { total_pending: 0, applied: 0, failed: 0, skipped: 0 },
+  auth_functions: [],  // { name, exists } — required auth.* shims
+  summary: { total_pending: 0, applied: 0, failed: 0, skipped: 0, auth_missing: 0 },
 };
+
+const REQUIRED_AUTH_FNS = ['uid', 'role', 'jwt'];
 
 try {
   // Shim is created even in dry-run so /health/migrations reports honestly.
