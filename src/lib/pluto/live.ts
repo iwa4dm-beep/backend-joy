@@ -309,8 +309,58 @@ export const live = {
     historyEntry: (id: string) => api<SqlHistoryEntry & { sql: string }>(`/admin/v1/sql/history/${id}`, { service: true }),
   },
   schema: {
-    introspect: () => api<{ tables: SchemaTable[] }>("/admin/v1/schema", { service: true }),
-    summary:    () => api<SchemaSummary>("/admin/v1/schema/summary"),
+    introspect: async () => {
+      try {
+        return await api<{ tables: SchemaTable[] }>("/admin/v1/schema", { service: true });
+      } catch {
+        const rows = await api<Array<{ schema?: string; name: string; columns?: number }>>("/admin/v1/studio/tables?schema=public", { service: true });
+        const tables = await Promise.all(rows.map(async (row) => {
+          const schema = row.schema ?? "public";
+          const details = await api<{ columns: Array<{ name: string; data_type?: string; is_nullable?: string | boolean }>; primary_key?: string[] }>(
+            `/admin/v1/studio/columns?${new URLSearchParams({ schema, table: row.name }).toString()}`,
+            { service: true },
+          ).catch(() => ({ columns: [], primary_key: [] }));
+          const primaryKey = details.primary_key ?? [];
+          return {
+            schema,
+            name: row.name,
+            comment: null,
+            columns: details.columns.map((c) => ({
+              name: c.name,
+              data_type: c.data_type ?? "text",
+              udt_name: c.data_type ?? "text",
+              is_nullable: c.is_nullable === true || c.is_nullable === "YES",
+              has_default: false,
+              is_primary_key: primaryKey.includes(c.name),
+              is_unique: false,
+              references: null,
+            })),
+            primary_key: primaryKey,
+            rls_enabled: false,
+            policies: [],
+            workspace_scoped: false,
+            privileges: { anon: [], authenticated: [], service_role: [] },
+          } satisfies SchemaTable;
+        }));
+        return { tables };
+      }
+    },
+    summary: async () => {
+      const { tables } = await live.schema.introspect();
+      return {
+        workspace_id: null,
+        role: "authenticated",
+        endpoints: tables.map((t) => ({
+          table: t.name,
+          workspace_scoped: t.workspace_scoped,
+          rls_enabled: t.rls_enabled,
+          primary_key: t.primary_key,
+          columns: t.columns.map((c) => c.name),
+          methods: ["GET", "POST", "PATCH", "DELETE"],
+          base: `/rest/v1/${t.name}`,
+        })),
+      } satisfies SchemaSummary;
+    },
     openapi:    () => api<Record<string, unknown>>("/admin/v1/schema/openapi.json"),
   },
 
