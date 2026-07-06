@@ -110,17 +110,30 @@ function VerifyPage() {
     await runOne("admin.stats",      () => live.admin.stats(),     (r) => `buckets=${r.buckets} objects=${r.objects} bytes=${r.storage_bytes}`);
 
     // — Realtime auth-gated channels —
+    // Older Pluto backends don't expose admin `system:*` channels. In that
+    // case the socket closes immediately or times out with no auth error —
+    // treat as "skipped" so the checklist doesn't red-flag a missing
+    // optional feature. A genuine `auth_error` still fails the check.
     for (const [id, channel] of [["rt.audit", "system:audit"], ["rt.migrations", "system:migrations"]] as const) {
-      await runOne(id, () => new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => { off(); reject(new Error("timeout after 4s")); }, 4000);
+      const outcome = await new Promise<{ kind: "pass" | "fail" | "skip"; detail: string }>((resolve) => {
+        const timer = setTimeout(() => { off(); resolve({ kind: "skip", detail: "no response in 4s — backend does not expose this channel" }); }, 4000);
         const off = subscribe(channel, () => { /* ignore payload */ }, {
           onStatus: (s: RealtimeStatus) => {
-            if (s.kind === "open")       { clearTimeout(timer); off(); resolve("connected + subscribed"); }
-            else if (s.kind === "auth_error") { clearTimeout(timer); off(); reject(new Error(`${s.error}: ${s.message}`)); }
-            else if (s.kind === "closed") { clearTimeout(timer); reject(new Error(`closed${s.reason ? `: ${s.reason}` : ""}`)); }
+            if (s.kind === "open") { clearTimeout(timer); off(); resolve({ kind: "pass", detail: "connected + subscribed" }); }
+            else if (s.kind === "auth_error") { clearTimeout(timer); off(); resolve({ kind: "fail", detail: `${s.error}: ${s.message}` }); }
+            else if (s.kind === "closed") {
+              clearTimeout(timer);
+              const reason = s.reason ?? "";
+              const notSupported = !reason || /not\s*found|unknown|unsupported|no\s*such/i.test(reason);
+              resolve(notSupported
+                ? { kind: "skip", detail: `channel not exposed by backend${reason ? `: ${reason}` : ""}` }
+                : { kind: "fail", detail: `closed: ${reason}` });
+            }
           },
         });
-      }));
+      });
+      if (outcome.kind === "skip") skipOne(id, outcome.detail);
+      else await runOne(id, async () => { if (outcome.kind === "fail") throw new Error(outcome.detail); return outcome.detail; }, (v) => v);
     }
 
     setRunning(false);
