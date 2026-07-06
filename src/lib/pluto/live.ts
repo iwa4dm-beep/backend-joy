@@ -306,19 +306,21 @@ export const live = {
   },
   schema: {
     introspect: async () => {
-      const rows = await api<Array<{ schema?: string; name: string; columns?: number }>>("/admin/v1/studio/tables?schema=public", { service: true });
+      const raw = await api<unknown>("/admin/v1/studio/tables?schema=public", { service: true }).catch(() => []);
+      const rows = (Array.isArray(raw) ? raw : Array.isArray((raw as { items?: unknown[] })?.items) ? (raw as { items: unknown[] }).items : []) as Array<{ schema?: string; name: string; columns?: number }>;
       const tables = await Promise.all(rows.map(async (row) => {
         const schema = row.schema ?? "public";
-        const details = await api<{ columns: Array<{ name: string; data_type?: string; is_nullable?: string | boolean }>; primary_key?: string[] }>(
+        const details = await api<{ columns?: Array<{ name: string; data_type?: string; is_nullable?: string | boolean }>; primary_key?: string[] }>(
           `/admin/v1/studio/columns?${new URLSearchParams({ schema, table: row.name }).toString()}`,
           { service: true },
-        ).catch(() => ({ columns: [], primary_key: [] }));
+        ).catch(() => ({ columns: [], primary_key: [] as string[] }));
         const primaryKey = details.primary_key ?? [];
+        const cols = Array.isArray(details.columns) ? details.columns : [];
         return {
           schema,
           name: row.name,
           comment: null,
-          columns: details.columns.map((c) => ({
+          columns: cols.map((c) => ({
             name: c.name,
             data_type: c.data_type ?? "text",
             udt_name: c.data_type ?? "text",
