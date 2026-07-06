@@ -18,7 +18,9 @@ export const Route = createFileRoute("/status")({
   component: StatusPage,
 });
 
-const API = (import.meta.env.VITE_PLUTO_API_URL as string) || "http://localhost:8080";
+// Route through the same-origin proxy so the browser never hits the upstream
+// directly (avoids CORS + mixed-origin issues). Override with VITE_PLUTO_BROWSER_URL.
+const API = (import.meta.env.VITE_PLUTO_BROWSER_URL as string) || "/api/pluto";
 
 function StatusPage() {
   const [ready, setReady] = useState<Ready | null>(null);
