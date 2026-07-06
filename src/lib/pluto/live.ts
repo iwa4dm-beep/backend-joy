@@ -250,22 +250,18 @@ export const live = {
   },
   workspaces: {
     list: async () => {
-      try {
-        return await api<{ workspaces: Workspace[] }>("/admin/v1/workspaces/", { service: true });
-      } catch {
-        const projects = await api<Array<{ id: string; slug?: string; name?: string; created_at?: string; archived_at?: string | null }>>("/admin/v1/projects", { service: true });
-        return {
-          workspaces: projects.map((p, index) => ({
-            id: p.id,
-            slug: p.slug ?? (index === 0 ? "root" : `project-${index + 1}`),
-            name: p.name ?? (index === 0 ? "Root workspace" : `Project ${index + 1}`),
-            created_at: p.created_at ?? new Date().toISOString(),
-            archived_at: p.archived_at ?? null,
-            member_count: 1,
-            active_keys: 0,
-          })),
-        };
-      }
+      const projects = await api<Array<{ id: string; slug?: string; name?: string; created_at?: string; archived_at?: string | null }>>("/admin/v1/projects", { service: true });
+      return {
+        workspaces: projects.map((p, index) => ({
+          id: p.id,
+          slug: p.slug ?? (index === 0 ? "root" : `project-${index + 1}`),
+          name: p.name ?? (index === 0 ? "Root workspace" : `Project ${index + 1}`),
+          created_at: p.created_at ?? new Date().toISOString(),
+          archived_at: p.archived_at ?? null,
+          member_count: 1,
+          active_keys: 0,
+        })),
+      };
     },
     create: (slug: string, name: string) =>
       api<{ id: string; slug: string; name: string; keys: { anon: string; service_role: string } }>(
@@ -310,40 +306,36 @@ export const live = {
   },
   schema: {
     introspect: async () => {
-      try {
-        return await api<{ tables: SchemaTable[] }>("/admin/v1/schema", { service: true });
-      } catch {
-        const rows = await api<Array<{ schema?: string; name: string; columns?: number }>>("/admin/v1/studio/tables?schema=public", { service: true });
-        const tables = await Promise.all(rows.map(async (row) => {
-          const schema = row.schema ?? "public";
-          const details = await api<{ columns: Array<{ name: string; data_type?: string; is_nullable?: string | boolean }>; primary_key?: string[] }>(
-            `/admin/v1/studio/columns?${new URLSearchParams({ schema, table: row.name }).toString()}`,
-            { service: true },
-          ).catch(() => ({ columns: [], primary_key: [] }));
-          const primaryKey = details.primary_key ?? [];
-          return {
-            schema,
-            name: row.name,
-            comment: null,
-            columns: details.columns.map((c) => ({
-              name: c.name,
-              data_type: c.data_type ?? "text",
-              udt_name: c.data_type ?? "text",
-              is_nullable: c.is_nullable === true || c.is_nullable === "YES",
-              has_default: false,
-              is_primary_key: primaryKey.includes(c.name),
-              is_unique: false,
-              references: null,
-            })),
-            primary_key: primaryKey,
-            rls_enabled: false,
-            policies: [],
-            workspace_scoped: false,
-            privileges: { anon: [], authenticated: [], service_role: [] },
-          } satisfies SchemaTable;
-        }));
-        return { tables };
-      }
+      const rows = await api<Array<{ schema?: string; name: string; columns?: number }>>("/admin/v1/studio/tables?schema=public", { service: true });
+      const tables = await Promise.all(rows.map(async (row) => {
+        const schema = row.schema ?? "public";
+        const details = await api<{ columns: Array<{ name: string; data_type?: string; is_nullable?: string | boolean }>; primary_key?: string[] }>(
+          `/admin/v1/studio/columns?${new URLSearchParams({ schema, table: row.name }).toString()}`,
+          { service: true },
+        ).catch(() => ({ columns: [], primary_key: [] }));
+        const primaryKey = details.primary_key ?? [];
+        return {
+          schema,
+          name: row.name,
+          comment: null,
+          columns: details.columns.map((c) => ({
+            name: c.name,
+            data_type: c.data_type ?? "text",
+            udt_name: c.data_type ?? "text",
+            is_nullable: c.is_nullable === true || c.is_nullable === "YES",
+            has_default: false,
+            is_primary_key: primaryKey.includes(c.name),
+            is_unique: false,
+            references: null,
+          })),
+          primary_key: primaryKey,
+          rls_enabled: false,
+          policies: [],
+          workspace_scoped: false,
+          privileges: { anon: [], authenticated: [], service_role: [] },
+        } satisfies SchemaTable;
+      }));
+      return { tables };
     },
     summary: async () => {
       const { tables } = await live.schema.introspect();
@@ -537,37 +529,23 @@ export const live = {
       remove: (id: string) => api(`/admin/v1/users/${id}`, { method: "DELETE", service: true }),
     },
     logs:  async (params: { source?: string; level?: string; limit?: number } = {}) => {
-      const qs = new URLSearchParams();
-      if (params.source) qs.set("source", params.source);
-      if (params.level)  qs.set("level",  params.level);
-      qs.set("limit", String(params.limit ?? 100));
-      try {
-        return await api<LogEntry[]>(`/admin/v1/logs?${qs.toString()}`, { service: true });
-      } catch {
-        const audit = await live.audit.list({ limit: params.limit ?? 100 }).catch(() => ({ items: [] }));
-        return audit.items.map((item) => ({
-          id: item.id,
-          ts: item.ts,
-          source: "admin",
-          level: item.status === "error" ? "error" : "info",
-          message: `${item.action}${item.target ? ` · ${item.target}` : ""}`,
-          user_id: item.actor_id,
-          metadata: item.metadata,
-        }));
-      }
+      const audit = await live.audit.list({ limit: params.limit ?? 100 }).catch(() => ({ items: [] }));
+      return audit.items.map((item) => ({
+        id: item.id,
+        ts: item.ts,
+        source: "admin",
+        level: item.status === "error" ? "error" : "info",
+        message: `${item.action}${item.target ? ` · ${item.target}` : ""}`,
+        user_id: item.actor_id,
+        metadata: item.metadata,
+      }));
     },
     stats: async () => {
-      try {
-        return await api<{ users: number; buckets: number; objects: number; storage_bytes: number }>(
-          "/admin/v1/stats", { service: true }
-        );
-      } catch {
-        const [users, buckets] = await Promise.all([
-          live.admin.users.list().catch(() => []),
-          api<unknown[]>("/storage/v1/bucket").catch(() => []),
-        ]);
-        return { users: users.length, buckets: buckets.length, objects: 0, storage_bytes: 0 };
-      }
+      const [users, buckets] = await Promise.all([
+        live.admin.users.list().catch(() => []),
+        api<unknown[]>("/storage/v1/bucket").catch(() => []),
+      ]);
+      return { users: users.length, buckets: buckets.length, objects: 0, storage_bytes: 0 };
     },
     apiKeys: {
       list:   (wsId: string) => api<{ items: WorkspaceKey[] }>(`/admin/v1/workspaces/${wsId}/keys`, { service: true }),
