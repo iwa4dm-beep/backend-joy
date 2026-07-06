@@ -210,7 +210,15 @@ export type AuditQuery = {
 
 export const live = {
   migrations: {
-    list: () => api<{ migrations: MigrationEntry[] }>("/admin/v1/migrations/", { service: true }),
+    list: async () => {
+      const raw = await api<unknown>("/admin/v1/migrations/", { service: true });
+      const arr = Array.isArray(raw)
+        ? (raw as MigrationEntry[])
+        : Array.isArray((raw as { migrations?: unknown })?.migrations)
+        ? ((raw as { migrations: MigrationEntry[] }).migrations)
+        : [];
+      return { migrations: arr };
+    },
     dryRun: (detailed = true) => api<{ dry_run: true; plan: DryRunEntry[] }>(
       "/admin/v1/migrations/run",
       { method: "POST", service: true, body: JSON.stringify({ dry_run: true, detailed }) }
@@ -221,8 +229,41 @@ export const live = {
     ),
     rerun: (version: string) => api(`/admin/v1/migrations/${version}/rerun`, { method: "POST", service: true }),
     rollback: (version: string) => api(`/admin/v1/migrations/${version}/rollback`, { method: "POST", service: true }),
-    lastBoot: () => api<{ run: BootRun | null }>("/admin/v1/migrations/last-boot", { service: true }),
+    lastBoot: async (): Promise<{ run: BootRun | null }> => {
+      // Preferred endpoint (newer backends). Fall back to /health/migrations
+      // when the route doesn't exist or treats the path segment as a UUID.
+      try {
+        const r = await api<{ run: BootRun | null }>("/admin/v1/migrations/last-boot", { service: true });
+        if (r && typeof r === "object" && "run" in r) return r;
+      } catch { /* fall through */ }
+      try {
+        const h = await api<{ status?: string; migrations?: { ok?: boolean; count?: number; current?: string; applied?: string[] } }>("/health/migrations");
+        const applied = Array.isArray(h.migrations?.applied) ? h.migrations!.applied! : [];
+        const run: BootRun = {
+          id: "health",
+          started_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          actor: "health-probe",
+          mode: "apply",
+          host: null,
+          version_tag: h.migrations?.current ?? null,
+          pending: [],
+          drift: [],
+          applied,
+          failed: [],
+          duration_ms: 0,
+          status: h.status === "ok" && h.migrations?.ok ? "ok" : "error",
+          error: null,
+          lock_acquired: true,
+          advisory_key: null,
+        };
+        return { run };
+      } catch {
+        return { run: null };
+      }
+    },
   },
+
 
   jobs: {
     list: () => api<JobToken[]>("/jobs/v1/tokens", { service: true }),
