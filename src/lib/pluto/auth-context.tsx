@@ -17,12 +17,19 @@ function liveSessionToPluto(): PlutoSession | null {
   const s = live.auth.session();
   if (!s) return null;
   return {
-    userId: s.user.id,
-    email:  s.user.email,
-    role:   s.user.role,
-    token:  s.access_token,
-  } as unknown as PlutoSession;
+    access_token: s.access_token,
+    refresh_token: s.refresh_token,
+    expires_at: s.expires_at,
+    user: {
+      id: s.user.id,
+      email: s.user.email,
+      role: s.user.role === "admin" ? "admin" : "user",
+      created_at: "",
+      email_verified: true,
+    },
+  };
 }
+
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PlutoSession | null>(null);
