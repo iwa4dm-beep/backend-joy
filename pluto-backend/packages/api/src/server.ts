@@ -71,7 +71,7 @@ async function main() {
   await app.register(rateLimit, {
     max: cfg.RATE_LIMIT_GLOBAL,
     timeWindow: '1 minute',
-    allowList: (req) => req.url === '/livez' || req.url === '/readyz' || req.url === '/healthz',
+    allowList: (req) => req.url === '/livez' || req.url === '/readyz' || req.url === '/healthz' || req.url === '/openapi.json' || req.url.startsWith('/docs'),
   });
 
   // JWT
