@@ -248,7 +248,7 @@ export function Sidebar({
   return (
     <>
       {/* Desktop rail */}
-      <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-xl">
+      <aside aria-label="Main navigation" className="hidden md:flex w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar/95 backdrop-blur-xl">
         {body}
       </aside>
 
@@ -256,7 +256,9 @@ export function Sidebar({
       <div
         className={`fixed inset-0 z-40 md:hidden transition-opacity duration-300 ${mobileOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
         onClick={onCloseMobile}
+        aria-hidden={!mobileOpen}
       >
+
         <div className="absolute inset-0 bg-background/70 backdrop-blur-sm" />
         <aside
           onClick={(e) => e.stopPropagation()}
