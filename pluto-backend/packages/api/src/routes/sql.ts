@@ -102,7 +102,13 @@ export async function sqlRoutes(app: FastifyInstance, cfg: Config) {
       });
       return reply.code(400).send({ error: 'sql_error', message: e.message, classifications });
     }
-  });
+  };
+
+  app.post('/admin/v1/sql/exec', execHandler);
+  // Stable alias used by external tooling / dashboard.
+  app.post('/admin/v1/sql/run', execHandler);
+
+
 
   // Preview classification without executing.
   app.post('/admin/v1/sql/classify', async (req, reply) => {
