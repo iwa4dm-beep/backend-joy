@@ -8,6 +8,7 @@
 
 export type LiveConfig = {
   url: string;
+  upstreamUrl: string;
   anonKey: string;
   serviceKey?: string;      // optional — only set for admin operations
 };
@@ -15,6 +16,7 @@ export type LiveConfig = {
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
 const URL_ = env.VITE_PLUTO_URL;
 const ANON_KEY = env.VITE_PLUTO_ANON_KEY;
+const BROWSER_URL = env.VITE_PLUTO_BROWSER_URL ?? (URL_ ? "/api/pluto" : undefined);
 
 // Service role is optional and only used by admin surfaces (migrations,
 // job tokens, edge deploy). Prefer supplying it at runtime via the
@@ -27,7 +29,7 @@ export function isLive(): boolean {
 
 export function liveConfig(): LiveConfig | null {
   if (!isLive()) return null;
-  return { url: URL_!, anonKey: ANON_KEY!, serviceKey: SERVICE_KEY };
+  return { url: BROWSER_URL!, upstreamUrl: URL_!, anonKey: ANON_KEY!, serviceKey: SERVICE_KEY };
 }
 
 const SESSION_KEY = "pluto.session.v1";
@@ -66,12 +68,20 @@ export async function api<T = unknown>(
   const text = await res.text();
   const json = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : null;
   if (!res.ok) {
-    const message = typeof json === "object" && json && "message" in json
-      ? String((json as { message?: unknown }).message)
+    const message = typeof json === "object" && json
+      ? String((json as { message?: unknown; error?: unknown }).message ?? (json as { error?: unknown }).error ?? `HTTP ${res.status}`)
       : (typeof json === "string" ? json : `HTTP ${res.status}`);
     throw new Error(message);
   }
   return json as T;
+}
+
+function normalizeAuthResponse(r: AuthSession | { user: AuthUser; session: AuthSession }): { user: AuthUser; session: AuthSession } {
+  if ("session" in r) return { user: normalizeAuthUser(r.user), session: r.session };
+  const session = r as AuthSession;
+  const user = session.user;
+  if (!user) throw new Error("Auth response did not include a user.");
+  return { user: normalizeAuthUser(user), session };
 }
 
 export type MigrationEntry = {
