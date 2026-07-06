@@ -515,7 +515,7 @@ function normalizeAuthUser(u: AuthUser): AuthUser {
 }
 
 // ---- Auth / admin type surface ----
-export type AuthUser = { id: string; email: string; role: string; email_verified?: boolean; email_confirmed_at?: string | null; is_superadmin?: boolean };
+export type AuthUser = { id: string; email: string; role: string; email_verified?: boolean; email_confirmed_at?: string | null; is_superadmin?: boolean; created_at?: string };
 export type AuthSession = { access_token: string; refresh_token: string; expires_at: number; user?: AuthUser };
 export type AdminUser = AuthUser & { created_at: string; is_superadmin?: boolean };
 export type LogEntry = {
