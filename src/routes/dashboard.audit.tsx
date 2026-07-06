@@ -353,9 +353,3 @@ function formatBytes(n: number) {
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
-
-const mockEvents: AuditEvent[] = [
-  { id: "1", ts: new Date().toISOString(), actor_id: "u_admin", actor_email: "admin@pluto.local", actor_role: "admin", action: "migration.run", target: null, status: "ok", metadata: { applied: ["0004_phase6"], failed: [] }, ip: "127.0.0.1" },
-  { id: "2", ts: new Date(Date.now() - 60_000).toISOString(), actor_id: "u_admin", actor_email: "admin@pluto.local", actor_role: "admin", action: "job_token.mint", target: "t_abc", status: "ok", metadata: { name: "nightly-rollup", scope: ["rollup_invoices"] }, ip: "127.0.0.1" },
-  { id: "3", ts: new Date(Date.now() - 300_000).toISOString(), actor_id: "u_admin", actor_email: "admin@pluto.local", actor_role: "admin", action: "migration.run", target: null, status: "dry_run", metadata: { versions: ["0005_audit"], count: 1 }, ip: "127.0.0.1" },
-];
