@@ -15,7 +15,13 @@ const execBody = z.object({
 });
 
 export async function sqlRoutes(app: FastifyInstance, cfg: Config) {
-  app.post('/admin/v1/sql/exec', async (req, reply) => {
+  // Lightweight health probe — deploy verification hits GET to confirm the
+  // SQL surface is mounted after `docker compose restart api`.
+  app.get('/admin/v1/sql/run', async (_req, reply) =>
+    reply.code(200).send({ ok: true, route: '/admin/v1/sql/run', method: 'POST' })
+  );
+
+  const execHandler = async (req: any, reply: any) => {
     const actor = await requireAuth(req, cfg);
     const body = execBody.parse(req.body);
     if (body.project_id) await requireProjectRole(cfg, body.project_id, actor, ['owner', 'admin', 'developer']);
@@ -96,7 +102,13 @@ export async function sqlRoutes(app: FastifyInstance, cfg: Config) {
       });
       return reply.code(400).send({ error: 'sql_error', message: e.message, classifications });
     }
-  });
+  };
+
+  app.post('/admin/v1/sql/exec', execHandler);
+  // Stable alias used by external tooling / dashboard.
+  app.post('/admin/v1/sql/run', execHandler);
+
+
 
   // Preview classification without executing.
   app.post('/admin/v1/sql/classify', async (req, reply) => {
