@@ -83,17 +83,32 @@ async function main() {
 
 
 
+  // Trace-ID: every request gets an `x-request-id` (accepted from the caller
+  // when supplied, otherwise minted) so operators can grep one identifier
+  // across API logs, upload failures, and RLS 4xx bodies. The ID is echoed
+  // on every response and included in the JSON error envelope below.
+  const genTraceId = () =>
+    (globalThis.crypto?.randomUUID?.() ??
+      `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`);
+  app.addHook('onRequest', async (req, reply) => {
+    const incoming = req.headers['x-request-id'];
+    const traceId = (typeof incoming === 'string' && incoming.length <= 128 && incoming) || genTraceId();
+    (req as any).traceId = traceId;
+    reply.header('x-request-id', traceId);
+    (req as any).log = req.log.child({ traceId });
+  });
+
   // Detailed request/response logging for the dashboard flows that operators
-  // most often need to debug (workspace / project / API-key / token creation).
-  // We capture the parsed body pre-handler and re-emit it — along with the
-  // response payload and status — in an `onResponse` hook. The log line is
-  // structured (pino) so `docker logs api | grep dashboardFlow` surfaces
-  // every 4xx/5xx with the full request + backend error message.
-  const LOGGED_PATH_RE = /^\/(admin\/v1\/(workspaces|projects)(\/|$)|tokens\/v1\/tokens(\/|$))/;
+  // most often need to debug (workspace / project / API-key / token creation)
+  // + storage uploads and REST/RLS failures. We capture the parsed body
+  // pre-handler and re-emit it — along with the response payload, status,
+  // and traceId — in an `onResponse` hook. Log line is structured (pino)
+  // so `docker logs api | grep dashboardFlow` surfaces every 4xx/5xx with
+  // full context.
+  const LOGGED_PATH_RE = /^\/(admin\/v1\/(workspaces|projects)(\/|$)|tokens\/v1\/tokens(\/|$)|storage\/v1\/|rest\/v1\/)/;
+  const shouldLog = (req: any, status: number) => LOGGED_PATH_RE.test(req.url) && (status >= 400 || /^\/(admin|tokens)\//.test(req.url));
   app.addHook('preHandler', async (req) => {
-    if (LOGGED_PATH_RE.test(req.url)) {
-      (req as any)._loggedBody = req.body ?? null;
-    }
+    if (LOGGED_PATH_RE.test(req.url)) (req as any)._loggedBody = req.body ?? null;
   });
   app.addHook('onSend', async (req, _reply, payload) => {
     if (LOGGED_PATH_RE.test(req.url) && typeof payload === 'string' && payload.length <= 4096) {
@@ -102,13 +117,14 @@ async function main() {
     return payload;
   });
   app.addHook('onResponse', async (req, reply) => {
-    if (!LOGGED_PATH_RE.test(req.url)) return;
     const status = reply.statusCode;
+    if (!shouldLog(req, status)) return;
     const level = status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info';
     let response: unknown = (req as any)._loggedResponse ?? null;
     if (typeof response === 'string') { try { response = JSON.parse(response); } catch { /* keep as string */ } }
     app.log[level]({
       dashboardFlow: true,
+      traceId: (req as any).traceId,
       method: req.method,
       url: req.url,
       status,
@@ -117,6 +133,7 @@ async function main() {
       response,
     }, `dashboardFlow ${req.method} ${req.url} → ${status}`);
   });
+
 
   // Rate limit
   await app.register(rateLimit, {
