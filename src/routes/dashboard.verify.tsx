@@ -65,6 +65,10 @@ function VerifyPage() {
     }
   }, [update]);
 
+  const skipOne = useCallback((id: string, detail: string) => {
+    update(id, { status: "skip", detail });
+  }, [update]);
+
   const runAll = useCallback(async () => {
     setRunning(true); setSummary(null);
     setChecks(INITIAL.map((c) => ({ ...c, status: "idle", detail: undefined })));
