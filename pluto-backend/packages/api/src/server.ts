@@ -61,15 +61,21 @@ async function main() {
   // Security
   await app.register(helmet, { contentSecurityPolicy: false });
 
-  // CORS
-  const origins = cfg.CORS_ORIGINS === '*' ? true : cfg.CORS_ORIGINS.split(',').map((s) => s.trim());
+  // CORS — database-driven allow-list (admin.cors_origins), refreshed every
+  // 15s + on every mutation. CORS_ORIGINS env is merged in as a static
+  // fallback so the API's own domain survives DB outages. localhost is
+  // auto-allowed in NODE_ENV=development.
+  await primeCorsCache(cfg).catch(() => undefined);
   await app.register(cors, {
-    origin: origins,
+    origin: makeOriginCallback(cfg),
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'apikey', 'x-client-info', 'prefer', 'range'],
     exposedHeaders: ['content-range', 'x-total-count'],
+    maxAge: 86400,
   });
+
+
 
   // Rate limit
   await app.register(rateLimit, {
