@@ -10,6 +10,7 @@ import { recordError, recordSuccess, validateSecrets } from "@/lib/pluto/upstrea
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
   "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
+  "content-encoding",
 ]);
 
 async function handle({ request, params }: { request: Request; params: { _splat?: string } }) {
