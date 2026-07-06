@@ -145,12 +145,8 @@ export function CommandPalette() {
   }, []);
 
   return (
-    <CommandDialog
-      open={open}
-      onOpenChange={setOpen}
-      title="Command palette"
-      description="Search pages and jump anywhere in Pluto BaaS"
-    >
+    <CommandDialog open={open} onOpenChange={setOpen}>
+
       <CommandInput
         placeholder="Search pages, actions, docs…  (try ‘sql’, ‘users’, ‘logs’)"
         aria-label="Search pages and actions"
