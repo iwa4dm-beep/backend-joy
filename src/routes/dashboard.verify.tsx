@@ -189,7 +189,7 @@ function VerifyPage() {
                   <div className="flex-1 min-w-0">
                     <div className="font-medium">{c.label}</div>
                     {c.detail && (
-                      <div className={"mt-0.5 text-xs font-mono truncate " + (c.status === "fail" ? "text-red-500" : "text-muted-foreground")}>
+                      <div className={"mt-0.5 text-xs font-mono truncate " + (c.status === "fail" ? "text-red-500" : c.status === "skip" ? "text-amber-500" : "text-muted-foreground")}>
                         {c.detail}
                       </div>
                     )}
