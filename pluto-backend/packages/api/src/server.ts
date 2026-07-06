@@ -36,6 +36,7 @@ import { complianceRoutes } from './routes/compliance.js';
 import { vaultRoutes } from './routes/vault.js';
 import { studioRoutes } from './routes/studio.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
+import { jobsRoutes } from './routes/jobs.js';
 import { metricsPlugin } from './observability/metrics.js';
 
 
@@ -119,6 +120,7 @@ async function main() {
   await vaultRoutes(app, cfg);
   await studioRoutes(app, cfg);
   await marketplaceRoutes(app, cfg);
+  await jobsRoutes(app, cfg);
 
 
 
@@ -127,7 +129,7 @@ async function main() {
     service: 'pluto-api',
     version: '0.1.0',
     docs: 'https://github.com/your-org/pluto-backend',
-    endpoints: ['/livez', '/readyz', '/healthz', '/metrics', '/auth/v1/*', '/rest/v1/*', '/storage/v1/*', '/realtime/v1/*', '/admin/v1/*', '/functions/v1/*'],
+    endpoints: ['/livez', '/readyz', '/healthz', '/metrics', '/auth/v1/*', '/rest/v1/*', '/storage/v1/*', '/realtime/v1/*', '/admin/v1/*', '/functions/v1/*', '/jobs/v1/*'],
   }));
 
   // Global error handler — always JSON
