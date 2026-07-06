@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Circle, Loader2, PlayCircle, RefreshCw, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, MinusCircle, PlayCircle, RefreshCw, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { isLive, live, liveConfig, subscribe, type RealtimeStatus } from "@/lib/pluto/live";
 
