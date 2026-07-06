@@ -501,13 +501,21 @@ export type AllowedOrigin = {
 
 // ---- Session persistence helpers (used by live.auth.*) ----
 function persistSession(s: AuthSession, u: AuthUser): void {
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...s, user: u }));
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...s, user: normalizeAuthUser(u) }));
+}
+
+function normalizeAuthUser(u: AuthUser): AuthUser {
+  return {
+    ...u,
+    role: u.is_superadmin || u.role === "admin" ? "admin" : "user",
+    email_verified: u.email_verified ?? Boolean(u.email_confirmed_at),
+  };
 }
 
 // ---- Auth / admin type surface ----
-export type AuthUser = { id: string; email: string; role: "admin" | "user"; email_verified?: boolean };
+export type AuthUser = { id: string; email: string; role: string; email_verified?: boolean; email_confirmed_at?: string | null; is_superadmin?: boolean };
 export type AuthSession = { access_token: string; refresh_token: string; expires_at: number; user?: AuthUser };
-export type AdminUser = AuthUser & { created_at: string };
+export type AdminUser = AuthUser & { created_at: string; is_superadmin?: boolean };
 export type LogEntry = {
   id: string; ts: string; source: string; level: string;
   message: string; user_id: string | null; metadata: unknown;
