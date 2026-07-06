@@ -31,7 +31,7 @@ function JobsPage() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      if (!isLive()) { setTokens(mockTokens); return; }
+      if (!isLive()) { setTokens([]); setErr("Backend not configured."); return; }
       setTokens(await live.jobs.list());
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   }, []);
