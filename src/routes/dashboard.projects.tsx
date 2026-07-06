@@ -11,6 +11,7 @@ export const Route = createFileRoute("/dashboard/projects")({
 function ProjectsPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string; slug: string; workspace_id?: string | null }>>([]);
   const [wsId, setWsId] = useState<string | null>(null);
   const [keys, setKeys] = useState<WorkspaceKey[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -27,6 +28,7 @@ function ProjectsPage() {
         const { workspaces: ws } = await live.workspaces.list();
         setWorkspaces(ws);
         if (ws.length && !wsId) setWsId(ws[0].id);
+        setProjects(await live.admin.projects.list());
       } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     })();
   }, []);
@@ -64,9 +66,12 @@ function ProjectsPage() {
       await live.admin.projects.create({ name: projectName.trim(), slug: projectSlug.trim(), workspace_id: wsId });
       setProjectName("");
       setProjectSlug("");
+      setProjects(await live.admin.projects.list());
       setErr(null);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   }
+
+  const visibleProjects = projects.filter((p) => !wsId || !p.workspace_id || p.workspace_id === wsId);
 
   async function revoke(id: string) {
     if (!wsId) return;
@@ -131,6 +136,25 @@ function ProjectsPage() {
           >
             <Plus className="h-3.5 w-3.5" /> Create
           </button>
+        </div>
+        <div className="mt-4 overflow-hidden rounded-md border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40">
+              <tr>
+                <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Project</th>
+                <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Slug</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleProjects.length === 0 && <tr><td colSpan={2} className="px-3 py-4 text-center text-xs text-muted-foreground">No projects in this workspace yet.</td></tr>}
+              {visibleProjects.map((p) => (
+                <tr key={p.id} className="border-t border-border">
+                  <td className="px-3 py-2">{p.name}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{p.slug}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
