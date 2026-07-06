@@ -1085,7 +1085,20 @@ export type IntegrationHealth = {
   ok: boolean; generated_at: string; modules: IntegrationModule[];
 };
 export const integrations = {
-  health: () => api<IntegrationHealth>("/admin/v1/integrations/health", { service: true }),
+  health: async (): Promise<IntegrationHealth> => {
+    try {
+      return await api<IntegrationHealth>("/admin/v1/integrations/health", { service: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Backend without Phase 15/16 integration registry: return an empty
+      // but well-formed payload so the UI renders a clear "no modules"
+      // state instead of crashing.
+      if (/not found|404/i.test(msg)) {
+        return { ok: true, generated_at: new Date().toISOString(), modules: [] };
+      }
+      throw e;
+    }
+  },
 };
 
 // The chat return shape from the backend is { content, model, usage }.
