@@ -80,9 +80,8 @@ function Overview() {
   const [stats, setStats] = useState({ users: 0, tables: 0, buckets: 0, logs: 0 });
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [source, setSource] = useState<"mock" | "live">(isLive() ? "live" : "mock");
 
-  // Live health probe against the real backend (api.timescard.cloud)
+  // Live health probe against the real backend (via /api/pluto proxy)
   type HealthState = { live: boolean | null; ready: boolean | null; mig: boolean | null; ms: number | null };
   const [health, setHealth] = useState<HealthState>({ live: null, ready: null, mig: null, ms: null });
 
@@ -94,21 +93,13 @@ function Overview() {
   useEffect(() => {
     (async () => {
       try {
-        if (isLive()) {
-          const [s, l, sch] = await Promise.all([
-            live.admin.stats(),
-            live.admin.logs({ limit: 100 }),
-            live.schema.introspect().catch(() => ({ tables: [] as unknown[] })),
-          ]);
-          setStats({ users: s.users, tables: sch.tables.length, buckets: s.buckets, logs: l.length });
-          setSource("live");
-        } else {
-          const [u, t, b, l] = await Promise.all([
-            pluto.users.list(), pluto.db.listTables(),
-            pluto.storage.listBuckets(), pluto.logs.list(),
-          ]);
-          setStats({ users: u.length, tables: t.length, buckets: b.length, logs: l.length });
-        }
+        if (!isLive()) throw new Error("Backend not configured");
+        const [s, l, sch] = await Promise.all([
+          live.admin.stats(),
+          live.admin.logs({ limit: 100 }),
+          live.schema.introspect().catch(() => ({ tables: [] as unknown[] })),
+        ]);
+        setStats({ users: s.users, tables: sch.tables.length, buckets: s.buckets, logs: l.length });
       } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
       finally { setLoaded(true); }
     })();
@@ -186,9 +177,9 @@ function Overview() {
               <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground backdrop-blur">
                 <span
                   aria-hidden="true"
-                  className={`h-1.5 w-1.5 rounded-full ${source === "live" ? "bg-emerald-500 shadow-[0_0_8px_theme(colors.emerald.500)]" : "bg-muted-foreground/60"}`}
+                  className={`h-1.5 w-1.5 rounded-full ${err ? "bg-destructive" : "bg-emerald-500 shadow-[0_0_8px_theme(colors.emerald.500)]"}`}
                 />
-                {source === "live" ? "Live data" : "Mock data"} · Pluto instance
+                {err ? "Backend unreachable" : "Live data"} · Pluto instance
               </div>
               <a
                 href={API_BASE}
