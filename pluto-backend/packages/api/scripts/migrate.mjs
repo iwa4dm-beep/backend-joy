@@ -16,6 +16,31 @@ if (!DATABASE_URL) {
 
 const sql = postgres(DATABASE_URL, { max: 1 });
 
+await sql.unsafe(`
+  CREATE SCHEMA IF NOT EXISTS auth;
+
+  CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
+    LANGUAGE sql STABLE
+    SET search_path = public
+  AS $$
+    SELECT nullif(current_setting('pluto.user_id', true), '')::uuid
+  $$;
+
+  CREATE OR REPLACE FUNCTION auth.role() RETURNS text
+    LANGUAGE sql STABLE
+    SET search_path = public
+  AS $$
+    SELECT coalesce(nullif(current_setting('pluto.role', true), ''), 'anon')
+  $$;
+
+  CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb
+    LANGUAGE sql STABLE
+    SET search_path = public
+  AS $$
+    SELECT nullif(current_setting('pluto.jwt', true), '')::jsonb
+  $$;
+`);
+
 await sql`CREATE TABLE IF NOT EXISTS _pluto_migrations (
   name text PRIMARY KEY,
   applied_at timestamptz DEFAULT now()
