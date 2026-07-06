@@ -143,6 +143,8 @@ async function main() {
   await jobsRoutes(app, cfg);
   await corsRoutes(app, cfg);
   await onboardingRoutes(app, cfg);
+  await invitesRoutes(app, cfg);
+
 
 
 
