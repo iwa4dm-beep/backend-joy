@@ -266,3 +266,44 @@
     color: var(--foreground);
   }
 }
+
+/* --- Accessibility: focus ring on any keyboard-focused control --- */
+@layer base {
+  :where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--primary) 80%, transparent);
+    outline-offset: 2px;
+    border-radius: calc(var(--radius) - 4px);
+  }
+  /* Skip-to-content helper used in the dashboard shell */
+  .skip-link {
+    position: absolute;
+    left: 0.5rem;
+    top: 0.5rem;
+    z-index: 100;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-weight: 600;
+    transform: translateY(-150%);
+    transition: transform 180ms ease;
+  }
+  .skip-link:focus-visible { transform: translateY(0); }
+}
+
+/* --- Reduced motion — respect user OS preference, keep UI still smooth --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 120ms !important;
+    scroll-behavior: auto !important;
+  }
+  .mesh-bg { background-image: none !important; }
+  [class*="animate-glow-pulse"],
+  [class*="animate-float-slow"],
+  [class*="animate-fade-in-up"] { animation: none !important; }
+}
+
