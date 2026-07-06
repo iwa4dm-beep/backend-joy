@@ -13,6 +13,14 @@ const HOP_BY_HOP = new Set([
   "content-encoding",
 ]);
 
+const CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+  "access-control-allow-headers": "content-type, authorization, apikey, x-requested-with, accept, origin",
+  "access-control-expose-headers": "content-type, x-pluto-offline, x-request-id",
+  "access-control-max-age": "86400",
+};
+
 async function handle({ request, params }: { request: Request; params: { _splat?: string } }) {
   const upstream = process.env.PLUTO_UPSTREAM_URL ?? "https://api.timescard.cloud";
   const splat = params._splat ?? "";
@@ -37,6 +45,7 @@ async function handle({ request, params }: { request: Request; params: { _splat?
           "content-type": "application/json",
           "cache-control": "no-store",
           "x-pluto-offline": "1",
+          ...CORS_HEADERS,
         },
       },
     );
@@ -59,6 +68,8 @@ async function handle({ request, params }: { request: Request; params: { _splat?
     upstreamRes.headers.forEach((value, key) => {
       if (!HOP_BY_HOP.has(key.toLowerCase())) respHeaders.set(key, value);
     });
+    // Same-origin proxy — attach CORS defensively so callers on any subdomain work too.
+    for (const [k, v] of Object.entries(CORS_HEADERS)) respHeaders.set(k, v);
     if (upstreamRes.ok) {
       recordSuccess(`/${splat}`);
     } else {
@@ -79,7 +90,7 @@ async function handle({ request, params }: { request: Request; params: { _splat?
         error: msg,
         target,
       }),
-      { status: 200, headers: { "content-type": "application/json", "x-pluto-offline": "1" } },
+      { status: 200, headers: { "content-type": "application/json", "x-pluto-offline": "1", ...CORS_HEADERS } },
     );
   }
 }
@@ -97,12 +108,7 @@ export const Route = createFileRoute("/api/pluto/$")({
       OPTIONS: async () =>
         new Response(null, {
           status: 204,
-          headers: {
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, apikey",
-            "access-control-max-age": "86400",
-          },
+          headers: CORS_HEADERS,
         }),
     },
   },
