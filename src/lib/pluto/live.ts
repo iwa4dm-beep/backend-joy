@@ -129,10 +129,13 @@ export async function api<T = unknown>(
   const cfg = liveConfig();
   if (!cfg) throw new Error("Pluto backend not configured (set VITE_PLUTO_URL & VITE_PLUTO_ANON_KEY)");
   const { service, skipRefresh, headers, ...rest } = init;
+  const hasBody = rest.body != null && rest.body !== "";
   const doFetch = () => fetch(cfg.url.replace(/\/$/, "") + path, {
     ...rest,
     headers: {
-      "content-type": "application/json",
+      // Fastify rejects application/json + empty body with 400.
+      // Only advertise a JSON body when we actually send one.
+      ...(hasBody ? { "content-type": "application/json" } : {}),
       ...bearer(service),
       ...(headers as Record<string, string> | undefined),
     },
