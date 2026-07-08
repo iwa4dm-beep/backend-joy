@@ -20,7 +20,9 @@ type Job = {
   log?: string; created_at: string; finished_at: string | null;
 };
 
-const TABS = ["Connections", "Import File", "Export", "History"] as const;
+const TABS = ["Connections", "Import File", "Export", "History", "Access"] as const;
+
+type Grant = { user_id: string; user_email: string | null; access: "admin" | "reader"; granted_at: string; granted_by_email: string | null; note: string | null };
 
 function DbImportPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Connections");
