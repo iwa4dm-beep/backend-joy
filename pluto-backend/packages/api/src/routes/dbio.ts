@@ -458,4 +458,82 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
     reply.header('content-disposition', `attachment; filename="${schema}_${table}.sql"`);
     return reply.send(lines.join('\n'));
   });
+
+  // ── grants (RBAC) ────────────────────────────────────────────────────────
+  // Superadmin-only. Delegates dbio access to non-superadmin users.
+  app.get('/admin/v1/dbio/grants', async (req, reply) => {
+    await requireGrantAdmin(req, cfg);
+    const sql = getSql(cfg);
+    const rows = await sql`
+      select g.user_id, g.access, g.granted_by, g.granted_at, g.note,
+             u.email as user_email, gb.email as granted_by_email
+      from admin.dbio_grants g
+      left join auth.users u  on u.id  = g.user_id
+      left join auth.users gb on gb.id = g.granted_by
+      order by g.granted_at desc`;
+    return reply.send({ grants: rows });
+  });
+
+  app.post('/admin/v1/dbio/grants', async (req: any, reply) => {
+    const actor = await requireGrantAdmin(req, cfg);
+    const body = z.object({
+      user_id: z.string().uuid().optional(),
+      user_email: z.string().email().optional(),
+      access: z.enum(['admin', 'reader']),
+      note: z.string().max(500).optional(),
+    }).refine((b) => b.user_id || b.user_email, { message: 'user_id or user_email required' }).parse(req.body);
+
+    const sql = getSql(cfg);
+    let userId = body.user_id;
+    if (!userId) {
+      const [u] = await sql<any[]>`select id from auth.users where email = ${body.user_email} limit 1`;
+      if (!u) return reply.code(404).send({ error: 'user not found for that email' });
+      userId = u.id;
+    }
+    const [row] = await sql<any[]>`
+      insert into admin.dbio_grants (user_id, access, granted_by, note)
+      values (${userId}, ${body.access}, ${actor.userId}, ${body.note ?? null})
+      on conflict (user_id) do update set access = excluded.access, granted_by = excluded.granted_by, note = excluded.note, granted_at = now()
+      returning user_id, access, granted_by, granted_at, note`;
+    await logAudit(cfg, {
+      actor_id: actor.userId, project_id: null,
+      action: 'dbio.grant.upsert', resource_type: 'dbio_grant',
+      resource_id: userId, params: { access: body.access }, result: 'ok',
+    });
+    return reply.send(row);
+  });
+
+  app.delete('/admin/v1/dbio/grants/:userId', async (req: any, reply) => {
+    const actor = await requireGrantAdmin(req, cfg);
+    const sql = getSql(cfg);
+    await sql`delete from admin.dbio_grants where user_id = ${req.params.userId}`;
+    await logAudit(cfg, {
+      actor_id: actor.userId, project_id: null,
+      action: 'dbio.grant.revoke', resource_type: 'dbio_grant',
+      resource_id: req.params.userId, params: {}, result: 'ok',
+    });
+    return reply.send({ ok: true });
+  });
+
+  // "Do I have access?" — any signed-in user; UI uses this to decide whether
+  // to render the Database Import & Connect page in the sidebar.
+  app.get('/admin/v1/dbio/whoami', async (req, reply) => {
+    try {
+      const gate = await requireDbioAccess(req, cfg, 'reader');
+      let level: 'admin' | 'reader' | 'superadmin' | 'token' = 'admin';
+      if (gate.viaToken) level = 'token';
+      else if (gate.userId) {
+        const sql = getSql(cfg);
+        const [u] = await sql<any[]>`select is_superadmin from auth.users where id = ${gate.userId}`;
+        if (u?.is_superadmin) level = 'superadmin';
+        else {
+          const [g] = await sql<any[]>`select access from admin.dbio_grants where user_id = ${gate.userId}`;
+          level = g?.access ?? 'reader';
+        }
+      }
+      return reply.send({ ok: true, level });
+    } catch (e: any) {
+      return reply.code(e.statusCode ?? 401).send({ ok: false, error: e.message });
+    }
+  });
 }

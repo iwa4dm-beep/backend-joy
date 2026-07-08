@@ -21,6 +21,8 @@ const SCOPES = [
   'realtime:write',
   'admin:read',
   'admin:write',
+  'dbio:read',
+  'dbio:admin',
   '*',
 ] as const;
 
@@ -40,6 +42,8 @@ const COVERAGE: Record<string, Array<{ method: string; path: string; description
   'realtime:write': [{ method: 'POST', path: '/realtime/v1/broadcast', description: 'Broadcast realtime events' }],
   'admin:read': [{ method: 'GET', path: '/admin/v1/*', description: 'Read admin resources' }],
   'admin:write': [{ method: 'POST/PATCH/DELETE', path: '/admin/v1/*', description: 'Mutate admin resources' }],
+  'dbio:read':  [{ method: 'GET',  path: '/admin/v1/dbio/*', description: 'Read database import/export state (connections, jobs, exports)' }],
+  'dbio:admin': [{ method: '*',    path: '/admin/v1/dbio/*', description: 'Full database import/export access (create connections, run imports)' }],
   '*': [{ method: '*', path: '*', description: 'All scopes' }],
 };
 
