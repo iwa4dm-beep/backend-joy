@@ -241,13 +241,24 @@ function parsePrefer(req: FastifyRequest): { return: string; resolution?: string
   return out;
 }
 
+function sendParseError(req: any, reply: FastifyReply, e: unknown) {
+  const url = (req.raw && req.raw.url) || req.url;
+  if (e instanceof RestParseError) {
+    req.log?.warn({ url, code: e.message, ...e.detail }, 'rest.parse_error');
+    return reply.code(400).send({ error: 'bad_request', code: e.message, url, ...e.detail });
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  req.log?.warn({ url, msg }, 'rest.error');
+  return reply.code(400).send({ error: 'bad_request', message: msg, url });
+}
+
 export async function restRoutes(app: FastifyInstance, cfg: Config) {
   // --- GET /rest/v1/:table ---
   app.get('/rest/v1/:table', async (req: any, reply: FastifyReply) => {
     try {
       const table = safeIdent(req.params.table);
       const q = parseFilters(req.query || {});
-      const where = buildWhere(q.filters);
+      const where = buildWhere(q.nodes);
       const orderBy = buildOrder(q.order);
       const limit = q.limit != null ? `LIMIT ${Math.max(0, Math.min(q.limit, 10000))}` : '';
       const offset = q.offset != null ? `OFFSET ${Math.max(0, q.offset)}` : '';
@@ -255,13 +266,10 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
 
       const rows = await runAs(app, cfg, req, (tx) => tx.unsafe(sqlText, where.params));
 
-      // Content-Range like PostgREST when a range header was sent
       const range = req.headers.range;
       if (range) reply.header('content-range', `${q.offset ?? 0}-${(q.offset ?? 0) + rows.length - 1}/*`);
       return reply.send(rows);
-    } catch (e: any) {
-      return reply.code(400).send({ error: 'bad_request', message: e.message });
-    }
+    } catch (e) { return sendParseError(req, reply, e); }
   });
 
   // --- POST /rest/v1/:table (insert / upsert) ---
@@ -274,7 +282,7 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
       if (!rows.length) return reply.code(400).send({ error: 'empty_body' });
 
       const cols = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
-      cols.forEach((c) => { if (!SAFE_IDENT.test(c)) throw new Error(`Invalid column: ${c}`); });
+      cols.forEach((c) => { if (!SAFE_IDENT.test(c)) throw new RestParseError('invalid_column', { column: c }); });
       const colList = cols.map(safeIdent).join(', ');
 
       const params: any[] = [];
@@ -300,9 +308,7 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
 
       const result = await runAs(app, cfg, req, (tx) => tx.unsafe(sqlText, params));
       return reply.code(201).send(prefer.return === 'minimal' ? null : result);
-    } catch (e: any) {
-      return reply.code(400).send({ error: 'bad_request', message: e.message });
-    }
+    } catch (e) { return sendParseError(req, reply, e); }
   });
 
   // --- PATCH /rest/v1/:table ---
@@ -310,11 +316,11 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
     try {
       const table = safeIdent(req.params.table);
       const q = parseFilters(req.query || {});
-      const where = buildWhere(q.filters);
+      const where = buildWhere(q.nodes);
       const body = req.body || {};
       const cols = Object.keys(body);
       if (!cols.length) return reply.code(400).send({ error: 'empty_body' });
-      cols.forEach((c) => { if (!SAFE_IDENT.test(c)) throw new Error(`Invalid column: ${c}`); });
+      cols.forEach((c) => { if (!SAFE_IDENT.test(c)) throw new RestParseError('invalid_column', { column: c }); });
 
       const params: any[] = [];
       const setClause = cols.map((c) => {
@@ -330,9 +336,7 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
 
       const result = await runAs(app, cfg, req, (tx) => tx.unsafe(sqlText, params));
       return reply.send(prefer.return === 'minimal' ? null : result);
-    } catch (e: any) {
-      return reply.code(400).send({ error: 'bad_request', message: e.message });
-    }
+    } catch (e) { return sendParseError(req, reply, e); }
   });
 
   // --- DELETE /rest/v1/:table ---
@@ -340,7 +344,7 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
     try {
       const table = safeIdent(req.params.table);
       const q = parseFilters(req.query || {});
-      const where = buildWhere(q.filters);
+      const where = buildWhere(q.nodes);
       if (!where.sql) return reply.code(400).send({ error: 'refused', message: 'DELETE without filters refused' });
       const prefer = parsePrefer(req);
       const returning = prefer.return === 'minimal' ? '' : 'RETURNING *';
@@ -348,9 +352,7 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
 
       const result = await runAs(app, cfg, req, (tx) => tx.unsafe(sqlText, where.params));
       return reply.send(prefer.return === 'minimal' ? null : result);
-    } catch (e: any) {
-      return reply.code(400).send({ error: 'bad_request', message: e.message });
-    }
+    } catch (e) { return sendParseError(req, reply, e); }
   });
 
   // --- POST /rest/v1/rpc/:fn ---
@@ -361,7 +363,7 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
       const keys = Object.keys(args);
       const params: any[] = [];
       const named = keys.map((k) => {
-        if (!SAFE_IDENT.test(k)) throw new Error(`Invalid arg name: ${k}`);
+        if (!SAFE_IDENT.test(k)) throw new RestParseError('invalid_column', { column: k });
         params.push(args[k]);
         return `${k} => $${params.length}`;
       }).join(', ');
@@ -369,8 +371,6 @@ export async function restRoutes(app: FastifyInstance, cfg: Config) {
 
       const rows = await runAs(app, cfg, req, (tx) => tx.unsafe(sqlText, params));
       return reply.send(rows.length === 1 ? rows[0].result : rows.map((r: any) => r.result));
-    } catch (e: any) {
-      return reply.code(400).send({ error: 'bad_request', message: e.message });
-    }
+    } catch (e) { return sendParseError(req, reply, e); }
   });
 }
