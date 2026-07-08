@@ -53,6 +53,10 @@ import {
   SAFE_IDENT,
 } from './rest-parser.js';
 
+export { VALID_PG_ROLES, resolvePgRole, type PgRole } from './rest-role.js';
+import { resolvePgRole } from './rest-role.js';
+
+
 async function resolveClaims(app: FastifyInstance, req: FastifyRequest): Promise<{ role: string; claims: any }> {
   const h = req.headers.authorization;
   if (!h || !h.toLowerCase().startsWith('bearer ')) {
@@ -74,20 +78,28 @@ async function runAs(
 ) {
   const sql = getSql(cfg);
   const { role, claims } = await resolveClaims(app, req);
-  // Enforce role & JWT claims for RLS via transaction-scoped GUCs.
+  const { pgRole, fellBack, original } = resolvePgRole(role);
+  if (fellBack) {
+    (req as any).log?.warn(
+      { url: (req.raw && req.raw.url) || req.url, jwt_role: original, pg_role: pgRole },
+      'rest.role_fallback: JWT role is not a valid Postgres role — using authenticated',
+    );
+  }
+  const userId = typeof claims?.sub === 'string' ? claims.sub : '';
+  const appRole = typeof claims?.role === 'string' ? claims.role : (pgRole === 'anon' ? 'anon' : 'authenticated');
   return await sql.begin(async (tx: any) => {
-    // Only three real Postgres roles are valid for SET ROLE on the Data API path.
-    // App-level roles (admin/user/super_admin) live in JWT claims and are enforced
-    // by RLS via request.jwt.claims — never as a Postgres role. Anything else
-    // (including 'admin', 'service_role') collapses to 'authenticated' so the
-    // signed-in user's RLS policies apply and Postgres doesn't error with
-    // `role "admin" does not exist`.
-    const pgRole = role === 'anon' ? 'anon' : 'authenticated';
     await tx.unsafe(`SET LOCAL ROLE ${pgRole}`);
+    // Transaction-scoped GUCs read by the auth.uid() / auth.role() / auth.jwt()
+    // shims in migration 0015_1. Without pluto.user_id, RLS policies of the
+    // form `with check (created_by = auth.uid())` deny every insert.
+    await tx`SELECT set_config('pluto.user_id', ${userId}, true)`;
+    await tx`SELECT set_config('pluto.role', ${appRole}, true)`;
+    await tx`SELECT set_config('pluto.jwt', ${JSON.stringify(claims)}, true)`;
     await tx`SELECT set_config('request.jwt.claims', ${JSON.stringify(claims)}, true)`;
     return fn(tx);
   });
 }
+
 
 function parsePrefer(req: FastifyRequest): { return: string; resolution?: string } {
   const raw = String(req.headers['prefer'] || '');
