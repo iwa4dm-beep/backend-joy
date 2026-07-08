@@ -20,7 +20,9 @@ type Job = {
   log?: string; created_at: string; finished_at: string | null;
 };
 
-const TABS = ["Connections", "Import File", "Export", "History"] as const;
+const TABS = ["Connections", "Import File", "Export", "History", "Access"] as const;
+
+type Grant = { user_id: string; user_email: string | null; access: "admin" | "reader"; granted_at: string; granted_by_email: string | null; note: string | null };
 
 function DbImportPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Connections");
@@ -141,9 +143,38 @@ function DbImportPage() {
     catch (e: any) { setErr(e.message); }
   }
 
+  // Access / Grants (superadmin only)
+  const [grants, setGrants] = useState<Grant[]>([]);
+  const [newGrant, setNewGrant] = useState({ user_email: "", access: "admin" as "admin" | "reader", note: "" });
+  const [level, setLevel] = useState<string>("");
+  async function loadGrants() {
+    try { const r = await plutoApi<{ grants: Grant[] }>("/admin/v1/dbio/grants"); setGrants(r.grants); }
+    catch (e: any) { setErr(e.message); }
+  }
+  async function addGrant() {
+    setErr(null); setMsg(null);
+    try {
+      await plutoApi("/admin/v1/dbio/grants", { method: "POST", body: JSON.stringify(newGrant) });
+      setMsg("Grant saved");
+      setNewGrant({ user_email: "", access: "admin", note: "" });
+      await loadGrants();
+    } catch (e: any) { setErr(e.message); }
+  }
+  async function revokeGrant(uid: string) {
+    if (!confirm("Revoke DBIO access from this user?")) return;
+    try { await plutoApi(`/admin/v1/dbio/grants/${uid}`, { method: "DELETE" }); await loadGrants(); }
+    catch (e: any) { setErr(e.message); }
+  }
+
+  useEffect(() => {
+    plutoApi<{ ok: boolean; level: string }>("/admin/v1/dbio/whoami")
+      .then((r) => setLevel(r.level)).catch(() => setLevel(""));
+  }, []);
+
   useEffect(() => {
     if (tab === "Connections") loadConns();
     if (tab === "History") loadJobs();
+    if (tab === "Access") loadGrants();
   }, [tab]);
 
   return (
@@ -300,6 +331,54 @@ function DbImportPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab === "Access" && (
+        <div className="space-y-4 max-w-3xl">
+          {level && <div className="text-xs text-muted-foreground">Your DBIO level: <b>{level}</b></div>}
+          <div className="border rounded-lg p-4 space-y-2">
+            <h2 className="font-medium text-sm">Grant DBIO access</h2>
+            <p className="text-xs text-muted-foreground">
+              Superadmin-only. Give a non-superadmin user the ability to use this page and the <code>/admin/v1/dbio/*</code> API.
+              For headless scripts / CI, mint a workspace API token with scope <code>dbio:admin</code> or <code>dbio:read</code> under the API Tokens page.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <input className="col-span-2 border rounded px-3 py-2 text-sm" placeholder="user email" value={newGrant.user_email} onChange={(e) => setNewGrant({ ...newGrant, user_email: e.target.value })} />
+              <select className="border rounded px-3 py-2 text-sm" value={newGrant.access} onChange={(e) => setNewGrant({ ...newGrant, access: e.target.value as any })}>
+                <option value="admin">admin (read + write)</option>
+                <option value="reader">reader (view only)</option>
+              </select>
+            </div>
+            <input className="border rounded px-3 py-2 text-sm w-full" placeholder="note (optional)" value={newGrant.note} onChange={(e) => setNewGrant({ ...newGrant, note: e.target.value })} />
+            <button onClick={addGrant} disabled={!newGrant.user_email} className="px-3 py-2 text-sm rounded bg-primary text-primary-foreground">Grant access</button>
+          </div>
+
+          <div className="border rounded-lg overflow-auto">
+            <table className="text-xs w-full">
+              <thead className="bg-muted"><tr>
+                <th className="text-left px-3 py-2">User</th>
+                <th className="text-left px-3 py-2">Access</th>
+                <th className="text-left px-3 py-2">Granted by</th>
+                <th className="text-left px-3 py-2">When</th>
+                <th className="text-left px-3 py-2">Note</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                {grants.map((g) => (
+                  <tr key={g.user_id} className="border-t">
+                    <td className="px-3 py-1">{g.user_email ?? g.user_id}</td>
+                    <td className="px-3 py-1"><span className={"px-2 py-0.5 rounded text-[10px] " + (g.access === "admin" ? "bg-primary/20 text-primary" : "bg-muted")}>{g.access}</span></td>
+                    <td className="px-3 py-1">{g.granted_by_email ?? "—"}</td>
+                    <td className="px-3 py-1">{new Date(g.granted_at).toLocaleString()}</td>
+                    <td className="px-3 py-1 max-w-64 truncate">{g.note}</td>
+                    <td className="px-3 py-1"><button className="text-destructive underline" onClick={() => revokeGrant(g.user_id)}>Revoke</button></td>
+                  </tr>
+                ))}
+                {!grants.length && <tr><td colSpan={6} className="px-3 py-4 text-center text-muted-foreground">No grants yet. Superadmins have full access by default.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
