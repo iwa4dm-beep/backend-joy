@@ -11,7 +11,7 @@ create table if not exists public.admissions (
   id                  text        primary key,
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
-  created_by          uuid        not null references auth.users(id) on delete cascade,
+  created_by          uuid        not null default auth.uid() references auth.users(id) on delete cascade,
 
   -- Student
   student_name        text        not null check (length(btrim(student_name)) > 0),
@@ -59,6 +59,24 @@ drop trigger if exists trg_admissions_set_updated_at on public.admissions;
 create trigger trg_admissions_set_updated_at
   before update on public.admissions
   for each row execute function public.set_updated_at();
+
+-- Fill ownership from the authenticated request when the client omits
+-- created_by or sends it as null. RLS still rejects attempts to spoof another
+-- user's id because the policy below requires created_by = auth.uid().
+create or replace function public.admissions_set_created_by()
+returns trigger language plpgsql as $$
+begin
+  if new.created_by is null then
+    new.created_by := auth.uid();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_admissions_set_created_by on public.admissions;
+create trigger trg_admissions_set_created_by
+  before insert on public.admissions
+  for each row execute function public.admissions_set_created_by();
 
 -- Grants ------------------------------------------------------------------
 -- Data API (PostgREST) requires explicit grants for anon/authenticated.

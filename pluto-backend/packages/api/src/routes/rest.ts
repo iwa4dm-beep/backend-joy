@@ -117,9 +117,26 @@ function sendParseError(req: any, reply: FastifyReply, e: unknown) {
     req.log?.warn({ url, code: e.message, ...e.detail }, 'rest.parse_error');
     return reply.code(400).send({ error: 'bad_request', code: e.message, url, ...e.detail });
   }
+  const err: any = e;
   const msg = e instanceof Error ? e.message : String(e);
-  req.log?.warn({ url, msg }, 'rest.error');
-  return reply.code(400).send({ error: 'bad_request', message: msg, url });
+  const code = typeof err?.code === 'string' ? err.code : undefined;
+  const detail = typeof err?.detail === 'string' ? err.detail : undefined;
+  const table = typeof req?.params?.table === 'string' ? req.params.table : undefined;
+  if (code === '42501' || /violates row-level security policy/i.test(msg)) {
+    req.log?.warn({ url, table, code, msg, detail }, 'rest.rls_violation');
+    return reply.code(403).send({
+      error: 'rls_violation',
+      code: code || '42501',
+      message: msg,
+      table,
+      hint: table === 'admissions'
+        ? 'Ensure the request has a valid bearer token and admissions.created_by is omitted/null or equals auth.uid().'
+        : 'Check Row Level Security policies and JWT claims for this request.',
+      url,
+    });
+  }
+  req.log?.warn({ url, table, code, msg, detail }, 'rest.error');
+  return reply.code(400).send({ error: 'bad_request', code, message: msg, table, url });
 }
 
 export async function restRoutes(app: FastifyInstance, cfg: Config) {
