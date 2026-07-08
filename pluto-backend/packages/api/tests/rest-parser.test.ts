@@ -15,7 +15,7 @@ import {
   parseGroup,
   splitTopLevel,
   RestParseError,
-} from '../src/routes/rest.js';
+} from '../src/routes/rest-parser.js';
 
 describe('splitTopLevel', () => {
   it('splits on top-level commas, respects nested parens', () => {
