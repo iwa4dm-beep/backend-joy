@@ -44,6 +44,7 @@ import { tokensRoutes } from './routes/tokens.js';
 import { dbioRoutes } from './routes/dbio.js';
 import { makeOriginCallback, primeCorsCache } from './cors/registry.js';
 import { startEmailWorker } from './email/queue.js';
+import { runStartupRoleCheck } from './db/verify-roles.js';
 
 
 import { metricsPlugin } from './observability/metrics.js';
@@ -256,6 +257,19 @@ async function main() {
     }
   } catch (e: any) {
     app.log.warn({ err: e?.message }, 'migrations preflight probe failed');
+  }
+
+  // Boot-time Postgres role check — surface a missing anon/authenticated/
+  // service_role/admin in `docker logs api` immediately, before the first
+  // request hits SET LOCAL ROLE and blows up with `role "X" does not exist`.
+  try {
+    await runStartupRoleCheck(cfg, {
+      info: (o, m) => app.log.info(o, m),
+      warn: (o, m) => app.log.warn(o, m),
+      error: (o, m) => app.log.error(o, m),
+    });
+  } catch (e: any) {
+    app.log.warn({ err: e?.message }, 'startup.role_check threw');
   }
 
   await app.listen({ port: cfg.PORT, host: cfg.HOST });
