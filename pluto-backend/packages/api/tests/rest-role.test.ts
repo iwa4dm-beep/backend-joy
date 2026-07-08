@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePgRole, VALID_PG_ROLES } from '../src/routes/rest.js';
+import { resolvePgRole, VALID_PG_ROLES } from '../src/routes/rest-role.js';
 
 describe('resolvePgRole — Postgres role whitelist', () => {
   it('passes anon and authenticated through unchanged', () => {
