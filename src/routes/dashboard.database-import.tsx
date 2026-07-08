@@ -143,9 +143,38 @@ function DbImportPage() {
     catch (e: any) { setErr(e.message); }
   }
 
+  // Access / Grants (superadmin only)
+  const [grants, setGrants] = useState<Grant[]>([]);
+  const [newGrant, setNewGrant] = useState({ user_email: "", access: "admin" as "admin" | "reader", note: "" });
+  const [level, setLevel] = useState<string>("");
+  async function loadGrants() {
+    try { const r = await plutoApi<{ grants: Grant[] }>("/admin/v1/dbio/grants"); setGrants(r.grants); }
+    catch (e: any) { setErr(e.message); }
+  }
+  async function addGrant() {
+    setErr(null); setMsg(null);
+    try {
+      await plutoApi("/admin/v1/dbio/grants", { method: "POST", body: JSON.stringify(newGrant) });
+      setMsg("Grant saved");
+      setNewGrant({ user_email: "", access: "admin", note: "" });
+      await loadGrants();
+    } catch (e: any) { setErr(e.message); }
+  }
+  async function revokeGrant(uid: string) {
+    if (!confirm("Revoke DBIO access from this user?")) return;
+    try { await plutoApi(`/admin/v1/dbio/grants/${uid}`, { method: "DELETE" }); await loadGrants(); }
+    catch (e: any) { setErr(e.message); }
+  }
+
+  useEffect(() => {
+    plutoApi<{ ok: boolean; level: string }>("/admin/v1/dbio/whoami")
+      .then((r) => setLevel(r.level)).catch(() => setLevel(""));
+  }, []);
+
   useEffect(() => {
     if (tab === "Connections") loadConns();
     if (tab === "History") loadJobs();
+    if (tab === "Access") loadGrants();
   }, [tab]);
 
   return (
