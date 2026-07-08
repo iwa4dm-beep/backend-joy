@@ -278,7 +278,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.get('/admin/v1/dbio/connections', async (req, reply) => {
-    await requireSuperadmin(req, cfg);
+    await requireDbioAccess(req, cfg, "reader");
     const sql = getSql(cfg);
     const rows = await sql<any[]>`
       select id, name, dialect, host, port, database_name, username, ssl, options_json,
@@ -288,7 +288,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.post('/admin/v1/dbio/connections', async (req, reply) => {
-    const actor = await requireSuperadmin(req, cfg);
+    const gate = await requireDbioAccess(req, cfg, "admin"); const actor = { userId: gate.userId ?? "00000000-0000-0000-0000-000000000000" };
     const b = connBody.parse(req.body);
     const sql = getSql(cfg);
     const key = encKey();
@@ -311,7 +311,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.delete('/admin/v1/dbio/connections/:id', async (req: any, reply) => {
-    const actor = await requireSuperadmin(req, cfg);
+    const gate = await requireDbioAccess(req, cfg, "admin"); const actor = { userId: gate.userId ?? "00000000-0000-0000-0000-000000000000" };
     const sql = getSql(cfg);
     await sql`delete from admin.db_connections where id = ${req.params.id}`;
     await logAudit(cfg, {
@@ -323,7 +323,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.post('/admin/v1/dbio/connections/test', async (req, reply) => {
-    await requireSuperadmin(req, cfg);
+    await requireDbioAccess(req, cfg, "reader");
     const b = connBody.partial({ name: true }).parse(req.body);
     try {
       if (b.dialect === 'postgres') {
@@ -356,7 +356,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   // ── file imports ─────────────────────────────────────────────────────────
   // multipart/form-data: file=<the sql>, plus query params for schema/mode
   app.post('/admin/v1/dbio/import/dump', async (req: any, reply) => {
-    const actor = await requireSuperadmin(req, cfg);
+    const gate = await requireDbioAccess(req, cfg, "admin"); const actor = { userId: gate.userId ?? "00000000-0000-0000-0000-000000000000" };
     if (!req.isMultipart()) return reply.code(400).send({ error: 'multipart/form-data required (field: file)' });
     const targetSchema = String(req.query?.schema ?? 'public');
     const dialectOverride = req.query?.dialect ? String(req.query.dialect) : null;
@@ -373,7 +373,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.post('/admin/v1/dbio/import/schema', async (req: any, reply) => {
-    const actor = await requireSuperadmin(req, cfg);
+    const gate = await requireDbioAccess(req, cfg, "admin"); const actor = { userId: gate.userId ?? "00000000-0000-0000-0000-000000000000" };
     if (!req.isMultipart()) return reply.code(400).send({ error: 'multipart/form-data required' });
     const targetSchema = String(req.query?.schema ?? 'public');
     const { filename, body, size } = await readMultipartToString(req);
@@ -387,7 +387,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.post('/admin/v1/dbio/import/csv', async (req: any, reply) => {
-    const actor = await requireSuperadmin(req, cfg);
+    const gate = await requireDbioAccess(req, cfg, "admin"); const actor = { userId: gate.userId ?? "00000000-0000-0000-0000-000000000000" };
     if (!req.isMultipart()) return reply.code(400).send({ error: 'multipart/form-data required' });
     const targetSchema = String(req.query?.schema ?? 'public');
     const table = String(req.query?.table ?? '');
@@ -405,7 +405,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
 
   // ── jobs ─────────────────────────────────────────────────────────────────
   app.get('/admin/v1/dbio/jobs', async (req, reply) => {
-    await requireSuperadmin(req, cfg);
+    await requireDbioAccess(req, cfg, "reader");
     const sql = getSql(cfg);
     const rows = await sql`select id, kind, source_dialect, target_schema, file_name, file_bytes,
       status, stmt_total, stmt_applied, stmt_failed, rows_inserted, error_message,
@@ -415,7 +415,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   });
 
   app.get('/admin/v1/dbio/jobs/:id', async (req: any, reply) => {
-    await requireSuperadmin(req, cfg);
+    await requireDbioAccess(req, cfg, "reader");
     const sql = getSql(cfg);
     const [row] = await sql<any[]>`select * from admin.import_jobs where id = ${req.params.id}`;
     if (!row) return reply.code(404).send({ error: 'not_found' });
@@ -428,7 +428,7 @@ export async function dbioRoutes(app: FastifyInstance, cfg: Config) {
   // pg_dump-backed surface — this is meant for quick "download this table"
   // flows from the UI.
   app.get('/admin/v1/dbio/export/sql', async (req: any, reply) => {
-    await requireSuperadmin(req, cfg);
+    await requireDbioAccess(req, cfg, "reader");
     const schema = String(req.query?.schema ?? 'public');
     const table = String(req.query?.table ?? '');
     if (!table || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
