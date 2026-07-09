@@ -9,7 +9,8 @@ import { Search, Sparkles, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { PaginatedTable } from "@/components/pluto/PaginatedTable";
 import { usePaginatedTable } from "@/lib/pluto/usePaginatedTable";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardVectorHelp } from "@/content/help/dashboard.vector";
 
 export const Route = createFileRoute("/dashboard/vector")({ component: VectorPage });
 
@@ -79,7 +80,7 @@ function VectorPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2"><Sparkles className="h-5 w-5" /> Vector search</h1>
-      <AutoHelpPanel slug={'dashboard.vector'} title={'Vector search'} description={''} />
+      <HelpPanel help={dashboardVectorHelp} />
           <p className="text-sm text-muted-foreground">Create embedding collections, ingest documents, and run similarity queries.</p>
         </div>
         <Button variant="outline" size="sm" onClick={refresh}><RefreshCw className="h-4 w-4 mr-1" /> Refresh</Button>
