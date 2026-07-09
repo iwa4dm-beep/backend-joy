@@ -198,91 +198,125 @@ export function MigrationRunner({ apiBase }: { apiBase: string }) {
 /* Realtime channel verifier — WS connectivity + subscription confirmation    */
 /* -------------------------------------------------------------------------- */
 
-type ChanState = { name: string; status: Status; note?: string };
+type ChanState = { name: string; status: Status; note?: string; attempts?: number };
+type RtEvent = { at: string; kind: "open" | "close" | "error" | "message" | "timeout" | "retry" | "subscribe"; message: string };
 
 export function RealtimeVerifier({ apiBase }: { apiBase: string }) {
   const [anonKey, setAnonKey] = useState("");
   const [channelsInput, setChannelsInput] = useState("system:health,realtime:public:todos");
+  const [maxRetries, setMaxRetries] = useState(2);
   const [wsStatus, setWsStatus] = useState<Status>("idle");
   const [wsNote, setWsNote] = useState<string>("");
+  const [wsAttempts, setWsAttempts] = useState<number>(0);
   const [chans, setChans] = useState<ChanState[]>([]);
+  const [events, setEvents] = useState<RtEvent[]>([]);
   const [running, setRunning] = useState(false);
 
+  const pushEvent = (kind: RtEvent["kind"], message: string) =>
+    setEvents((prev) => [...prev.slice(-199), { at: new Date().toISOString(), kind, message }]);
+
+  const attemptOnce = useCallback((wsUrl: string, names: string[]): Promise<{ ok: boolean; chans: ChanState[]; err?: string }> => {
+    return new Promise((resolve) => {
+      let ws: WebSocket;
+      const chanState: ChanState[] = names.map((name) => ({ name, status: "running", note: "pending" }));
+      try { ws = new WebSocket(wsUrl); }
+      catch (e) {
+        pushEvent("error", e instanceof Error ? e.message : String(e));
+        resolve({ ok: false, chans: chanState, err: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      const timeout = setTimeout(() => {
+        pushEvent("timeout", "WebSocket upgrade did not complete within 8s");
+        try { ws.close(); } catch { /* ignore */ }
+        resolve({ ok: false, chans: chanState, err: "timeout" });
+      }, 8000);
+
+      ws.onopen = () => {
+        pushEvent("open", `Connected to ${wsUrl}`);
+        names.forEach((name, idx) => {
+          try {
+            ws.send(JSON.stringify({ type: "subscribe", channel: name, ref: String(idx + 1) }));
+            pushEvent("subscribe", `→ ${name}`);
+            chanState[idx] = { ...chanState[idx], note: "subscribe sent" };
+          } catch (e) {
+            chanState[idx] = { ...chanState[idx], status: "fail", note: e instanceof Error ? e.message : String(e) };
+          }
+        });
+        setChans([...chanState]);
+        // wait 3s for per-channel replies, then resolve
+        setTimeout(() => {
+          for (let i = 0; i < chanState.length; i++) {
+            if (chanState[i].status === "running") chanState[i] = { ...chanState[i], status: "ok", note: (chanState[i].note ?? "") + " · no error within 3s" };
+          }
+          try { ws.close(); } catch { /* ignore */ }
+          clearTimeout(timeout);
+          const anyFail = chanState.some((c) => c.status === "fail");
+          resolve({ ok: !anyFail, chans: chanState });
+        }, 3000);
+      };
+      ws.onmessage = (ev) => {
+        pushEvent("message", String(ev.data).slice(0, 240));
+        try {
+          const msg = JSON.parse(String(ev.data));
+          const name = msg.channel ?? msg.topic;
+          if (!name) return;
+          const idx = chanState.findIndex((c) => c.name === name);
+          if (idx >= 0) {
+            chanState[idx] = { ...chanState[idx], status: msg.error ? "fail" : "ok", note: msg.error ? String(msg.error) : msg.status ?? "subscribed" };
+            setChans([...chanState]);
+          }
+        } catch { /* ignore non-json */ }
+      };
+      ws.onerror = () => {
+        pushEvent("error", "WebSocket error — check CORS / TLS / firewall");
+        clearTimeout(timeout);
+        resolve({ ok: false, chans: chanState, err: "ws error" });
+      };
+      ws.onclose = (ev) => {
+        pushEvent("close", `code ${ev.code}${ev.reason ? ` · ${ev.reason}` : ""}`);
+      };
+    });
+  }, []);
+
   const run = useCallback(async () => {
-    setRunning(true); setWsStatus("running"); setWsNote(""); setChans([]);
+    setRunning(true);
+    setEvents([]);
+    setWsStatus("running"); setWsNote(""); setChans([]); setWsAttempts(0);
     const wsUrl = wsUrlFrom(apiBase) + (anonKey ? `?apikey=${encodeURIComponent(anonKey)}` : "");
     const names = channelsInput.split(",").map((s) => s.trim()).filter(Boolean);
     const initial: ChanState[] = names.map((name) => ({ name, status: "idle" }));
     setChans(initial);
 
-    let ws: WebSocket;
-    try { ws = new WebSocket(wsUrl); }
-    catch (e) {
-      setWsStatus("fail");
-      setWsNote(e instanceof Error ? e.message : String(e));
-      setRunning(false);
-      return;
-    }
+    const cfg: RetryConfig = { maxRetries: Math.max(0, maxRetries), baseDelayMs: 500, maxDelayMs: 8000 };
+    const result = await retryWithBackoff(
+      async (attempt) => {
+        if (attempt > 0) pushEvent("retry", `attempt #${attempt + 1}`);
+        setWsAttempts(attempt + 1);
+        const r = await attemptOnce(wsUrl, names);
+        return { ok: r.ok, value: r };
+      },
+      cfg,
+    );
+    setChans(result.value.chans);
+    if (result.ok) { setWsStatus("ok"); setWsNote(`Connected · ${result.attempts} attempt(s)`); }
+    else { setWsStatus("fail"); setWsNote(`Failed after ${result.attempts} attempt(s)${result.value.err ? ` — ${result.value.err}` : ""}`); }
+    setRunning(false);
+  }, [apiBase, anonKey, channelsInput, maxRetries, attemptOnce]);
 
-    const timeout = setTimeout(() => {
-      if (wsStatus !== "ok") {
-        setWsStatus("fail");
-        setWsNote("Timeout — WebSocket upgrade did not complete within 8s");
-        try { ws.close(); } catch { /* ignore */ }
-        setRunning(false);
-      }
-    }, 8000);
-
-    ws.onopen = () => {
-      setWsStatus("ok");
-      setWsNote(`Connected to ${wsUrl}`);
-      names.forEach((name, idx) => {
-        try {
-          ws.send(JSON.stringify({ type: "subscribe", channel: name, ref: String(idx + 1) }));
-          setChans((prev) => {
-            const n = [...prev]; n[idx] = { ...n[idx], status: "running", note: "subscribe sent" }; return n;
-          });
-        } catch (e) {
-          setChans((prev) => {
-            const n = [...prev]; n[idx] = { ...n[idx], status: "fail", note: e instanceof Error ? e.message : String(e) }; return n;
-          });
-        }
-      });
-      // resolve remaining after 3s if backend didn't reply per-channel
-      setTimeout(() => {
-        setChans((prev) => prev.map((c) => c.status === "running" ? { ...c, status: "ok", note: (c.note ?? "") + " · no error within 3s" } : c));
-        try { ws.close(); } catch { /* ignore */ }
-        clearTimeout(timeout);
-        setRunning(false);
-      }, 3000);
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(String(ev.data));
-        const name = msg.channel ?? msg.topic;
-        if (!name) return;
-        setChans((prev) => prev.map((c) => c.name === name
-          ? { ...c, status: msg.error ? "fail" : "ok", note: msg.error ? String(msg.error) : msg.status ?? "subscribed" }
-          : c));
-      } catch { /* ignore non-json */ }
-    };
-
-    ws.onerror = () => {
-      setWsStatus("fail");
-      setWsNote("WebSocket error — check CORS / TLS / firewall");
-      clearTimeout(timeout);
-      setRunning(false);
-    };
-    ws.onclose = (ev) => {
-      if (wsStatus === "idle" || wsStatus === "running") {
-        setWsStatus("fail");
-        setWsNote(`Closed before open (code ${ev.code}${ev.reason ? ` · ${ev.reason}` : ""})`);
-      }
-      clearTimeout(timeout);
-      setRunning(false);
-    };
-  }, [apiBase, anonKey, channelsInput, wsStatus]);
+  const doExport = (kind: "json" | "html") => {
+    const steps: ReportStep[] = [
+      { key: "ws", label: `WebSocket ${wsUrlFrom(apiBase)}`, status: wsStatus === "ok" ? "ok" : wsStatus === "fail" ? "fail" : "idle", detail: wsNote, attempts: wsAttempts },
+      ...chans.map((c) => ({
+        key: `chan:${c.name}`, label: `channel ${c.name}`,
+        status: c.status as ReportStep["status"], detail: c.note,
+      })),
+    ];
+    const report = buildReport({
+      tool: "realtime-verifier", apiBase, steps,
+      events: events.map((e) => ({ at: e.at, kind: e.kind, message: e.message })),
+    });
+    (kind === "json" ? downloadReportJson : downloadReportHtml)(report);
+  };
 
   return (
     <div className="mt-3 rounded-md border border-border/60 bg-muted/30 p-3">
@@ -301,26 +335,66 @@ export function RealtimeVerifier({ apiBase }: { apiBase: string }) {
           onChange={(e) => setChannelsInput(e.target.value)}
           className="min-w-[280px] flex-1 rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono"
         />
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          Max retries
+          <input type="number" min={0} max={8} value={maxRetries}
+            onChange={(e) => setMaxRetries(Math.max(0, Math.min(8, Number(e.target.value) || 0)))}
+            className="w-14 rounded-md border border-border/60 bg-background px-2 py-1 text-xs font-mono"
+          />
+        </label>
         <button onClick={run} disabled={running}
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radio className="h-3.5 w-3.5" />}
           Verify
         </button>
+        <button onClick={() => doExport("json")} disabled={running || events.length === 0}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileJson className="h-3.5 w-3.5" /> JSON
+        </button>
+        <button onClick={() => doExport("html")} disabled={running || events.length === 0}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileCode className="h-3.5 w-3.5" /> HTML
+        </button>
       </div>
 
-      <div className="mt-3 space-y-1 text-xs">
-        <div className="flex items-center gap-2">
-          <StatusDot s={wsStatus} />
-          <span className="font-mono">{wsUrlFrom(apiBase)}</span>
-          {wsNote && <span className="text-muted-foreground">— {wsNote}</span>}
-        </div>
-        {chans.map((c) => (
-          <div key={c.name} className="flex items-center gap-2 pl-4">
-            <StatusDot s={c.status} />
-            <span className="font-mono">{c.name}</span>
-            {c.note && <span className="text-muted-foreground">— {c.note}</span>}
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="space-y-1 text-xs">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Subscriptions</div>
+          <div className="flex items-center gap-2">
+            <StatusDot s={wsStatus} />
+            <span className="font-mono">{wsUrlFrom(apiBase)}</span>
+            {wsAttempts > 0 && <span className="text-[10px] text-muted-foreground">· {wsAttempts} attempt(s)</span>}
           </div>
-        ))}
+          {wsNote && <div className="pl-4 text-muted-foreground">— {wsNote}</div>}
+          {chans.map((c) => (
+            <div key={c.name} className="flex items-center gap-2 pl-4">
+              <StatusDot s={c.status} />
+              <span className="font-mono">{c.name}</span>
+              {c.note && <span className="text-muted-foreground">— {c.note}</span>}
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Channel inspector · live events</div>
+          <div className="mt-1 h-56 overflow-auto rounded border border-border/50 bg-background/60 p-2 text-[11px] font-mono">
+            {events.length === 0 ? (
+              <div className="text-muted-foreground">No events yet — run the verifier.</div>
+            ) : events.map((e, i) => {
+              const color = e.kind === "error" || e.kind === "timeout" ? "text-red-600 dark:text-red-400"
+                : e.kind === "open" || e.kind === "message" ? "text-green-600 dark:text-green-400"
+                : e.kind === "retry" ? "text-amber-600 dark:text-amber-400"
+                : "text-muted-foreground";
+              return (
+                <div key={i} className="flex gap-2">
+                  <span className="shrink-0 text-muted-foreground">{e.at.slice(11, 23)}</span>
+                  <span className={`shrink-0 font-semibold ${color}`}>{e.kind}</span>
+                  <span className="min-w-0 break-all">{e.message}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
