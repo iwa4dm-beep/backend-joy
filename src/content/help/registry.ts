@@ -17,6 +17,12 @@ import { dashboardPlutoSchemaHelp } from "./dashboard.pluto-schema";
 import { dashboardPlutoStudioHelp } from "./dashboard.pluto-studio";
 import { dashboardMigrationsHelp } from "./dashboard.migrations";
 import { dashboardGraphqlHelp } from "./dashboard.graphql";
+import { dashboardUsersHelp } from "./dashboard.users";
+import { dashboardMfaHelp } from "./dashboard.mfa";
+import { dashboardPlutoAuthAdvancedHelp } from "./dashboard.pluto-auth-advanced";
+import { dashboardPlutoOrgsHelp } from "./dashboard.pluto-orgs";
+import { dashboardRbacHelp } from "./dashboard.rbac";
+import { dashboardTokensHelp } from "./dashboard.tokens";
 
 export type HelpEntry = {
   help: PageHelp;
@@ -44,6 +50,13 @@ export const HELP_REGISTRY: HelpEntry[] = [
   dashboardMigrationsHelp,
   dashboardGraphqlHelp,
   dashboardApiHelp,
+  // Auth & Users
+  dashboardUsersHelp,
+  dashboardMfaHelp,
+  dashboardPlutoAuthAdvancedHelp,
+  dashboardPlutoOrgsHelp,
+  dashboardRbacHelp,
+  dashboardTokensHelp,
   // Ops
   dashboardCorsHelp,
   dashboardAuditHelp,
