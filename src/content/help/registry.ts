@@ -31,6 +31,15 @@ import { dashboardPlutoFunctionsPlusHelp } from "./dashboard.pluto-functions-plu
 import { dashboardJobsHelp } from "./dashboard.jobs";
 import { dashboardPlutoQueuesHelp } from "./dashboard.pluto-queues";
 import { dashboardPlutoWebhooksHelp } from "./dashboard.pluto-webhooks";
+import { dashboardVectorHelp } from "./dashboard.vector";
+import { dashboardPlutoSearchHelp } from "./dashboard.pluto-search";
+import { dashboardObservabilityHelp } from "./dashboard.observability";
+import { dashboardLogsHelp } from "./dashboard.logs";
+import { dashboardLogsExplorerHelp } from "./dashboard.logs-explorer";
+import { dashboardAuditLogHelp } from "./dashboard.audit-log";
+import { dashboardScalingHelp } from "./dashboard.scaling";
+import { dashboardUsageHelp } from "./dashboard.usage";
+import { dashboardPlutoBillingHelp } from "./dashboard.pluto-billing";
 
 export type HelpEntry = {
   help: PageHelp;
@@ -75,8 +84,19 @@ export const HELP_REGISTRY: HelpEntry[] = [
   dashboardJobsHelp,
   dashboardPlutoQueuesHelp,
   dashboardPlutoWebhooksHelp,
-  // Ops
-  dashboardCorsHelp,
-  dashboardAuditHelp,
+  // AI & Search
   dashboardAiHelp,
+  dashboardVectorHelp,
+  dashboardPlutoSearchHelp,
+  // Ops & Observability
+  dashboardObservabilityHelp,
+  dashboardLogsHelp,
+  dashboardLogsExplorerHelp,
+  dashboardAuditHelp,
+  dashboardAuditLogHelp,
+  dashboardScalingHelp,
+  dashboardUsageHelp,
+  dashboardPlutoBillingHelp,
+  // Platform
+  dashboardCorsHelp,
 ].map((help) => ({ help, route: slugToRoute(help.slug) }));
