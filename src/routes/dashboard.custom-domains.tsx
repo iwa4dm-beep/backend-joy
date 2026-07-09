@@ -15,6 +15,7 @@ import {
   Trash2,
   Wand2,
   X,
+  StopCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
@@ -35,6 +36,7 @@ import {
   verifyTxtRecordName,
   type DomainTestResult,
 } from "@/lib/pluto/domain-test";
+import { retryWithBackoff, type RetryAttempt } from "@/lib/pluto/retry-backoff";
 
 export const Route = createFileRoute("/dashboard/custom-domains")({
   head: () => ({
@@ -63,6 +65,9 @@ function CustomDomainsPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<DomainTestResult | null>(null);
   const [added, setAdded] = useState<AddedRecord | null>(null);
+  // Retry / backoff state — keyed by "<op>:<domain_id>" so verify and test can run in parallel per row.
+  const [retryState, setRetryState] = useState<Record<string, RetryAttempt>>({});
+  const abortersRef = useRef<Record<string, AbortController>>({});
   const [primary, setPrimaryState] = useState<string | null>(() =>
     getWorkspaceBaseUrl(workspaceId),
   );
@@ -189,17 +194,44 @@ function CustomDomainsPage() {
     }
   }
 
-  async function verify(d: CustomDomain) {
+  function cancelRetry(key: string) {
+    const c = abortersRef.current[key];
+    if (c) { c.abort(); delete abortersRef.current[key]; }
+    setRetryState((s) => { const next = { ...s }; delete next[key]; return next; });
+  }
+
+  async function verify(d: CustomDomain, opts: { retry?: boolean } = {}) {
+    const key = `verify:${d.id}`;
+    cancelRetry(key);
+    const ctrl = new AbortController();
+    abortersRef.current[key] = ctrl;
     setVerifyingId(d.id);
     try {
-      await enterprise.verifyDomain(d.id);
-      recordDomainAudit(workspaceId, actor, "domain.verify", d.hostname, "ok");
+      const runOnce = () => enterprise.verifyDomain(d.id).then((r) => {
+        // The backend returns `{ ok, verified }`; treat "not yet verified" as retryable.
+        if (opts.retry && r && r.verified === false) throw new Error("txt_not_yet_visible");
+        return r;
+      });
+      const res = opts.retry
+        ? await retryWithBackoff(runOnce, {
+            maxAttempts: 5,
+            signal: ctrl.signal,
+            onAttempt: (a) => setRetryState((s) => ({ ...s, [key]: a })),
+            shouldRetry: (e) => (e as Error).name !== "AbortError",
+          })
+        : await runOnce();
+      recordDomainAudit(workspaceId, actor, "domain.verify", d.hostname, "ok", opts.retry ? { retry: true } : {});
       await load();
+      return res;
     } catch (e) {
-      recordDomainAudit(workspaceId, actor, "domain.verify", d.hostname, "error", { message: (e as Error).message });
+      if ((e as Error).name === "AbortError") return;
+      recordDomainAudit(workspaceId, actor, "domain.verify", d.hostname, "error",
+        { message: (e as Error).message, retry: opts.retry ?? false });
       setErr(e);
     } finally {
-      setVerifyingId(null);
+      setVerifyingId((cur) => (cur === d.id ? null : cur));
+      delete abortersRef.current[key];
+      setRetryState((s) => { const next = { ...s }; delete next[key]; return next; });
     }
   }
 
@@ -219,24 +251,52 @@ function CustomDomainsPage() {
     }
   }
 
-  async function runTest(d: CustomDomain) {
+  async function runTest(d: CustomDomain, opts: { retry?: boolean } = {}) {
+    const key = `test:${d.id}`;
+    cancelRetry(key);
+    const ctrl = new AbortController();
+    abortersRef.current[key] = ctrl;
     setTestingId(d.id);
     setTestResult(null);
     try {
-      const r = await testDomainEndpoint(d.hostname, d.verify_token);
+      const runOnce = async () => {
+        const r = await testDomainEndpoint(d.hostname, d.verify_token);
+        // Treat "DNS not yet propagated OR health failing" as retryable when retry mode is on.
+        if (opts.retry && !(r.health.ok && r.verifyTxt.found)) {
+          throw Object.assign(new Error("endpoint_not_ready"), { partial: r });
+        }
+        return r;
+      };
+      const r = opts.retry
+        ? await retryWithBackoff(runOnce, {
+            maxAttempts: 5,
+            signal: ctrl.signal,
+            onAttempt: (a) => setRetryState((s) => ({ ...s, [key]: a })),
+            shouldRetry: (e) => (e as Error).name !== "AbortError",
+          })
+        : await runOnce();
       setTestResult(r);
-      recordDomainAudit(workspaceId, actor, "domain.test_endpoint", d.hostname, r.health.ok && r.verifyTxt.found ? "ok" : "error", {
-        health_status: r.health.status,
-        health_ok: r.health.ok,
-        dns_a: r.dns.a.length,
-        dns_cname: r.dns.cname.length,
-        verify_txt_found: r.verifyTxt.found,
-      });
+      recordDomainAudit(workspaceId, actor, "domain.test_endpoint", d.hostname,
+        r.health.ok && r.verifyTxt.found ? "ok" : "error", {
+          health_status: r.health.status,
+          health_ok: r.health.ok,
+          dns_a: r.dns.a.length,
+          dns_cname: r.dns.cname.length,
+          verify_txt_found: r.verifyTxt.found,
+          retry: opts.retry ?? false,
+        });
     } catch (e) {
-      recordDomainAudit(workspaceId, actor, "domain.test_endpoint", d.hostname, "error", { message: (e as Error).message });
+      if ((e as Error).name === "AbortError") return;
+      // Surface last partial result if the retry loop gave up.
+      const partial = (e as { partial?: DomainTestResult }).partial;
+      if (partial) setTestResult(partial);
+      recordDomainAudit(workspaceId, actor, "domain.test_endpoint", d.hostname, "error",
+        { message: (e as Error).message, retry: opts.retry ?? false });
       setErr(e);
     } finally {
-      setTestingId(null);
+      setTestingId((cur) => (cur === d.id ? null : cur));
+      delete abortersRef.current[key];
+      setRetryState((s) => { const next = { ...s }; delete next[key]; return next; });
     }
   }
 
@@ -436,64 +496,98 @@ function CustomDomainsPage() {
                   </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
                   <td className="px-4 py-2 text-right">
-                    <div className="inline-flex gap-1">
-                      <button
-                        onClick={() => void runTest(d)}
-                        disabled={testingId === d.id}
-                        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
-                        title="Check DNS + healthcheck without changing config"
-                      >
-                        {testingId === d.id
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Activity className="h-3.5 w-3.5" />}
-                        Test endpoint
-                      </button>
-                      {!d.verified && (
+                    <div className="inline-flex flex-col items-end gap-1">
+                      <div className="inline-flex gap-1 flex-wrap justify-end">
                         <button
-                          onClick={() => void verify(d)}
-                          disabled={!canAdmin || verifyingId === d.id}
-                          title={!canAdmin ? "Workspace admin role required" : undefined}
+                          onClick={() => void runTest(d)}
+                          disabled={testingId === d.id}
                           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                          title="Check DNS + healthcheck once"
                         >
-                          {verifyingId === d.id
+                          {testingId === d.id && !retryState[`test:${d.id}`]
                             ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            : <ShieldCheck className="h-3.5 w-3.5" />}
-                          Verify
+                            : <Activity className="h-3.5 w-3.5" />}
+                          Test
                         </button>
-                      )}
-                      {d.verified && !isPrimary && !wildcard && (
                         <button
-                          onClick={() => void makePrimary(d)}
-                          disabled={!canAdmin || primaryPending === d.id}
-                          title={!canAdmin ? "Workspace admin role required" : undefined}
+                          onClick={() => void runTest(d, { retry: true })}
+                          disabled={testingId === d.id}
                           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                          title="Retry test up to 5× with exponential backoff (1s → 16s)"
                         >
-                          {primaryPending === d.id
-                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            : <Star className="h-3.5 w-3.5" />}
-                          Make primary
+                          <RefreshCw className={`h-3.5 w-3.5 ${retryState[`test:${d.id}`] ? "animate-spin" : ""}`} />
+                          Retry test
                         </button>
-                      )}
-                      {!d.verified && (
+                        {!d.verified && (
+                          <>
+                            <button
+                              onClick={() => void verify(d)}
+                              disabled={!canAdmin || verifyingId === d.id}
+                              title={!canAdmin ? "Workspace admin role required" : undefined}
+                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                            >
+                              {verifyingId === d.id && !retryState[`verify:${d.id}`]
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <ShieldCheck className="h-3.5 w-3.5" />}
+                              Verify
+                            </button>
+                            <button
+                              onClick={() => void verify(d, { retry: true })}
+                              disabled={!canAdmin || verifyingId === d.id}
+                              title={!canAdmin
+                                ? "Workspace admin role required"
+                                : "Retry verify up to 5× with exponential backoff"}
+                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                            >
+                              <RefreshCw className={`h-3.5 w-3.5 ${retryState[`verify:${d.id}`] ? "animate-spin" : ""}`} />
+                              Retry verify
+                            </button>
+                          </>
+                        )}
+                        {d.verified && !isPrimary && !wildcard && (
+                          <button
+                            onClick={() => void makePrimary(d)}
+                            disabled={!canAdmin || primaryPending === d.id}
+                            title={!canAdmin ? "Workspace admin role required" : undefined}
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                          >
+                            {primaryPending === d.id
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <Star className="h-3.5 w-3.5" />}
+                            Make primary
+                          </button>
+                        )}
+                        {!d.verified && (
+                          <button
+                            onClick={() => setAdded({
+                              hostname: d.hostname,
+                              dns_txt_record: verifyTxtRecordName(d.hostname),
+                              dns_txt_value: d.verify_token,
+                            })}
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
+                          >
+                            DNS
+                          </button>
+                        )}
                         <button
-                          onClick={() => setAdded({
-                            hostname: d.hostname,
-                            dns_txt_record: verifyTxtRecordName(d.hostname),
-                            dns_txt_value: d.verify_token,
-                          })}
-                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
+                          onClick={() => void remove(d)}
+                          disabled={!canAdmin}
+                          title={!canAdmin ? "Workspace admin role required" : undefined}
+                          className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40"
                         >
-                          DNS
+                          <Trash2 className="h-3.5 w-3.5" />
                         </button>
-                      )}
-                      <button
-                        onClick={() => void remove(d)}
-                        disabled={!canAdmin}
-                        title={!canAdmin ? "Workspace admin role required" : undefined}
-                        className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      </div>
+                      <RetryStatus
+                        attempt={retryState[`verify:${d.id}`]}
+                        label="Verify"
+                        onCancel={() => cancelRetry(`verify:${d.id}`)}
+                      />
+                      <RetryStatus
+                        attempt={retryState[`test:${d.id}`]}
+                        label="Test"
+                        onCancel={() => cancelRetry(`test:${d.id}`)}
+                      />
                     </div>
                   </td>
                 </tr>
@@ -643,6 +737,29 @@ function DomainAdminsSection({
         </tbody>
       </table>
     </section>
+  );
+}
+
+function RetryStatus({
+  attempt, label, onCancel,
+}: { attempt: RetryAttempt | undefined; label: string; onCancel: () => void }) {
+  if (!attempt) return null;
+  const waiting = attempt.waitingMs > 0;
+  return (
+    <div className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <Loader2 className="h-3 w-3 animate-spin text-amber-400" />
+      <span>
+        {label} · attempt {attempt.attempt}/{attempt.maxAttempts}
+        {waiting && <> · retrying in {Math.round(attempt.waitingMs / 1000)}s</>}
+      </span>
+      <button
+        onClick={onCancel}
+        className="inline-flex items-center gap-0.5 rounded border border-border px-1 py-0.5 hover:bg-accent"
+        title="Cancel retry loop"
+      >
+        <StopCircle className="h-3 w-3" /> Cancel
+      </button>
+    </div>
   );
 }
 
