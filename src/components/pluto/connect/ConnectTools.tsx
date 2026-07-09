@@ -487,8 +487,37 @@ export function ConnectionTester({ apiBase }: { apiBase: string }) {
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           Run all checks
         </button>
+        <button
+          onClick={() => {
+            const steps: ReportStep[] = checks.map((c) => ({
+              key: c.key, label: c.label,
+              status: c.status === "idle" ? "idle" : c.status,
+              ms: c.ms, detail: c.detail,
+              error: c.status === "fail" ? c.detail : undefined,
+            }));
+            downloadReportJson(buildReport({ tool: "connection-tester", apiBase, steps }));
+          }}
+          disabled={running || checks.every((c) => c.status === "idle")}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileJson className="h-3.5 w-3.5" /> JSON
+        </button>
+        <button
+          onClick={() => {
+            const steps: ReportStep[] = checks.map((c) => ({
+              key: c.key, label: c.label,
+              status: c.status === "idle" ? "idle" : c.status,
+              ms: c.ms, detail: c.detail,
+              error: c.status === "fail" ? c.detail : undefined,
+            }));
+            downloadReportHtml(buildReport({ tool: "connection-tester", apiBase, steps }));
+          }}
+          disabled={running || checks.every((c) => c.status === "idle")}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileCode className="h-3.5 w-3.5" /> HTML
+        </button>
         <span className="text-[11px] text-muted-foreground">apiBase: <span className="font-mono">{apiBase}</span></span>
       </div>
+
 
       <ul className="mt-3 space-y-1 text-xs">
         {checks.map((c) => {
