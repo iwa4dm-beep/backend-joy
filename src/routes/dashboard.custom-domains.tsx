@@ -15,6 +15,7 @@ import {
   Trash2,
   Wand2,
   X,
+  StopCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
