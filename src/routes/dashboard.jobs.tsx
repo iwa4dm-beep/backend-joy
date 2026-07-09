@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Copy, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardJobsHelp } from "@/content/help/dashboard.jobs";
 import { isLive, live, subscribe, type JobToken, type RealtimeEvent } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/jobs")({
@@ -81,7 +82,7 @@ function JobsPage() {
         title="Pool user & job tokens"
         description="Server-side workers run as the dedicated pluto_jobs Postgres role (BYPASSRLS). Mint scoped, expiring tokens instead of sharing the service-role key."
       />
-      <AutoHelpPanel slug={'dashboard.jobs'} title={'Pool user & job tokens'} description={'Server-side workers run as the dedicated pluto_jobs Postgres role (BYPASSRLS). Mint scoped, expiring tokens instead of sharing the service-role key.'} />
+      <HelpPanel help={dashboardJobsHelp} />
 
       {isLive() && (
         <div className="mb-3 text-xs inline-flex items-center gap-1.5">

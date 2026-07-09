@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { FolderPlus, Trash2, Upload } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardStorageHelp } from "@/content/help/dashboard.storage";
 import { pluto, type PlutoBucket, type PlutoFile } from "@/lib/pluto/client";
 
 export const Route = createFileRoute("/dashboard/storage")({

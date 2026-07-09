@@ -10,7 +10,8 @@ import { toast } from "sonner";
 import { PresenceIndicator, type PresenceStatus } from "@/components/pluto/PresenceIndicator";
 import { PaginatedTable } from "@/components/pluto/PaginatedTable";
 import { usePaginatedTable } from "@/lib/pluto/usePaginatedTable";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardRealtimeHelp } from "@/content/help/dashboard.realtime";
 
 export const Route = createFileRoute("/dashboard/realtime")({ component: RealtimePage });
 
@@ -90,7 +91,7 @@ function RealtimePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2"><Radio className="h-5 w-5" /> Realtime channels</h1>
-      <AutoHelpPanel slug={'dashboard.realtime'} title={'Realtime channels'} description={''} />
+      <HelpPanel help={dashboardRealtimeHelp} />
           <p className="text-sm text-muted-foreground">Broadcast events and track presence per channel.</p>
         </div>
         <div className="flex items-center gap-2">
