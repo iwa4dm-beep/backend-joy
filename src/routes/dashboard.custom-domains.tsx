@@ -65,6 +65,9 @@ function CustomDomainsPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<DomainTestResult | null>(null);
   const [added, setAdded] = useState<AddedRecord | null>(null);
+  // Retry / backoff state — keyed by "<op>:<domain_id>" so verify and test can run in parallel per row.
+  const [retryState, setRetryState] = useState<Record<string, RetryAttempt>>({});
+  const abortersRef = useRef<Record<string, AbortController>>({});
   const [primary, setPrimaryState] = useState<string | null>(() =>
     getWorkspaceBaseUrl(workspaceId),
   );
