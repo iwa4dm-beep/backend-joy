@@ -107,7 +107,9 @@ function CustomDomainsPage() {
       try {
         const r = await me.workspaceRole();
         if (cancelled) return;
-        setRole(r.can_admin ? "admin" : "member");
+        if (r.can_admin) setRole("workspace_admin");
+        else if (r.is_domain_admin) setRole("domain_admin");
+        else setRole("member");
       } catch {
         if (!cancelled) setRole("member");
       }
