@@ -171,7 +171,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>("/enterprise/v1/domains/:id/verify",
-    { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+    { preHandler: requireDomainAdmin }, async (req, reply) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string; verify_token: string; is_wildcard: boolean }>(
         `select hostname, verify_token, is_wildcard from public.custom_domains
@@ -206,7 +206,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.post<{ Params: { id: string } }>("/enterprise/v1/domains/:id/primary",
-    { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+    { preHandler: requireDomainAdmin }, async (req, reply) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string; verified: boolean; is_wildcard: boolean }>(
         `select hostname, verified, is_wildcard from public.custom_domains
@@ -223,7 +223,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.delete<{ Params: { id: string } }>("/enterprise/v1/domains/:id/primary",
-    { preHandler: requireWorkspaceAdmin }, async (req) => {
+    { preHandler: requireDomainAdmin }, async (req) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string }>(
         `update public.custom_domains set is_primary=false
@@ -237,7 +237,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.delete<{ Params: { id: string } }>("/enterprise/v1/domains/:id",
-    { preHandler: requireWorkspaceAdmin }, async (req) => {
+    { preHandler: requireDomainAdmin }, async (req) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string }>(
         `delete from public.custom_domains where id=$1 and workspace_id=$2::uuid returning hostname`,
