@@ -109,5 +109,16 @@ export const HELP_REGISTRY: HelpEntry[] = [
   dashboardUsageHelp,
   dashboardPlutoBillingHelp,
   // Platform
+  dashboardProjectsHelp,
+  dashboardWorkspacesHelp,
   dashboardCorsHelp,
+  dashboardCustomDomainsHelp,
+  dashboardBackupsHelp,
+  dashboardBranchingHelp,
+  dashboardPlutoBranchesHelp,
+  dashboardPlutoReplicasHelp,
+  dashboardPlutoComplianceHelp,
+  dashboardPlutoVaultHelp,
+  dashboardEnterpriseHelp,
+  dashboardPlutoMarketplaceHelp,
 ].map((help) => ({ help, route: slugToRoute(help.slug) }));
