@@ -1436,6 +1436,12 @@ export const enterprise = {
   setPrimaryDomain: (id: string) => api<{ ok: boolean; primary: boolean }>(`/enterprise/v1/domains/${id}/primary`, { method: "POST" }),
   clearPrimaryDomain: (id: string) => api<{ ok: boolean }>(`/enterprise/v1/domains/${id}/primary`, { method: "DELETE" }),
   removeDomain: (id: string) => api<{ ok: boolean }>(`/enterprise/v1/domains/${id}`, { method: "DELETE" }),
+  domainAdmins: () => api<{ grants: DomainAdminGrant[] }>("/enterprise/v1/domains/admins"),
+  grantDomainAdmin: (user_id: string, note?: string) =>
+    api<{ user_id: string; granted_at: string }>("/enterprise/v1/domains/admins",
+      { method: "POST", body: JSON.stringify({ user_id, note }) }),
+  revokeDomainAdmin: (user_id: string) =>
+    api<{ ok: boolean; revoked: boolean }>(`/enterprise/v1/domains/admins/${user_id}`, { method: "DELETE" }),
   domainWebhookSecret: () => api<DomainWebhookInfo>("/enterprise/v1/domains/webhook-secret"),
   rotateDomainWebhookSecret: () => api<{ secret: string; rotated: boolean }>("/enterprise/v1/domains/webhook-secret/rotate", { method: "POST" }),
   regions: () => api<RegionConfig>("/enterprise/v1/regions"),
