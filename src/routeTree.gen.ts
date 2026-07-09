@@ -89,6 +89,7 @@ import { Route as AuthForgotRouteImport } from './routes/auth.forgot'
 import { Route as AuthConfirmEmailRouteImport } from './routes/auth.confirm-email'
 import { Route as SdkDownloadFileRouteImport } from './routes/sdk.download.$file'
 import { Route as DashboardIntegrationsLovableFrontendRouteImport } from './routes/dashboard.integrations.lovable-frontend'
+import { Route as DashboardCustomDomainsAuditRouteImport } from './routes/dashboard.custom-domains.audit'
 import { Route as DashboardAdminInviteRouteImport } from './routes/dashboard.admin.invite'
 import { Route as ApiPlutoStatusRouteImport } from './routes/api/pluto.status'
 import { Route as ApiPlutoMonitorRouteImport } from './routes/api/pluto.monitor'
@@ -501,6 +502,12 @@ const DashboardIntegrationsLovableFrontendRoute =
     path: '/lovable-frontend',
     getParentRoute: () => DashboardIntegrationsRoute,
   } as any)
+const DashboardCustomDomainsAuditRoute =
+  DashboardCustomDomainsAuditRouteImport.update({
+    id: '/audit',
+    path: '/audit',
+    getParentRoute: () => DashboardCustomDomainsRoute,
+  } as any)
 const DashboardAdminInviteRoute = DashboardAdminInviteRouteImport.update({
   id: '/admin/invite',
   path: '/admin/invite',
@@ -543,7 +550,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
   '/dashboard/cors': typeof DashboardCorsRoute
-  '/dashboard/custom-domains': typeof DashboardCustomDomainsRoute
+  '/dashboard/custom-domains': typeof DashboardCustomDomainsRouteWithChildren
   '/dashboard/database': typeof DashboardDatabaseRoute
   '/dashboard/database-import': typeof DashboardDatabaseImportRoute
   '/dashboard/devex': typeof DashboardDevexRoute
@@ -605,6 +612,7 @@ export interface FileRoutesByFullPath {
   '/api/pluto/monitor': typeof ApiPlutoMonitorRoute
   '/api/pluto/status': typeof ApiPlutoStatusRoute
   '/dashboard/admin/invite': typeof DashboardAdminInviteRoute
+  '/dashboard/custom-domains/audit': typeof DashboardCustomDomainsAuditRoute
   '/dashboard/integrations/lovable-frontend': typeof DashboardIntegrationsLovableFrontendRoute
   '/sdk/download/$file': typeof SdkDownloadFileRoute
 }
@@ -628,7 +636,7 @@ export interface FileRoutesByTo {
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
   '/dashboard/cors': typeof DashboardCorsRoute
-  '/dashboard/custom-domains': typeof DashboardCustomDomainsRoute
+  '/dashboard/custom-domains': typeof DashboardCustomDomainsRouteWithChildren
   '/dashboard/database': typeof DashboardDatabaseRoute
   '/dashboard/database-import': typeof DashboardDatabaseImportRoute
   '/dashboard/devex': typeof DashboardDevexRoute
@@ -690,6 +698,7 @@ export interface FileRoutesByTo {
   '/api/pluto/monitor': typeof ApiPlutoMonitorRoute
   '/api/pluto/status': typeof ApiPlutoStatusRoute
   '/dashboard/admin/invite': typeof DashboardAdminInviteRoute
+  '/dashboard/custom-domains/audit': typeof DashboardCustomDomainsAuditRoute
   '/dashboard/integrations/lovable-frontend': typeof DashboardIntegrationsLovableFrontendRoute
   '/sdk/download/$file': typeof SdkDownloadFileRoute
 }
@@ -715,7 +724,7 @@ export interface FileRoutesById {
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
   '/dashboard/cors': typeof DashboardCorsRoute
-  '/dashboard/custom-domains': typeof DashboardCustomDomainsRoute
+  '/dashboard/custom-domains': typeof DashboardCustomDomainsRouteWithChildren
   '/dashboard/database': typeof DashboardDatabaseRoute
   '/dashboard/database-import': typeof DashboardDatabaseImportRoute
   '/dashboard/devex': typeof DashboardDevexRoute
@@ -777,6 +786,7 @@ export interface FileRoutesById {
   '/api/pluto/monitor': typeof ApiPlutoMonitorRoute
   '/api/pluto/status': typeof ApiPlutoStatusRoute
   '/dashboard/admin/invite': typeof DashboardAdminInviteRoute
+  '/dashboard/custom-domains/audit': typeof DashboardCustomDomainsAuditRoute
   '/dashboard/integrations/lovable-frontend': typeof DashboardIntegrationsLovableFrontendRoute
   '/sdk/download/$file': typeof SdkDownloadFileRoute
 }
@@ -865,6 +875,7 @@ export interface FileRouteTypes {
     | '/api/pluto/monitor'
     | '/api/pluto/status'
     | '/dashboard/admin/invite'
+    | '/dashboard/custom-domains/audit'
     | '/dashboard/integrations/lovable-frontend'
     | '/sdk/download/$file'
   fileRoutesByTo: FileRoutesByTo
@@ -950,6 +961,7 @@ export interface FileRouteTypes {
     | '/api/pluto/monitor'
     | '/api/pluto/status'
     | '/dashboard/admin/invite'
+    | '/dashboard/custom-domains/audit'
     | '/dashboard/integrations/lovable-frontend'
     | '/sdk/download/$file'
   id:
@@ -1036,6 +1048,7 @@ export interface FileRouteTypes {
     | '/api/pluto/monitor'
     | '/api/pluto/status'
     | '/dashboard/admin/invite'
+    | '/dashboard/custom-domains/audit'
     | '/dashboard/integrations/lovable-frontend'
     | '/sdk/download/$file'
   fileRoutesById: FileRoutesById
@@ -1619,6 +1632,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIntegrationsLovableFrontendRouteImport
       parentRoute: typeof DashboardIntegrationsRoute
     }
+    '/dashboard/custom-domains/audit': {
+      id: '/dashboard/custom-domains/audit'
+      path: '/audit'
+      fullPath: '/dashboard/custom-domains/audit'
+      preLoaderRoute: typeof DashboardCustomDomainsAuditRouteImport
+      parentRoute: typeof DashboardCustomDomainsRoute
+    }
     '/dashboard/admin/invite': {
       id: '/dashboard/admin/invite'
       path: '/admin/invite'
@@ -1666,6 +1686,20 @@ const AuthRouteChildren: AuthRouteChildren = {
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 
+interface DashboardCustomDomainsRouteChildren {
+  DashboardCustomDomainsAuditRoute: typeof DashboardCustomDomainsAuditRoute
+}
+
+const DashboardCustomDomainsRouteChildren: DashboardCustomDomainsRouteChildren =
+  {
+    DashboardCustomDomainsAuditRoute: DashboardCustomDomainsAuditRoute,
+  }
+
+const DashboardCustomDomainsRouteWithChildren =
+  DashboardCustomDomainsRoute._addFileChildren(
+    DashboardCustomDomainsRouteChildren,
+  )
+
 interface DashboardIntegrationsRouteChildren {
   DashboardIntegrationsLovableFrontendRoute: typeof DashboardIntegrationsLovableFrontendRoute
 }
@@ -1689,7 +1723,7 @@ interface DashboardRouteChildren {
   DashboardBackupsRoute: typeof DashboardBackupsRoute
   DashboardBranchingRoute: typeof DashboardBranchingRoute
   DashboardCorsRoute: typeof DashboardCorsRoute
-  DashboardCustomDomainsRoute: typeof DashboardCustomDomainsRoute
+  DashboardCustomDomainsRoute: typeof DashboardCustomDomainsRouteWithChildren
   DashboardDatabaseRoute: typeof DashboardDatabaseRoute
   DashboardDatabaseImportRoute: typeof DashboardDatabaseImportRoute
   DashboardDevexRoute: typeof DashboardDevexRoute
@@ -1757,7 +1791,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardBackupsRoute: DashboardBackupsRoute,
   DashboardBranchingRoute: DashboardBranchingRoute,
   DashboardCorsRoute: DashboardCorsRoute,
-  DashboardCustomDomainsRoute: DashboardCustomDomainsRoute,
+  DashboardCustomDomainsRoute: DashboardCustomDomainsRouteWithChildren,
   DashboardDatabaseRoute: DashboardDatabaseRoute,
   DashboardDatabaseImportRoute: DashboardDatabaseImportRoute,
   DashboardDevexRoute: DashboardDevexRoute,
