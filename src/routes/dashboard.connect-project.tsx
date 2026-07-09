@@ -7,7 +7,7 @@ import {
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { HelpPanel } from "@/components/help/HelpPanel";
 import { dashboardConnectProjectHelp } from "@/content/help/dashboard.connect-project";
-import { getApiBase } from "@/lib/pluto/base-url";
+import { resolveApiUrl } from "@/lib/pluto/base-url";
 
 export const Route = createFileRoute("/dashboard/connect-project")({
   component: ConnectProjectPage,
