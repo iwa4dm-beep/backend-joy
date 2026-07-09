@@ -10,13 +10,13 @@
       "version": "0.1.0",
       "file": "pluto-js-0.1.0.tgz",
       "url": "/sdk/download/pluto-js-0.1.0.tgz",
-      "sha256": "789097fdbc4d5d081e5599b9171c0d7eb396cd2558ec1364ce292be238a88c2a"
+      "sha256": "a868e19ad57605d7a45fb1b6c67730f1d2bf52d123c76822c35d8221b66321d0"
     },
     {
       "version": "latest",
       "file": "pluto-js-latest.tgz",
       "url": "/sdk/download/pluto-js-latest.tgz",
-      "sha256": "789097fdbc4d5d081e5599b9171c0d7eb396cd2558ec1364ce292be238a88c2a"
+      "sha256": "a868e19ad57605d7a45fb1b6c67730f1d2bf52d123c76822c35d8221b66321d0"
     }
   ]
 }
