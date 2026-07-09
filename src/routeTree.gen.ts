@@ -76,6 +76,7 @@ import { Route as DashboardDatabaseImportRouteImport } from './routes/dashboard.
 import { Route as DashboardDatabaseRouteImport } from './routes/dashboard.database'
 import { Route as DashboardCustomDomainsRouteImport } from './routes/dashboard.custom-domains'
 import { Route as DashboardCorsRouteImport } from './routes/dashboard.cors'
+import { Route as DashboardConnectProjectRouteImport } from './routes/dashboard.connect-project'
 import { Route as DashboardBranchingRouteImport } from './routes/dashboard.branching'
 import { Route as DashboardBackupsRouteImport } from './routes/dashboard.backups'
 import { Route as DashboardBackendStatusRouteImport } from './routes/dashboard.backend-status'
@@ -436,6 +437,11 @@ const DashboardCorsRoute = DashboardCorsRouteImport.update({
   path: '/cors',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardConnectProjectRoute = DashboardConnectProjectRouteImport.update({
+  id: '/connect-project',
+  path: '/connect-project',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardBranchingRoute = DashboardBranchingRouteImport.update({
   id: '/branching',
   path: '/branching',
@@ -549,6 +555,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/backend-status': typeof DashboardBackendStatusRoute
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
+  '/dashboard/connect-project': typeof DashboardConnectProjectRoute
   '/dashboard/cors': typeof DashboardCorsRoute
   '/dashboard/custom-domains': typeof DashboardCustomDomainsRouteWithChildren
   '/dashboard/database': typeof DashboardDatabaseRoute
@@ -635,6 +642,7 @@ export interface FileRoutesByTo {
   '/dashboard/backend-status': typeof DashboardBackendStatusRoute
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
+  '/dashboard/connect-project': typeof DashboardConnectProjectRoute
   '/dashboard/cors': typeof DashboardCorsRoute
   '/dashboard/custom-domains': typeof DashboardCustomDomainsRouteWithChildren
   '/dashboard/database': typeof DashboardDatabaseRoute
@@ -723,6 +731,7 @@ export interface FileRoutesById {
   '/dashboard/backend-status': typeof DashboardBackendStatusRoute
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
+  '/dashboard/connect-project': typeof DashboardConnectProjectRoute
   '/dashboard/cors': typeof DashboardCorsRoute
   '/dashboard/custom-domains': typeof DashboardCustomDomainsRouteWithChildren
   '/dashboard/database': typeof DashboardDatabaseRoute
@@ -812,6 +821,7 @@ export interface FileRouteTypes {
     | '/dashboard/backend-status'
     | '/dashboard/backups'
     | '/dashboard/branching'
+    | '/dashboard/connect-project'
     | '/dashboard/cors'
     | '/dashboard/custom-domains'
     | '/dashboard/database'
@@ -898,6 +908,7 @@ export interface FileRouteTypes {
     | '/dashboard/backend-status'
     | '/dashboard/backups'
     | '/dashboard/branching'
+    | '/dashboard/connect-project'
     | '/dashboard/cors'
     | '/dashboard/custom-domains'
     | '/dashboard/database'
@@ -985,6 +996,7 @@ export interface FileRouteTypes {
     | '/dashboard/backend-status'
     | '/dashboard/backups'
     | '/dashboard/branching'
+    | '/dashboard/connect-project'
     | '/dashboard/cors'
     | '/dashboard/custom-domains'
     | '/dashboard/database'
@@ -1541,6 +1553,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardCorsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/connect-project': {
+      id: '/dashboard/connect-project'
+      path: '/connect-project'
+      fullPath: '/dashboard/connect-project'
+      preLoaderRoute: typeof DashboardConnectProjectRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/branching': {
       id: '/dashboard/branching'
       path: '/branching'
@@ -1722,6 +1741,7 @@ interface DashboardRouteChildren {
   DashboardBackendStatusRoute: typeof DashboardBackendStatusRoute
   DashboardBackupsRoute: typeof DashboardBackupsRoute
   DashboardBranchingRoute: typeof DashboardBranchingRoute
+  DashboardConnectProjectRoute: typeof DashboardConnectProjectRoute
   DashboardCorsRoute: typeof DashboardCorsRoute
   DashboardCustomDomainsRoute: typeof DashboardCustomDomainsRouteWithChildren
   DashboardDatabaseRoute: typeof DashboardDatabaseRoute
@@ -1790,6 +1810,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardBackendStatusRoute: DashboardBackendStatusRoute,
   DashboardBackupsRoute: DashboardBackupsRoute,
   DashboardBranchingRoute: DashboardBranchingRoute,
+  DashboardConnectProjectRoute: DashboardConnectProjectRoute,
   DashboardCorsRoute: DashboardCorsRoute,
   DashboardCustomDomainsRoute: DashboardCustomDomainsRouteWithChildren,
   DashboardDatabaseRoute: DashboardDatabaseRoute,
