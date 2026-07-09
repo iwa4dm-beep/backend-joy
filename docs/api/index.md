@@ -122,3 +122,4 @@ ids for traceability.
 * Realtime + CDC: `docs/api/realtime-cdc.md`
 * Edge functions v3: `docs/api/edge-v3.md`
 * Billing / PITR: `docs/api/billing-pitr.md`
+* Custom domains + domain-admin RBAC: `docs/api/custom-domains-phase65.md`
