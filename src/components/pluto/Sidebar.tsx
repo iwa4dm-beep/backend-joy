@@ -3,7 +3,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import {
   Activity, Archive, Boxes, Building2, ChevronDown, Cloud, Database, Files,
   Gauge, GitBranch, Globe, HeartPulse, KeyRound, LineChart,
-  LockKeyhole, LogOut, Package, Radio, ScrollText, Search, Server,
+  LockKeyhole, LogOut, Package, Plug, Radio, ScrollText, Search, Server,
   Settings, Shield, ShieldAlert, ShieldCheck, ShoppingBag, Sparkles, Table2,
   Terminal, Users, Waves, X, Zap,
 } from "lucide-react";
@@ -14,6 +14,12 @@ type Item = { to: string; label: string; icon: typeof Gauge };
 type Group = { label: string; items: Item[] };
 
 const groups: Group[] = [
+  {
+    label: "Getting Started",
+    items: [
+      { to: "/dashboard/connect-project", label: "Connect your project", icon: Plug },
+    ],
+  },
   {
     label: "Overview",
     items: [
