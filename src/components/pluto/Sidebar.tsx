@@ -99,6 +99,7 @@ const groups: Group[] = [
       { to: "/dashboard/projects", label: "Projects & Keys", icon: KeyRound },
       { to: "/dashboard/workspaces", label: "Workspaces", icon: Building2 },
       { to: "/dashboard/cors", label: "CORS whitelist", icon: Globe },
+      { to: "/dashboard/custom-domains", label: "Custom domains", icon: Globe },
       { to: "/dashboard/backups", label: "Backups", icon: Archive },
       { to: "/dashboard/pluto-backups", label: "Pluto Backups", icon: Archive },
       { to: "/dashboard/branching", label: "Branching & Studio", icon: GitBranch },

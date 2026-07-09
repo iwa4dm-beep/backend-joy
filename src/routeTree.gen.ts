@@ -74,6 +74,7 @@ import { Route as DashboardDomainsRouteImport } from './routes/dashboard.domains
 import { Route as DashboardDevexRouteImport } from './routes/dashboard.devex'
 import { Route as DashboardDatabaseImportRouteImport } from './routes/dashboard.database-import'
 import { Route as DashboardDatabaseRouteImport } from './routes/dashboard.database'
+import { Route as DashboardCustomDomainsRouteImport } from './routes/dashboard.custom-domains'
 import { Route as DashboardCorsRouteImport } from './routes/dashboard.cors'
 import { Route as DashboardBranchingRouteImport } from './routes/dashboard.branching'
 import { Route as DashboardBackupsRouteImport } from './routes/dashboard.backups'
@@ -424,6 +425,11 @@ const DashboardDatabaseRoute = DashboardDatabaseRouteImport.update({
   path: '/database',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardCustomDomainsRoute = DashboardCustomDomainsRouteImport.update({
+  id: '/custom-domains',
+  path: '/custom-domains',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardCorsRoute = DashboardCorsRouteImport.update({
   id: '/cors',
   path: '/cors',
@@ -537,6 +543,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
   '/dashboard/cors': typeof DashboardCorsRoute
+  '/dashboard/custom-domains': typeof DashboardCustomDomainsRoute
   '/dashboard/database': typeof DashboardDatabaseRoute
   '/dashboard/database-import': typeof DashboardDatabaseImportRoute
   '/dashboard/devex': typeof DashboardDevexRoute
@@ -621,6 +628,7 @@ export interface FileRoutesByTo {
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
   '/dashboard/cors': typeof DashboardCorsRoute
+  '/dashboard/custom-domains': typeof DashboardCustomDomainsRoute
   '/dashboard/database': typeof DashboardDatabaseRoute
   '/dashboard/database-import': typeof DashboardDatabaseImportRoute
   '/dashboard/devex': typeof DashboardDevexRoute
@@ -707,6 +715,7 @@ export interface FileRoutesById {
   '/dashboard/backups': typeof DashboardBackupsRoute
   '/dashboard/branching': typeof DashboardBranchingRoute
   '/dashboard/cors': typeof DashboardCorsRoute
+  '/dashboard/custom-domains': typeof DashboardCustomDomainsRoute
   '/dashboard/database': typeof DashboardDatabaseRoute
   '/dashboard/database-import': typeof DashboardDatabaseImportRoute
   '/dashboard/devex': typeof DashboardDevexRoute
@@ -794,6 +803,7 @@ export interface FileRouteTypes {
     | '/dashboard/backups'
     | '/dashboard/branching'
     | '/dashboard/cors'
+    | '/dashboard/custom-domains'
     | '/dashboard/database'
     | '/dashboard/database-import'
     | '/dashboard/devex'
@@ -878,6 +888,7 @@ export interface FileRouteTypes {
     | '/dashboard/backups'
     | '/dashboard/branching'
     | '/dashboard/cors'
+    | '/dashboard/custom-domains'
     | '/dashboard/database'
     | '/dashboard/database-import'
     | '/dashboard/devex'
@@ -963,6 +974,7 @@ export interface FileRouteTypes {
     | '/dashboard/backups'
     | '/dashboard/branching'
     | '/dashboard/cors'
+    | '/dashboard/custom-domains'
     | '/dashboard/database'
     | '/dashboard/database-import'
     | '/dashboard/devex'
@@ -1502,6 +1514,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardDatabaseRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/custom-domains': {
+      id: '/dashboard/custom-domains'
+      path: '/custom-domains'
+      fullPath: '/dashboard/custom-domains'
+      preLoaderRoute: typeof DashboardCustomDomainsRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/cors': {
       id: '/dashboard/cors'
       path: '/cors'
@@ -1670,6 +1689,7 @@ interface DashboardRouteChildren {
   DashboardBackupsRoute: typeof DashboardBackupsRoute
   DashboardBranchingRoute: typeof DashboardBranchingRoute
   DashboardCorsRoute: typeof DashboardCorsRoute
+  DashboardCustomDomainsRoute: typeof DashboardCustomDomainsRoute
   DashboardDatabaseRoute: typeof DashboardDatabaseRoute
   DashboardDatabaseImportRoute: typeof DashboardDatabaseImportRoute
   DashboardDevexRoute: typeof DashboardDevexRoute
@@ -1737,6 +1757,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardBackupsRoute: DashboardBackupsRoute,
   DashboardBranchingRoute: DashboardBranchingRoute,
   DashboardCorsRoute: DashboardCorsRoute,
+  DashboardCustomDomainsRoute: DashboardCustomDomainsRoute,
   DashboardDatabaseRoute: DashboardDatabaseRoute,
   DashboardDatabaseImportRoute: DashboardDatabaseImportRoute,
   DashboardDevexRoute: DashboardDevexRoute,
