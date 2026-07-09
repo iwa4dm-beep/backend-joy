@@ -31,6 +31,15 @@ import { dashboardPlutoFunctionsPlusHelp } from "./dashboard.pluto-functions-plu
 import { dashboardJobsHelp } from "./dashboard.jobs";
 import { dashboardPlutoQueuesHelp } from "./dashboard.pluto-queues";
 import { dashboardPlutoWebhooksHelp } from "./dashboard.pluto-webhooks";
+import { dashboardVectorHelp } from "./dashboard.vector";
+import { dashboardPlutoSearchHelp } from "./dashboard.pluto-search";
+import { dashboardObservabilityHelp } from "./dashboard.observability";
+import { dashboardLogsHelp } from "./dashboard.logs";
+import { dashboardLogsExplorerHelp } from "./dashboard.logs-explorer";
+import { dashboardAuditLogHelp } from "./dashboard.audit-log";
+import { dashboardScalingHelp } from "./dashboard.scaling";
+import { dashboardUsageHelp } from "./dashboard.usage";
+import { dashboardPlutoBillingHelp } from "./dashboard.pluto-billing";
 
 export type HelpEntry = {
   help: PageHelp;
