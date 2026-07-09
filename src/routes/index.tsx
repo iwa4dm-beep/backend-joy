@@ -85,17 +85,20 @@ const deployTargets = [
 
 const stats = [
   { value: "8",   label: "canonical modules" },
-  { value: "60+", label: "phases shipped" },
-  { value: "15+", label: "endpoint smoke tests" },
-  { value: "4",   label: "official SDKs" },
+  { value: "34",  label: "shipped migrations" },
+  { value: "40+", label: "API route modules" },
+  { value: "4",   label: "official SDKs (JS, Python, Go, CLI)" },
 ];
 
+// NOTE: These samples use the real published API surface. `@pluto/js` is the
+// package in `pluto-backend/packages/sdk-js` (name in its package.json).
+// Until published to npm, install it directly from source (see install block).
 const codeSamples = {
-  auth: `import { createClient } from "@pluto/client";
+  auth: `import { createClient } from "@pluto/js";
 
 const pluto = createClient({
-  url: "https://api.yourapp.com",
-  anonKey: import.meta.env.VITE_PLUTO_ANON_KEY,
+  url: "https://api.timescard.cloud",
+  anonKey: import.meta.env.VITE_PLUTO_ANON_KEY, // Dashboard → API keys
 });
 
 // Email + password
@@ -104,19 +107,19 @@ await pluto.auth.signIn("ada@example.com", "hunter2");
 // Magic link — passwordless
 await pluto.auth.signInWithMagicLink("ada@example.com");
 
-// OAuth
+// OAuth (Google, GitHub) — configured in Dashboard → Auth
 pluto.auth.signInWithOAuth("google");`,
-  data: `// Instant CRUD — no backend code
-const { data } = await pluto
+  data: `// Instant CRUD — no backend code, RLS enforced per JWT
+const { data, error } = await pluto
   .from("posts")
   .select("id, title, author:users(name)")
   .eq("published", true)
   .order("created_at", { ascending: false })
   .limit(20);
 
-// RLS enforces "posts.owner = auth.uid()" server-side
+// Insert — server checks RLS ("posts.owner = auth.uid()")
 await pluto.from("posts").insert({ title: "Hello Pluto" });`,
-  realtime: `// Subscribe to row changes
+  realtime: `// Subscribe to row changes over WebSocket
 const channel = pluto.realtime
   .subscribeTable("public:messages", (change) => {
     console.log(change.eventType, change.new);
@@ -127,6 +130,7 @@ channel.presence.track({ user_id: me.id, status: "typing" });
 channel.send({ type: "cursor", x: 120, y: 80 });`,
 };
 
+
 type Tab = keyof typeof codeSamples;
 
 const plans = [
@@ -134,51 +138,37 @@ const plans = [
     name: "Self-Hosted",
     price: "Free",
     priceHint: "MIT licensed · forever",
-    tagline: "Run Pluto on your own hardware or VPS.",
+    tagline: "Run Pluto on your own hardware, VPS, or Kubernetes cluster.",
     cta: { label: "Start Self-Hosted setup", plan: "self-hosted" as const },
-    highlight: false,
+    highlight: true,
     features: [
-      "All 8 canonical modules",
-      "Unlimited projects & users",
-      "Docker Compose stack (Postgres, MinIO, API, Dashboard)",
-      "Community support · GitHub issues",
+      "All 8 canonical modules (Auth, REST, Realtime, Storage, Vector, Edge, Jobs, Obs)",
+      "Unlimited projects, users, and API calls",
+      "Docker Compose stack (Postgres + MinIO + API + Dashboard)",
+      "34 shipped SQL migrations · RLS + RBAC out of the box",
+      "Community support via GitHub issues",
     ],
     deploy: "Docker · Any VPS · Kubernetes",
   },
   {
-    name: "Cloud Starter",
-    price: "$19",
-    priceHint: "per project / month",
-    tagline: "Managed Pluto with predictable pricing for prototypes and side-projects.",
-    cta: { label: "Start free trial", plan: "starter" as const },
-    highlight: true,
-    features: [
-      "10k monthly active users",
-      "10 GB Postgres · 20 GB storage",
-      "500k Edge Function invocations / mo",
-      "Daily backups · 7-day PITR",
-      "Fly.io or Railway 1-click deploy",
-    ],
-    deploy: "Fly.io · Railway (managed)",
-  },
-  {
-    name: "Business",
-    price: "$99",
-    priceHint: "per project / month",
-    tagline: "Production workloads with team seats, higher quotas and priority support.",
-    cta: { label: "Set up Business plan", plan: "business" as const },
+    name: "Managed hosting",
+    price: "Contact",
+    priceHint: "custom quote per workload",
+    tagline: "We run Pluto for you on dedicated infrastructure with SLA and priority support.",
+    cta: { label: "Talk to us", plan: "managed" as const },
     highlight: false,
     features: [
-      "100k monthly active users",
-      "100 GB Postgres · 500 GB storage",
-      "5M Edge Function invocations / mo",
-      "Read replicas · point-in-time restore",
-      "SAML SSO · audit log export",
-      "Render / Fly / dedicated regions",
+      "Dedicated VPS or cloud region of your choice",
+      "Managed Postgres backups + point-in-time restore",
+      "TLS, WAF, and DDoS-protected edge (Cloudflare / Fly)",
+      "SAML SSO · audit log export · on-call support",
+      "Custom quotas, migration help, and on-boarding",
     ],
-    deploy: "Render · Fly · dedicated infra",
+    deploy: "Any cloud · Fly · Render · dedicated infra",
   },
 ];
+
+
 
 
 const faqs = [
@@ -304,9 +294,9 @@ function Hero() {
             <a href="#code" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-input bg-background/60 px-5 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <Code2 className="h-4 w-4" aria-hidden="true" /> View SDK
             </a>
-            <a href="https://github.com" target="_blank" rel="noreferrer" aria-label="View source on GitHub (opens in a new tab)" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-input bg-background/60 px-5 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <Github className="h-4 w-4" aria-hidden="true" /> Source
-            </a>
+            <Link to="/docs/api" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-input bg-background/60 px-5 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Github className="h-4 w-4" aria-hidden="true" /> API Docs
+            </Link>
           </div>
         </div>
 
@@ -1493,9 +1483,27 @@ function CodeShowcase() {
           eyebrow="Typed SDK"
           id="code-heading"
           title={<>Two lines of setup. <span className="text-muted-foreground">Then you're shipping.</span></>}
-          subtitle="One @pluto/client works from React, Vue, React Native and Node — plus first-party Python and Go SDKs."
+          subtitle="One @pluto/js works from React, Vue, React Native and Node — plus first-party Python, Go and CLI SDKs. Same surface as Supabase-JS."
         />
-        <div className="mt-12 grid gap-6 lg:grid-cols-[220px_1fr]">
+
+        {/* Install / setup — real, copy-pasteable */}
+        <div className="mx-auto mt-10 max-w-3xl overflow-hidden rounded-xl border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+            <span className="font-mono">install</span>
+            <span>step 1 of 2 · takes ~10 seconds</span>
+          </div>
+          <pre className="overflow-x-auto p-5 font-mono text-xs leading-relaxed sm:text-sm"><code>{`# JavaScript / TypeScript / React / Vue / React Native / Node
+bun add @pluto/js
+# or:  npm i @pluto/js   |   pnpm add @pluto/js   |   yarn add @pluto/js
+
+# Python
+pip install pluto-sdk
+
+# Go
+go get github.com/pluto-baas/pluto/sdks/go/pluto`}</code></pre>
+        </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-[220px_1fr]">
           <div role="tablist" aria-label="SDK examples" className="flex flex-row gap-2 lg:flex-col">
             {tabs.map(({ id, label, icon: Icon }) => (
               <button
@@ -1525,17 +1533,24 @@ function CodeShowcase() {
           >
             <div className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
               <span className="font-mono">app.ts</span>
-              <span>@pluto/client</span>
+              <span>@pluto/js · step 2 of 2</span>
             </div>
             <pre className="overflow-x-auto p-5 font-mono text-xs leading-relaxed sm:text-sm">
               <code>{codeSamples[tab]}</code>
             </pre>
           </div>
         </div>
+
+        <p className="mx-auto mt-6 max-w-3xl text-center text-xs text-muted-foreground">
+          Anon key + service-role key: Dashboard → <Link to="/dashboard/api" className="underline hover:text-foreground">API</Link>.
+          CORS whitelist your frontend origin at <Link to="/dashboard/cors" className="underline hover:text-foreground">Dashboard → CORS</Link> before going live.
+        </p>
       </div>
     </section>
   );
 }
+
+
 
 function DashboardSection() {
   return (
@@ -1626,7 +1641,7 @@ function PricingSection() {
           ))}
         </div>
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          All cloud plans include TLS, daily backups, and access to the admin dashboard. Need on-premise or enterprise SLA? <Link to="/dashboard" className="underline hover:text-foreground">Talk to us</Link>.
+          Self-hosted বাসাতেই সব features free — MIT license। Managed hosting চাইলে <Link to="/dashboard" className="underline hover:text-foreground">যোগাযোগ করুন</Link> — আমরা আপনার workload অনুযায়ী quote দেব।
         </p>
       </div>
     </section>
