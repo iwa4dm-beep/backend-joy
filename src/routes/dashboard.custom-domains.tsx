@@ -67,8 +67,9 @@ function CustomDomainsPage() {
     getWorkspaceBaseUrl(workspaceId),
   );
   const [rtStatus, setRtStatus] = useState<"idle" | "connecting" | "open" | "closed" | "polling">("idle");
-  const [role, setRole] = useState<"loading" | "admin" | "member">("loading");
-  const canAdmin = role === "admin";
+  const [role, setRole] = useState<"loading" | "workspace_admin" | "domain_admin" | "member">("loading");
+  const canAdmin = role === "workspace_admin" || role === "domain_admin";
+  const canManageAdmins = role === "workspace_admin";
 
   const load = useCallback(async () => {
     setErr(null);
@@ -106,7 +107,9 @@ function CustomDomainsPage() {
       try {
         const r = await me.workspaceRole();
         if (cancelled) return;
-        setRole(r.can_admin ? "admin" : "member");
+        if (r.can_admin) setRole("workspace_admin");
+        else if (r.is_domain_admin) setRole("domain_admin");
+        else setRole("member");
       } catch {
         if (!cancelled) setRole("member");
       }
@@ -312,8 +315,13 @@ function CustomDomainsPage() {
 
       {!canAdmin && role !== "loading" && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-200">
-          You are signed in as a workspace <b>member</b>. Only workspace <b>owners/admins</b> can add, verify,
-          make primary, or remove custom domains. Read-only view enabled.
+          You are signed in as a workspace <b>member</b>. Only workspace <b>owners/admins</b> or users granted the
+          <b> domain-admin</b> permission can add, verify, make primary, or remove custom domains. Read-only view enabled.
+        </div>
+      )}
+      {role === "domain_admin" && (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs text-emerald-200">
+          You have the <b>domain-admin</b> permission on this workspace — you can manage custom domains without full workspace-admin rights.
         </div>
       )}
 
@@ -498,7 +506,143 @@ function CustomDomainsPage() {
       {testResult && (
         <TestResultPanel result={testResult} onClose={() => setTestResult(null)} />
       )}
+
+      <DomainAdminsSection
+        workspaceId={workspaceId}
+        actor={actor}
+        canManage={canManageAdmins}
+        canRead={role !== "loading"}
+      />
     </div>
+  );
+}
+
+function DomainAdminsSection({
+  workspaceId, actor, canManage, canRead,
+}: { workspaceId: string; actor: string; canManage: boolean; canRead: boolean }) {
+  const [grants, setGrants] = useState<import("@/lib/pluto/live").DomainAdminGrant[] | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [userId, setUserId] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!isLive() || !canRead) { setGrants([]); return; }
+    setErr(null);
+    try {
+      const { grants } = await enterprise.domainAdmins();
+      setGrants(grants);
+    } catch (e) { setErr(e); setGrants([]); }
+  }, [canRead]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function grant() {
+    const id = userId.trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      setErr(new Error("Enter a valid user UUID."));
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      await enterprise.grantDomainAdmin(id, note.trim() || undefined);
+      recordDomainAudit(workspaceId, actor, "domain.admin_grant", id, "ok", { note: note.trim() || null });
+      setUserId(""); setNote("");
+      await load();
+    } catch (e) {
+      recordDomainAudit(workspaceId, actor, "domain.admin_grant", id, "error", { message: (e as Error).message });
+      setErr(e);
+    } finally { setBusy(false); }
+  }
+
+  async function revoke(uid: string) {
+    if (!confirm(`Revoke domain-admin from ${uid}?`)) return;
+    try {
+      await enterprise.revokeDomainAdmin(uid);
+      recordDomainAudit(workspaceId, actor, "domain.admin_revoke", uid, "ok");
+      await load();
+    } catch (e) {
+      recordDomainAudit(workspaceId, actor, "domain.admin_revoke", uid, "error", { message: (e as Error).message });
+      setErr(e);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2 mb-1 text-sm font-medium">
+        <ShieldCheck className="h-4 w-4" /> Domain-admin permission
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">
+        Grant selected users the ability to manage custom domains for this workspace without giving them full
+        workspace-admin rights. Only workspace owners/admins can grant or revoke this permission.
+      </p>
+
+      <ErrorBanner error={err} onDismiss={() => setErr(null)} />
+
+      {canManage && (
+        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] mb-3">
+          <input
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            placeholder="user UUID"
+            className="rounded-md border border-input bg-background px-3 py-2 text-xs font-mono"
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="note (optional)"
+            className="rounded-md border border-input bg-background px-3 py-2 text-xs"
+          />
+          <button
+            onClick={() => void grant()}
+            disabled={busy || !userId.trim()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Grant
+          </button>
+        </div>
+      )}
+
+      <table className="w-full text-sm">
+        <thead className="text-xs uppercase text-muted-foreground">
+          <tr>
+            <th className="text-left px-3 py-2">User</th>
+            <th className="text-left px-3 py-2">Note</th>
+            <th className="text-left px-3 py-2">Granted by</th>
+            <th className="text-left px-3 py-2">Granted at</th>
+            <th className="text-right px-3 py-2">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {grants === null && (
+            <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">Loading…</td></tr>
+          )}
+          {grants && grants.length === 0 && (
+            <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">
+              No domain-admin grants yet. Only workspace owners/admins can manage custom domains.
+            </td></tr>
+          )}
+          {grants?.map((g) => (
+            <tr key={g.user_id} className="border-t border-border">
+              <td className="px-3 py-2 font-mono text-[11px]">{g.user_id}</td>
+              <td className="px-3 py-2 text-xs">{g.note ?? "—"}</td>
+              <td className="px-3 py-2 font-mono text-[11px] text-muted-foreground">{g.granted_by ?? "—"}</td>
+              <td className="px-3 py-2 text-xs text-muted-foreground">{new Date(g.granted_at).toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">
+                <button
+                  onClick={() => void revoke(g.user_id)}
+                  disabled={!canManage}
+                  title={!canManage ? "Workspace admin role required" : undefined}
+                  className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Revoke
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
   );
 }
 

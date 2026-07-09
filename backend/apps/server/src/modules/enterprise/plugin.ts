@@ -25,7 +25,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { q } from "../../lib/pgraw.js";
-import { requireApiKey, requireAdmin, requireWorkspaceAdmin } from "../../lib/apikey.js";
+import { requireApiKey, requireAdmin, requireDomainAdmin, requireWorkspaceAdmin } from "../../lib/apikey.js";
 import { audit } from "../../lib/audit.js";
 import pg from "pg";
 import { env } from "../../config.js";
@@ -144,7 +144,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
        from public.custom_domains where workspace_id=$1::uuid order by created_at desc`, [ws]) };
   });
 
-  app.post("/enterprise/v1/domains", { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+  app.post("/enterprise/v1/domains", { preHandler: requireDomainAdmin }, async (req, reply) => {
     const ws = workspaceOf(req);
     if (!ws) { reply.code(400); return { error: "workspace_required" }; }
     const b = z.object({
@@ -171,7 +171,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
   });
 
   app.post<{ Params: { id: string } }>("/enterprise/v1/domains/:id/verify",
-    { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+    { preHandler: requireDomainAdmin }, async (req, reply) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string; verify_token: string; is_wildcard: boolean }>(
         `select hostname, verify_token, is_wildcard from public.custom_domains
@@ -206,7 +206,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.post<{ Params: { id: string } }>("/enterprise/v1/domains/:id/primary",
-    { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+    { preHandler: requireDomainAdmin }, async (req, reply) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string; verified: boolean; is_wildcard: boolean }>(
         `select hostname, verified, is_wildcard from public.custom_domains
@@ -223,7 +223,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.delete<{ Params: { id: string } }>("/enterprise/v1/domains/:id/primary",
-    { preHandler: requireWorkspaceAdmin }, async (req) => {
+    { preHandler: requireDomainAdmin }, async (req) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string }>(
         `update public.custom_domains set is_primary=false
@@ -237,7 +237,7 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
     });
 
   app.delete<{ Params: { id: string } }>("/enterprise/v1/domains/:id",
-    { preHandler: requireWorkspaceAdmin }, async (req) => {
+    { preHandler: requireDomainAdmin }, async (req) => {
       const ws = workspaceOf(req);
       const rows = await q<{ hostname: string }>(
         `delete from public.custom_domains where id=$1 and workspace_id=$2::uuid returning hostname`,
@@ -249,7 +249,76 @@ export const enterprisePlugin: FastifyPluginAsync = async (app) => {
       return { ok: true };
     });
 
+  // --- Domain-admin grants (Phase 65) ---------------------------------
+  // Extra users who can manage custom domains without being workspace admins.
+  // Only workspace owners/admins may grant or revoke.
+  app.get("/enterprise/v1/domains/admins", { preHandler: requireApiKey }, async (req, reply) => {
+    const ws = workspaceOf(req);
+    if (!ws) { reply.code(400); return { error: "workspace_required" }; }
+    const rows = await q<{ user_id: string; granted_by: string | null; granted_at: string; note: string | null }>(
+      `select user_id::text, granted_by::text, granted_at, note
+         from public.workspace_domain_admins
+        where workspace_id=$1::uuid
+        order by granted_at desc`, [ws]);
+    return { grants: rows };
+  });
+
+  app.post("/enterprise/v1/domains/admins", { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+    const ws = workspaceOf(req);
+    if (!ws) { reply.code(400); return { error: "workspace_required" }; }
+    const b = z.object({ user_id: z.string().uuid(), note: z.string().max(200).optional() }).parse(req.body);
+    const grantedBy = req.auth?.user?.sub ?? null;
+    try {
+      const rows = await q<{ user_id: string; granted_at: string }>(
+        `insert into public.workspace_domain_admins (workspace_id, user_id, granted_by, note)
+         values ($1::uuid, $2::uuid, $3::uuid, $4)
+         on conflict (workspace_id, user_id) do update
+            set granted_by = excluded.granted_by,
+                granted_at = now(),
+                note = excluded.note
+         returning user_id::text, granted_at`,
+        [ws, b.user_id, grantedBy, b.note ?? null]);
+      await audit(req, {
+        action: "domain.admin_grant",
+        target: b.user_id,
+        status: "ok",
+        metadata: { workspace_id: ws, user_id: b.user_id, note: b.note ?? null },
+      });
+      await broadcast(`custom_domains:${ws}`, "domain.admin_granted", { user_id: b.user_id });
+      reply.code(201);
+      return rows[0];
+    } catch (err) {
+      const msg = (err as Error).message ?? "grant_failed";
+      await audit(req, {
+        action: "domain.admin_grant", target: b.user_id, status: "error",
+        metadata: { workspace_id: ws, user_id: b.user_id, message: msg },
+      });
+      reply.code(400); return { error: "grant_failed", message: msg };
+    }
+  });
+
+  app.delete<{ Params: { userId: string } }>("/enterprise/v1/domains/admins/:userId",
+    { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
+      const ws = workspaceOf(req);
+      if (!ws) { reply.code(400); return { error: "workspace_required" }; }
+      const rows = await q<{ user_id: string }>(
+        `delete from public.workspace_domain_admins
+           where workspace_id=$1::uuid and user_id=$2::uuid
+         returning user_id::text`, [ws, req.params.userId]);
+      if (rows.length) {
+        await audit(req, {
+          action: "domain.admin_revoke",
+          target: req.params.userId,
+          status: "ok",
+          metadata: { workspace_id: ws, user_id: req.params.userId },
+        });
+        await broadcast(`custom_domains:${ws}`, "domain.admin_revoked", { user_id: req.params.userId });
+      }
+      return { ok: true, revoked: rows.length > 0 };
+    });
+
   // Webhook secret management --------------------------------------------
+
   app.get("/enterprise/v1/domains/webhook-secret", { preHandler: requireWorkspaceAdmin }, async (req, reply) => {
     const ws = workspaceOf(req);
     if (!ws) { reply.code(400); return { error: "workspace_required" }; }

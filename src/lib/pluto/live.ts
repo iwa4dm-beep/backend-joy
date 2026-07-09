@@ -1415,6 +1415,12 @@ export type DomainWebhookInfo = {
   hmac_algo: string;
   payload_shape: Record<string, string>;
 };
+export type DomainAdminGrant = {
+  user_id: string;
+  granted_by: string | null;
+  granted_at: string;
+  note: string | null;
+};
 export type RegionConfig = { primary_region: string; read_regions: string[]; pin_writes: boolean; updated_at?: string };
 export type StatusComponent = { id: string; name: string; status: string; updated_at: string };
 export type StatusIncident = { id: string; title: string; body: string; severity: string; component_id: string | null; started_at: string; resolved_at: string | null };
@@ -1436,6 +1442,12 @@ export const enterprise = {
   setPrimaryDomain: (id: string) => api<{ ok: boolean; primary: boolean }>(`/enterprise/v1/domains/${id}/primary`, { method: "POST" }),
   clearPrimaryDomain: (id: string) => api<{ ok: boolean }>(`/enterprise/v1/domains/${id}/primary`, { method: "DELETE" }),
   removeDomain: (id: string) => api<{ ok: boolean }>(`/enterprise/v1/domains/${id}`, { method: "DELETE" }),
+  domainAdmins: () => api<{ grants: DomainAdminGrant[] }>("/enterprise/v1/domains/admins"),
+  grantDomainAdmin: (user_id: string, note?: string) =>
+    api<{ user_id: string; granted_at: string }>("/enterprise/v1/domains/admins",
+      { method: "POST", body: JSON.stringify({ user_id, note }) }),
+  revokeDomainAdmin: (user_id: string) =>
+    api<{ ok: boolean; revoked: boolean }>(`/enterprise/v1/domains/admins/${user_id}`, { method: "DELETE" }),
   domainWebhookSecret: () => api<DomainWebhookInfo>("/enterprise/v1/domains/webhook-secret"),
   rotateDomainWebhookSecret: () => api<{ secret: string; rotated: boolean }>("/enterprise/v1/domains/webhook-secret/rotate", { method: "POST" }),
   regions: () => api<RegionConfig>("/enterprise/v1/regions"),
@@ -1500,7 +1512,7 @@ export const studio = {
 export type WorkspaceRole = "owner" | "admin" | "member" | "viewer" | "global_admin" | "service_role" | "anon";
 
 export const me = {
-  workspaceRole: () => api<{ role: WorkspaceRole; can_admin: boolean }>("/me/v1/workspace-role"),
+  workspaceRole: () => api<{ role: WorkspaceRole; can_admin: boolean; is_domain_admin?: boolean }>("/me/v1/workspace-role"),
 };
 
 export const usage = {
