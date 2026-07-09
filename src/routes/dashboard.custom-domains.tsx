@@ -496,64 +496,98 @@ function CustomDomainsPage() {
                   </td>
                   <td className="px-4 py-2 text-xs text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
                   <td className="px-4 py-2 text-right">
-                    <div className="inline-flex gap-1">
-                      <button
-                        onClick={() => void runTest(d)}
-                        disabled={testingId === d.id}
-                        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
-                        title="Check DNS + healthcheck without changing config"
-                      >
-                        {testingId === d.id
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <Activity className="h-3.5 w-3.5" />}
-                        Test endpoint
-                      </button>
-                      {!d.verified && (
+                    <div className="inline-flex flex-col items-end gap-1">
+                      <div className="inline-flex gap-1 flex-wrap justify-end">
                         <button
-                          onClick={() => void verify(d)}
-                          disabled={!canAdmin || verifyingId === d.id}
-                          title={!canAdmin ? "Workspace admin role required" : undefined}
+                          onClick={() => void runTest(d)}
+                          disabled={testingId === d.id}
                           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                          title="Check DNS + healthcheck once"
                         >
-                          {verifyingId === d.id
+                          {testingId === d.id && !retryState[`test:${d.id}`]
                             ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            : <ShieldCheck className="h-3.5 w-3.5" />}
-                          Verify
+                            : <Activity className="h-3.5 w-3.5" />}
+                          Test
                         </button>
-                      )}
-                      {d.verified && !isPrimary && !wildcard && (
                         <button
-                          onClick={() => void makePrimary(d)}
-                          disabled={!canAdmin || primaryPending === d.id}
-                          title={!canAdmin ? "Workspace admin role required" : undefined}
+                          onClick={() => void runTest(d, { retry: true })}
+                          disabled={testingId === d.id}
                           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                          title="Retry test up to 5× with exponential backoff (1s → 16s)"
                         >
-                          {primaryPending === d.id
-                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            : <Star className="h-3.5 w-3.5" />}
-                          Make primary
+                          <RefreshCw className={`h-3.5 w-3.5 ${retryState[`test:${d.id}`] ? "animate-spin" : ""}`} />
+                          Retry test
                         </button>
-                      )}
-                      {!d.verified && (
+                        {!d.verified && (
+                          <>
+                            <button
+                              onClick={() => void verify(d)}
+                              disabled={!canAdmin || verifyingId === d.id}
+                              title={!canAdmin ? "Workspace admin role required" : undefined}
+                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                            >
+                              {verifyingId === d.id && !retryState[`verify:${d.id}`]
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <ShieldCheck className="h-3.5 w-3.5" />}
+                              Verify
+                            </button>
+                            <button
+                              onClick={() => void verify(d, { retry: true })}
+                              disabled={!canAdmin || verifyingId === d.id}
+                              title={!canAdmin
+                                ? "Workspace admin role required"
+                                : "Retry verify up to 5× with exponential backoff"}
+                              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                            >
+                              <RefreshCw className={`h-3.5 w-3.5 ${retryState[`verify:${d.id}`] ? "animate-spin" : ""}`} />
+                              Retry verify
+                            </button>
+                          </>
+                        )}
+                        {d.verified && !isPrimary && !wildcard && (
+                          <button
+                            onClick={() => void makePrimary(d)}
+                            disabled={!canAdmin || primaryPending === d.id}
+                            title={!canAdmin ? "Workspace admin role required" : undefined}
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                          >
+                            {primaryPending === d.id
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <Star className="h-3.5 w-3.5" />}
+                            Make primary
+                          </button>
+                        )}
+                        {!d.verified && (
+                          <button
+                            onClick={() => setAdded({
+                              hostname: d.hostname,
+                              dns_txt_record: verifyTxtRecordName(d.hostname),
+                              dns_txt_value: d.verify_token,
+                            })}
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
+                          >
+                            DNS
+                          </button>
+                        )}
                         <button
-                          onClick={() => setAdded({
-                            hostname: d.hostname,
-                            dns_txt_record: verifyTxtRecordName(d.hostname),
-                            dns_txt_value: d.verify_token,
-                          })}
-                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
+                          onClick={() => void remove(d)}
+                          disabled={!canAdmin}
+                          title={!canAdmin ? "Workspace admin role required" : undefined}
+                          className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40"
                         >
-                          DNS
+                          <Trash2 className="h-3.5 w-3.5" />
                         </button>
-                      )}
-                      <button
-                        onClick={() => void remove(d)}
-                        disabled={!canAdmin}
-                        title={!canAdmin ? "Workspace admin role required" : undefined}
-                        className="inline-flex items-center gap-1 rounded-md border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      </div>
+                      <RetryStatus
+                        attempt={retryState[`verify:${d.id}`]}
+                        label="Verify"
+                        onCancel={() => cancelRetry(`verify:${d.id}`)}
+                      />
+                      <RetryStatus
+                        attempt={retryState[`test:${d.id}`]}
+                        label="Test"
+                        onCancel={() => cancelRetry(`test:${d.id}`)}
+                      />
                     </div>
                   </td>
                 </tr>
