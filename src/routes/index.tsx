@@ -85,17 +85,20 @@ const deployTargets = [
 
 const stats = [
   { value: "8",   label: "canonical modules" },
-  { value: "60+", label: "phases shipped" },
-  { value: "15+", label: "endpoint smoke tests" },
-  { value: "4",   label: "official SDKs" },
+  { value: "34",  label: "shipped migrations" },
+  { value: "40+", label: "API route modules" },
+  { value: "4",   label: "official SDKs (JS, Python, Go, CLI)" },
 ];
 
+// NOTE: These samples use the real published API surface. `@pluto/js` is the
+// package in `pluto-backend/packages/sdk-js` (name in its package.json).
+// Until published to npm, install it directly from source (see install block).
 const codeSamples = {
-  auth: `import { createClient } from "@pluto/client";
+  auth: `import { createClient } from "@pluto/js";
 
 const pluto = createClient({
-  url: "https://api.yourapp.com",
-  anonKey: import.meta.env.VITE_PLUTO_ANON_KEY,
+  url: "https://api.timescard.cloud",
+  anonKey: import.meta.env.VITE_PLUTO_ANON_KEY, // Dashboard → API keys
 });
 
 // Email + password
@@ -104,19 +107,19 @@ await pluto.auth.signIn("ada@example.com", "hunter2");
 // Magic link — passwordless
 await pluto.auth.signInWithMagicLink("ada@example.com");
 
-// OAuth
+// OAuth (Google, GitHub) — configured in Dashboard → Auth
 pluto.auth.signInWithOAuth("google");`,
-  data: `// Instant CRUD — no backend code
-const { data } = await pluto
+  data: `// Instant CRUD — no backend code, RLS enforced per JWT
+const { data, error } = await pluto
   .from("posts")
   .select("id, title, author:users(name)")
   .eq("published", true)
   .order("created_at", { ascending: false })
   .limit(20);
 
-// RLS enforces "posts.owner = auth.uid()" server-side
+// Insert — server checks RLS ("posts.owner = auth.uid()")
 await pluto.from("posts").insert({ title: "Hello Pluto" });`,
-  realtime: `// Subscribe to row changes
+  realtime: `// Subscribe to row changes over WebSocket
 const channel = pluto.realtime
   .subscribeTable("public:messages", (change) => {
     console.log(change.eventType, change.new);
@@ -126,6 +129,7 @@ const channel = pluto.realtime
 channel.presence.track({ user_id: me.id, status: "typing" });
 channel.send({ type: "cursor", x: 120, y: 80 });`,
 };
+
 
 type Tab = keyof typeof codeSamples;
 
