@@ -257,8 +257,8 @@ const { data: signed } = await pluto.storage
     icon: Check,
     title_bn: "১১. Connection যাচাই",
     title_en: "11. Verify the connection",
-    body_bn: "নিচের 'Test connection' বাটন চাপুন — এটি আপনার backend-এর /v1/health endpoint ping করে সব module-এর status দেখাবে।",
-    body_en: "Click the 'Test connection' button below — it pings the backend `/v1/health` endpoint and reports every module's status.",
+    body_bn: "নিচের 'C1. Test connection' section-এ Run all checks বাটন চাপুন — এটি সরাসরি আপনার apiBase-এ HTTP health, auth, realtime WebSocket, এবং storage buckets check করবে।",
+    body_en: "Scroll to 'C1. Test connection' below and hit Run all checks — it exercises HTTP health, auth, realtime WebSocket, and storage buckets against your live apiBase.",
   },
   {
     id: "deploy",
