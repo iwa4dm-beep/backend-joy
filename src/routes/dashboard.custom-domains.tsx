@@ -315,8 +315,13 @@ function CustomDomainsPage() {
 
       {!canAdmin && role !== "loading" && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-200">
-          You are signed in as a workspace <b>member</b>. Only workspace <b>owners/admins</b> can add, verify,
-          make primary, or remove custom domains. Read-only view enabled.
+          You are signed in as a workspace <b>member</b>. Only workspace <b>owners/admins</b> or users granted the
+          <b> domain-admin</b> permission can add, verify, make primary, or remove custom domains. Read-only view enabled.
+        </div>
+      )}
+      {role === "domain_admin" && (
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-xs text-emerald-200">
+          You have the <b>domain-admin</b> permission on this workspace — you can manage custom domains without full workspace-admin rights.
         </div>
       )}
 
