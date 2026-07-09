@@ -1,131 +1,102 @@
+# Connect Your Existing Project — Setup Guide
 
-# Plan — BaaS-as-SaaS: Marketing Brief + In-App Documentation Layer
+আপনার existing PostgreSQL + React/Vite project কে এই Pluto BaaS-এ যুক্ত করার জন্য একটি নতুন sidebar menu group **"Connect Project"** যোগ করব, যার under-এ একটি বিস্তারিত step-by-step guide page থাকবে (বাংলা + English)।
 
-দুইটা আলাদা কাজ, একসাথে ডেলিভার করব:
+## Sidebar-এ নতুন Menu
 
-**Part A** — SaaS হিসেবে বাজারজাত করার একটা concrete go-to-market brief (কোথায়, কিভাবে, কাদের কাছে, কোন প্রাইসিং)।
-**Part B** — অ্যাপের **প্রতিটা পেইজ, প্রতিটা সেকশন, প্রতিটা ফিচারের** পাশে বিস্তারিত bilingual (বাংলা + English) help/guide, যাতে ইউজার পড়েই বুঝে ফেলতে পারে "এই টুল কী করে, কিভাবে কাজ করে, কোন step-এ কী চাপতে হবে"। পরে ইচ্ছেমতো কমানো যাবে।
+**Group:** `Getting Started` (Platform group-এর উপরে, top-এ)
+- **Connect Your Project** → `/dashboard/connect-project` (icon: `Plug`)
 
----
+## Page Structure — `/dashboard/connect-project`
 
-## Part A — Marketing / Go-to-Market Brief (ডকুমেন্ট আকারে)
+একটি tabbed/stepper layout, প্রতিটি step-এ code snippet + copy button + বাংলা ব্যাখ্যা:
 
-`docs/GO-TO-MARKET.md` তৈরি করব — এটা আপনার নিজের reference, বাজারজাত করার সময় step-by-step follow করবেন।
+### Step 1 — Prerequisites Check
+- Existing Postgres DB URL, React/Vite project, Node 18+
+- Checklist UI (interactive checkboxes)
 
-সেকশনগুলো থাকবে:
+### Step 2 — Create Workspace & Project
+- Dashboard → Workspaces → New workspace
+- Project create → API keys (anon + service_role) copy করার instruction
+- Screenshot placeholder + "Open Workspaces" button
 
-1. **Positioning** — "Supabase-compatible, self-hostable BaaS for teams that want data sovereignty + predictable pricing" — এই লাইনে ৩টা variant।
-2. **Target ICP (Ideal Customer Profile)** —
-   - Indie developers & solo founders (Firebase/Supabase-এর alternative খুঁজছেন)
-   - SMB agencies যারা client-এর জন্য backend host করেন
-   - Regulated industries (health, finance, edu — data residency লাগে)
-   - Bangladesh + South Asia SaaS builders (local hosting + BDT pricing)
-3. **Pricing tiers** — Free / Pro ($29) / Team ($99) / Self-host (one-time + support) — feature matrix সহ।
-4. **Launch channels** (priority order):
-   - Product Hunt launch checklist
-   - Hacker News "Show HN" post template
-   - Reddit r/selfhosted, r/webdev, r/SaaS
-   - Dev.to + Hashnode article series ("Migrating from Supabase to Pluto")
-   - Twitter/X + LinkedIn founder-led content plan (৩০ দিনের calendar)
-   - GitHub README + `awesome-selfhosted` PR
-5. **Content marketing plan** — ১০টা blog post idea, প্রতিটার SEO keyword সহ।
-6. **Landing page conversion checklist** — hero, social proof, comparison table (vs Supabase/Firebase/Appwrite), pricing, FAQ, CTA।
-7. **First 100 users playbook** — cold outreach templates, community engagement rules, feedback loop।
-8. **Metrics to track** — signups, activation (first API call), retention (D7/D30), MRR।
-9. **Bangladesh-specific GTM** — bKash/Nagad payment, BDT pricing tier, local dev community outreach (BASIS, Facebook groups)।
+### Step 3 — Migrate Your Postgres Schema
+দুইটি option:
+- **A. Fresh start** — Pluto managed Postgres ব্যবহার (recommended)
+- **B. Bring Your Own DB (BYOD)** — existing DB-এর `DATABASE_URL` configure করা
+  - `pluto-backend/deploy/*` scripts এবং migrations কিভাবে run করবে
+  - `pg_dump` → restore instruction
+  - RLS enable করার SQL snippet
 
-সাথে homepage-এ একটা ছোট "For SaaS builders" section যোগ করব যা এই positioning-টা reflect করবে।
-
----
-
-## Part B — In-App Help/Documentation Layer (প্রতিটা পেইজে)
-
-লক্ষ্য: **কোনো পেইজ বাদ যাবে না**। প্রতিটা dashboard route, প্রতিটা section, প্রতিটা button-এর পাশে explanation।
-
-### B1. Reusable primitives (একবার বানাব, সব জায়গায় use হবে)
-
-- **`<HelpPanel>`** — পেইজের উপরে collapsible bilingual info card। props: `title`, `whatItDoes` (কী করে), `howToUse` (কিভাবে use করবেন — steps array), `whenToUse` (কখন), `troubleshooting` (optional)।
-- **`<FeatureHint>`** — ছোট `(?)` icon যেটা hover/click করলে tooltip/popover-এ short bilingual explanation দেখাবে। প্রতিটা button/toggle/field-এর পাশে বসবে।
-- **`<StepGuide>`** — numbered step list, expandable, per-step screenshot placeholder।
-- **`<HelpDrawer>`** — right-side slide-in drawer, "Show full guide" button থেকে খুলবে, পুরো পেইজের deep documentation ধারণ করবে।
-- **Global help toggle** — top navbar-এ একটা switch: "Beginner mode: ON/OFF"। ON থাকলে সব HelpPanel + FeatureHint দেখাবে; OFF করলে কেবল `(?)` icons থাকবে। User preference `localStorage`-এ save হবে। এটাই আপনার "পরে কমাব" mechanism — একটা toggle-এ সবাই একসাথে hide/show।
-
-### B2. Content structure (প্রতিটা পেইজের জন্য)
-
-প্রতিটা route-এর জন্য একটা content file বানাব: `src/content/help/<route-slug>.ts` — TypeScript object যাতে থাকবে:
-
-```ts
-{
-  page: { titleBn, titleEn, whatItDoes: {bn, en}, whyItMatters: {bn, en} },
-  sections: [
-    {
-      id, titleBn, titleEn,
-      whatItDoes: {bn, en},
-      howToUse: [{stepBn, stepEn}, ...],
-      fields: [{name, purposeBn, purposeEn, exampleValue}],
-      troubleshooting: [{problemBn, solutionBn}],
-    }
-  ],
-  glossary: [{term, definitionBn, definitionEn}]
-}
+### Step 4 — Install SDK in Frontend
+```bash
+bun add @pluto/js
+```
+`.env` setup:
+```
+VITE_PLUTO_URL=https://api.timescard.cloud
+VITE_PLUTO_ANON_KEY=pk_anon_xxx
 ```
 
-এভাবে content আর UI আলাদা থাকবে — পরে edit/translate/trim করা সহজ।
+### Step 5 — Initialize Client
+`src/lib/pluto.ts` file তৈরি (examples/lovable-frontend/pluto-client.ts থেকে template)
 
-### B3. Coverage — প্রতিটা route ধরে ধরে
+### Step 6 — Wire Features (Tab per feature)
+প্রতিটি feature-এর জন্য mini-tab, ready-to-paste code:
+1. **Auth** — sign up / sign in / OAuth (Google, GitHub)
+2. **Database (REST + GraphQL)** — CRUD example, `pluto.from("todos").select()`
+3. **Realtime** — subscribe to table changes + presence
+4. **Storage** — file upload/download + presigned URL
+5. **Edge Functions** — deploy + invoke
+6. **Vector / AI** — embedding + search
+7. **Users / MFA / SSO** — role management
 
-Dashboard routes (already exist) — প্রতিটার জন্য HelpPanel + section-level hints:
+### Step 7 — RLS & Security Setup
+- `has_role()` function SQL snippet
+- Basic policy examples (owner-only, public-read)
+- Link to existing Audit & Compliance pages
 
-- `/dashboard` — overview, quick stats কী মানে
-- `/dashboard/verify` — verify checks কেন লাগে, কোন check কী test করে
-- `/dashboard/api` — API keys generate/rotate/revoke কিভাবে
-- `/dashboard/cors` — CORS origin add কেন লাগে, কোন pattern valid
-- `/dashboard/audit` + `/dashboard/audit-log` — কে কী করেছে দেখা
-- `/dashboard/ai` — AI features setup
-- `/dashboard/backups` — backup schedule + restore step-by-step
-- `/dashboard/branching` — DB branching workflow
-- `/dashboard/backend-status` — health signals কী মানে
-- `/dashboard/database-import` — schema import steps
-- `/dashboard/migrations` (+legacy `/dashboard/pluto-migrations`) — migration apply/rollback
-- `/dashboard/sdk-demo`, `/dashboard/pluto-sdk`, `/dashboard/sdk-release` — SDK install/publish flow
-- `/dashboard/admin/invite` — team invite + role explain
-- সব বাকি dashboard.* route যেগুলো `src/routes/` scan করে বের করব
+### Step 8 — Verify Connection
+- Built-in "Test Connection" button — API call করে auth + db + storage ping করবে
+- Success/error status card
 
-Public/docs routes:
-- `/` (homepage) — feature card প্রতিটায় short "what/why"
-- `/docs`, `/docs/sdk`, `/docs/auth` (আগের কাজে যা তৈরি হয়েছে) — বাংলা counterpart যোগ করব
-- CORS/env checklist, OpenAPI, Quickstart pages — bilingual help block যোগ
+### Step 9 — Deploy Checklist
+- CORS origins add
+- Production API keys rotate
+- Custom domain setup link
+- Monitoring/observability link
 
-### B4. Onboarding tour (bonus, low-effort)
+## Additional Features on the Page
+- **Language toggle** (বাংলা / English) — HelpPanel-এর pattern reuse
+- **Copy-to-clipboard** সব code block-এ
+- **Progress tracker** — localStorage-এ কোন step complete track
+- **PageHelp integration** — ⌘K search-এ discoverable
+- **Downloadable starter kit** link (`examples/lovable-frontend/`)
 
-First-time login-এ একটা optional 5-step tour: "এখানে API key তৈরি করুন → এখানে CORS যোগ করুন → এখানে SDK install করুন → এখানে data দেখুন → এখানে backup on করুন"। skip করা যাবে, "Show again" option settings-এ থাকবে।
+## Technical Implementation
 
-### B5. Search
+**Files to create:**
+1. `src/routes/dashboard.connect-project.tsx` — main page (tabs, steppers, code blocks)
+2. `src/content/help/dashboard.connect-project.ts` — bilingual PageHelp entry
+3. `src/components/pluto/connect/` — sub-components:
+   - `PrerequisiteChecklist.tsx`
+   - `CodeBlock.tsx` (with copy button)
+   - `ConnectionTester.tsx` (calls `/v1/health` endpoint)
+   - `StepProgress.tsx` (localStorage-backed)
+4. `src/content/connect/` — MDX-style content data (bilingual snippets)
 
-`Cmd+K` command palette (আগে থেকে আছে) — এটাতে help content-ও index করে দিব, যাতে user "backup" লিখলে backup page + related help section সব চলে আসে।
+**Files to edit:**
+1. `src/components/pluto/Sidebar.tsx` — new "Getting Started" group + "Connect Your Project" item
+2. `src/content/help/registry.ts` — register new help entry for ⌘K search
+
+**Tests:**
+- `registry.spec.ts` will auto-cover the new help entry (existing test loops all entries)
+
+## Out of Scope (Later Phases)
+- CLI wizard (`npx @pluto/init`)
+- One-click DB migration tool
+- Automatic schema introspection from user's existing DB
 
 ---
 
-## Delivery order (ছোট ছোট batch-এ)
-
-1. **Batch 1** — Primitives (`HelpPanel`, `FeatureHint`, `HelpDrawer`, global Beginner-mode toggle) + content schema + English/Bangla i18n helper।
-2. **Batch 2** — `docs/GO-TO-MARKET.md` (Part A পুরোটা) + homepage "For SaaS builders" section।
-3. **Batch 3** — Top 5 highest-traffic dashboard pages-এ content (dashboard home, verify, api, cors, sdk-demo)।
-4. **Batch 4** — বাকি সব dashboard routes cover।
-5. **Batch 5** — Public docs pages + onboarding tour + Cmd+K help search integration।
-
-প্রতিটা batch আলাদা turn-এ deliver হবে, যাতে আপনি review করে feedback দিতে পারেন।
-
----
-
-## Technical notes (for me, not user-facing)
-
-- Content file structure keeps copy edit-friendly — non-devs can update `src/content/help/*.ts` without touching route components.
-- HelpPanel visibility controlled by a single `useBeginnerMode()` hook backed by `localStorage`, so "trim later" = flip default to `false`.
-- No new heavy deps — plain React + existing shadcn Popover/Sheet/Collapsible primitives.
-- Bilingual: no i18n framework needed for v1; content object carries both `bn` + `en`, component picks based on a lightweight `useLocale()` (defaults to `bn` since target market includes BD).
-- SEO-safe: HelpPanel content renders as normal DOM, indexable, not behind JS-only tooltips for the primary text.
-
----
-
-Approve করলে **Batch 1 + Batch 2** দিয়ে শুরু করব (primitives + marketing brief), তারপর ধাপে ধাপে বাকি batch।
+Approve করলে page + sidebar entry + PageHelp সব তৈরি করে দিব।
