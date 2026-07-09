@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { plutoApi, pushUiHistory, getUpstream } from "@/lib/pluto/upstream";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardPlutoAuthAdvancedHelp } from "@/content/help/dashboard.pluto-auth-advanced";
 
 export const Route = createFileRoute("/dashboard/pluto-auth-advanced")({
   component: AuthAdvPage,
@@ -99,7 +100,7 @@ function AuthAdvPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Advanced Auth</h1>
-      <AutoHelpPanel slug={'dashboard.pluto-auth-advanced'} title={'Advanced Auth'} description={''} />
+      <HelpPanel help={dashboardPlutoAuthAdvancedHelp} />
       {err && <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">{err}</div>}
 
       <div className="flex flex-wrap gap-2 items-end">
