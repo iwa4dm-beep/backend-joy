@@ -1,9 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import {
   Check, Copy, Download, Loader2, Play, Radio, ShieldCheck,
-  Database as DBIcon, HardDrive, Save, AlertCircle,
+  Database as DBIcon, HardDrive, Save, AlertCircle, FileJson, FileCode,
 } from "lucide-react";
 import { CONSOLIDATED_SCHEMA_SQL, splitSqlStatements, summariseStatement } from "@/lib/pluto/connect-schema";
+import {
+  retryWithBackoff, buildReport, downloadReportJson, downloadReportHtml,
+  type ReportStep, type RetryConfig,
+} from "@/lib/pluto/connect-utils";
 
 /* -------------------------------------------------------------------------- */
 /* helpers                                                                    */
@@ -194,91 +198,125 @@ export function MigrationRunner({ apiBase }: { apiBase: string }) {
 /* Realtime channel verifier — WS connectivity + subscription confirmation    */
 /* -------------------------------------------------------------------------- */
 
-type ChanState = { name: string; status: Status; note?: string };
+type ChanState = { name: string; status: Status; note?: string; attempts?: number };
+type RtEvent = { at: string; kind: "open" | "close" | "error" | "message" | "timeout" | "retry" | "subscribe"; message: string };
 
 export function RealtimeVerifier({ apiBase }: { apiBase: string }) {
   const [anonKey, setAnonKey] = useState("");
   const [channelsInput, setChannelsInput] = useState("system:health,realtime:public:todos");
+  const [maxRetries, setMaxRetries] = useState(2);
   const [wsStatus, setWsStatus] = useState<Status>("idle");
   const [wsNote, setWsNote] = useState<string>("");
+  const [wsAttempts, setWsAttempts] = useState<number>(0);
   const [chans, setChans] = useState<ChanState[]>([]);
+  const [events, setEvents] = useState<RtEvent[]>([]);
   const [running, setRunning] = useState(false);
 
+  const pushEvent = (kind: RtEvent["kind"], message: string) =>
+    setEvents((prev) => [...prev.slice(-199), { at: new Date().toISOString(), kind, message }]);
+
+  const attemptOnce = useCallback((wsUrl: string, names: string[]): Promise<{ ok: boolean; chans: ChanState[]; err?: string }> => {
+    return new Promise((resolve) => {
+      let ws: WebSocket;
+      const chanState: ChanState[] = names.map((name) => ({ name, status: "running", note: "pending" }));
+      try { ws = new WebSocket(wsUrl); }
+      catch (e) {
+        pushEvent("error", e instanceof Error ? e.message : String(e));
+        resolve({ ok: false, chans: chanState, err: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      const timeout = setTimeout(() => {
+        pushEvent("timeout", "WebSocket upgrade did not complete within 8s");
+        try { ws.close(); } catch { /* ignore */ }
+        resolve({ ok: false, chans: chanState, err: "timeout" });
+      }, 8000);
+
+      ws.onopen = () => {
+        pushEvent("open", `Connected to ${wsUrl}`);
+        names.forEach((name, idx) => {
+          try {
+            ws.send(JSON.stringify({ type: "subscribe", channel: name, ref: String(idx + 1) }));
+            pushEvent("subscribe", `→ ${name}`);
+            chanState[idx] = { ...chanState[idx], note: "subscribe sent" };
+          } catch (e) {
+            chanState[idx] = { ...chanState[idx], status: "fail", note: e instanceof Error ? e.message : String(e) };
+          }
+        });
+        setChans([...chanState]);
+        // wait 3s for per-channel replies, then resolve
+        setTimeout(() => {
+          for (let i = 0; i < chanState.length; i++) {
+            if (chanState[i].status === "running") chanState[i] = { ...chanState[i], status: "ok", note: (chanState[i].note ?? "") + " · no error within 3s" };
+          }
+          try { ws.close(); } catch { /* ignore */ }
+          clearTimeout(timeout);
+          const anyFail = chanState.some((c) => c.status === "fail");
+          resolve({ ok: !anyFail, chans: chanState });
+        }, 3000);
+      };
+      ws.onmessage = (ev) => {
+        pushEvent("message", String(ev.data).slice(0, 240));
+        try {
+          const msg = JSON.parse(String(ev.data));
+          const name = msg.channel ?? msg.topic;
+          if (!name) return;
+          const idx = chanState.findIndex((c) => c.name === name);
+          if (idx >= 0) {
+            chanState[idx] = { ...chanState[idx], status: msg.error ? "fail" : "ok", note: msg.error ? String(msg.error) : msg.status ?? "subscribed" };
+            setChans([...chanState]);
+          }
+        } catch { /* ignore non-json */ }
+      };
+      ws.onerror = () => {
+        pushEvent("error", "WebSocket error — check CORS / TLS / firewall");
+        clearTimeout(timeout);
+        resolve({ ok: false, chans: chanState, err: "ws error" });
+      };
+      ws.onclose = (ev) => {
+        pushEvent("close", `code ${ev.code}${ev.reason ? ` · ${ev.reason}` : ""}`);
+      };
+    });
+  }, []);
+
   const run = useCallback(async () => {
-    setRunning(true); setWsStatus("running"); setWsNote(""); setChans([]);
+    setRunning(true);
+    setEvents([]);
+    setWsStatus("running"); setWsNote(""); setChans([]); setWsAttempts(0);
     const wsUrl = wsUrlFrom(apiBase) + (anonKey ? `?apikey=${encodeURIComponent(anonKey)}` : "");
     const names = channelsInput.split(",").map((s) => s.trim()).filter(Boolean);
     const initial: ChanState[] = names.map((name) => ({ name, status: "idle" }));
     setChans(initial);
 
-    let ws: WebSocket;
-    try { ws = new WebSocket(wsUrl); }
-    catch (e) {
-      setWsStatus("fail");
-      setWsNote(e instanceof Error ? e.message : String(e));
-      setRunning(false);
-      return;
-    }
+    const cfg: RetryConfig = { maxRetries: Math.max(0, maxRetries), baseDelayMs: 500, maxDelayMs: 8000 };
+    const result = await retryWithBackoff(
+      async (attempt) => {
+        if (attempt > 0) pushEvent("retry", `attempt #${attempt + 1}`);
+        setWsAttempts(attempt + 1);
+        const r = await attemptOnce(wsUrl, names);
+        return { ok: r.ok, value: r };
+      },
+      cfg,
+    );
+    setChans(result.value.chans);
+    if (result.ok) { setWsStatus("ok"); setWsNote(`Connected · ${result.attempts} attempt(s)`); }
+    else { setWsStatus("fail"); setWsNote(`Failed after ${result.attempts} attempt(s)${result.value.err ? ` — ${result.value.err}` : ""}`); }
+    setRunning(false);
+  }, [apiBase, anonKey, channelsInput, maxRetries, attemptOnce]);
 
-    const timeout = setTimeout(() => {
-      if (wsStatus !== "ok") {
-        setWsStatus("fail");
-        setWsNote("Timeout — WebSocket upgrade did not complete within 8s");
-        try { ws.close(); } catch { /* ignore */ }
-        setRunning(false);
-      }
-    }, 8000);
-
-    ws.onopen = () => {
-      setWsStatus("ok");
-      setWsNote(`Connected to ${wsUrl}`);
-      names.forEach((name, idx) => {
-        try {
-          ws.send(JSON.stringify({ type: "subscribe", channel: name, ref: String(idx + 1) }));
-          setChans((prev) => {
-            const n = [...prev]; n[idx] = { ...n[idx], status: "running", note: "subscribe sent" }; return n;
-          });
-        } catch (e) {
-          setChans((prev) => {
-            const n = [...prev]; n[idx] = { ...n[idx], status: "fail", note: e instanceof Error ? e.message : String(e) }; return n;
-          });
-        }
-      });
-      // resolve remaining after 3s if backend didn't reply per-channel
-      setTimeout(() => {
-        setChans((prev) => prev.map((c) => c.status === "running" ? { ...c, status: "ok", note: (c.note ?? "") + " · no error within 3s" } : c));
-        try { ws.close(); } catch { /* ignore */ }
-        clearTimeout(timeout);
-        setRunning(false);
-      }, 3000);
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(String(ev.data));
-        const name = msg.channel ?? msg.topic;
-        if (!name) return;
-        setChans((prev) => prev.map((c) => c.name === name
-          ? { ...c, status: msg.error ? "fail" : "ok", note: msg.error ? String(msg.error) : msg.status ?? "subscribed" }
-          : c));
-      } catch { /* ignore non-json */ }
-    };
-
-    ws.onerror = () => {
-      setWsStatus("fail");
-      setWsNote("WebSocket error — check CORS / TLS / firewall");
-      clearTimeout(timeout);
-      setRunning(false);
-    };
-    ws.onclose = (ev) => {
-      if (wsStatus === "idle" || wsStatus === "running") {
-        setWsStatus("fail");
-        setWsNote(`Closed before open (code ${ev.code}${ev.reason ? ` · ${ev.reason}` : ""})`);
-      }
-      clearTimeout(timeout);
-      setRunning(false);
-    };
-  }, [apiBase, anonKey, channelsInput, wsStatus]);
+  const doExport = (kind: "json" | "html") => {
+    const steps: ReportStep[] = [
+      { key: "ws", label: `WebSocket ${wsUrlFrom(apiBase)}`, status: wsStatus === "ok" ? "ok" : wsStatus === "fail" ? "fail" : "idle", detail: wsNote, attempts: wsAttempts },
+      ...chans.map((c) => ({
+        key: `chan:${c.name}`, label: `channel ${c.name}`,
+        status: c.status as ReportStep["status"], detail: c.note,
+      })),
+    ];
+    const report = buildReport({
+      tool: "realtime-verifier", apiBase, steps,
+      events: events.map((e) => ({ at: e.at, kind: e.kind, message: e.message })),
+    });
+    (kind === "json" ? downloadReportJson : downloadReportHtml)(report);
+  };
 
   return (
     <div className="mt-3 rounded-md border border-border/60 bg-muted/30 p-3">
@@ -297,26 +335,66 @@ export function RealtimeVerifier({ apiBase }: { apiBase: string }) {
           onChange={(e) => setChannelsInput(e.target.value)}
           className="min-w-[280px] flex-1 rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono"
         />
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          Max retries
+          <input type="number" min={0} max={8} value={maxRetries}
+            onChange={(e) => setMaxRetries(Math.max(0, Math.min(8, Number(e.target.value) || 0)))}
+            className="w-14 rounded-md border border-border/60 bg-background px-2 py-1 text-xs font-mono"
+          />
+        </label>
         <button onClick={run} disabled={running}
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Radio className="h-3.5 w-3.5" />}
           Verify
         </button>
+        <button onClick={() => doExport("json")} disabled={running || events.length === 0}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileJson className="h-3.5 w-3.5" /> JSON
+        </button>
+        <button onClick={() => doExport("html")} disabled={running || events.length === 0}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileCode className="h-3.5 w-3.5" /> HTML
+        </button>
       </div>
 
-      <div className="mt-3 space-y-1 text-xs">
-        <div className="flex items-center gap-2">
-          <StatusDot s={wsStatus} />
-          <span className="font-mono">{wsUrlFrom(apiBase)}</span>
-          {wsNote && <span className="text-muted-foreground">— {wsNote}</span>}
-        </div>
-        {chans.map((c) => (
-          <div key={c.name} className="flex items-center gap-2 pl-4">
-            <StatusDot s={c.status} />
-            <span className="font-mono">{c.name}</span>
-            {c.note && <span className="text-muted-foreground">— {c.note}</span>}
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="space-y-1 text-xs">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Subscriptions</div>
+          <div className="flex items-center gap-2">
+            <StatusDot s={wsStatus} />
+            <span className="font-mono">{wsUrlFrom(apiBase)}</span>
+            {wsAttempts > 0 && <span className="text-[10px] text-muted-foreground">· {wsAttempts} attempt(s)</span>}
           </div>
-        ))}
+          {wsNote && <div className="pl-4 text-muted-foreground">— {wsNote}</div>}
+          {chans.map((c) => (
+            <div key={c.name} className="flex items-center gap-2 pl-4">
+              <StatusDot s={c.status} />
+              <span className="font-mono">{c.name}</span>
+              {c.note && <span className="text-muted-foreground">— {c.note}</span>}
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Channel inspector · live events</div>
+          <div className="mt-1 h-56 overflow-auto rounded border border-border/50 bg-background/60 p-2 text-[11px] font-mono">
+            {events.length === 0 ? (
+              <div className="text-muted-foreground">No events yet — run the verifier.</div>
+            ) : events.map((e, i) => {
+              const color = e.kind === "error" || e.kind === "timeout" ? "text-red-600 dark:text-red-400"
+                : e.kind === "open" || e.kind === "message" ? "text-green-600 dark:text-green-400"
+                : e.kind === "retry" ? "text-amber-600 dark:text-amber-400"
+                : "text-muted-foreground";
+              return (
+                <div key={i} className="flex gap-2">
+                  <span className="shrink-0 text-muted-foreground">{e.at.slice(11, 23)}</span>
+                  <span className={`shrink-0 font-semibold ${color}`}>{e.kind}</span>
+                  <span className="min-w-0 break-all">{e.message}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -409,8 +487,37 @@ export function ConnectionTester({ apiBase }: { apiBase: string }) {
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           Run all checks
         </button>
+        <button
+          onClick={() => {
+            const steps: ReportStep[] = checks.map((c) => ({
+              key: c.key, label: c.label,
+              status: c.status === "idle" ? "idle" : c.status,
+              ms: c.ms, detail: c.detail,
+              error: c.status === "fail" ? c.detail : undefined,
+            }));
+            downloadReportJson(buildReport({ tool: "connection-tester", apiBase, steps }));
+          }}
+          disabled={running || checks.every((c) => c.status === "idle")}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileJson className="h-3.5 w-3.5" /> JSON
+        </button>
+        <button
+          onClick={() => {
+            const steps: ReportStep[] = checks.map((c) => ({
+              key: c.key, label: c.label,
+              status: c.status === "idle" ? "idle" : c.status,
+              ms: c.ms, detail: c.detail,
+              error: c.status === "fail" ? c.detail : undefined,
+            }));
+            downloadReportHtml(buildReport({ tool: "connection-tester", apiBase, steps }));
+          }}
+          disabled={running || checks.every((c) => c.status === "idle")}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileCode className="h-3.5 w-3.5" /> HTML
+        </button>
         <span className="text-[11px] text-muted-foreground">apiBase: <span className="font-mono">{apiBase}</span></span>
       </div>
+
 
       <ul className="mt-3 space-y-1 text-xs">
         {checks.map((c) => {
@@ -438,7 +545,7 @@ export function ConnectionTester({ apiBase }: { apiBase: string }) {
 /* End-to-end flow — auth, storage upload/download, backups, realtime         */
 /* -------------------------------------------------------------------------- */
 
-type Step = { key: string; label: string; status: Status; detail?: string };
+type Step = { key: string; label: string; status: Status; detail?: string; ms?: number; attempts?: number };
 
 const initialE2E: Step[] = [
   { key: "signin",   label: "1. Sign in (email/password)",           status: "idle" },
@@ -454,161 +561,202 @@ export function E2ETestRunner({ apiBase }: { apiBase: string }) {
   const [anonKey, setAnonKey] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [maxRetries, setMaxRetries] = useState(2);
   const [steps, setSteps] = useState<Step[]>(initialE2E);
   const [running, setRunning] = useState(false);
 
-  const set = (key: string, patch: Partial<Step>) =>
+  const setStep = (key: string, patch: Partial<Step>) =>
     setSteps((prev) => prev.map((s) => s.key === key ? { ...s, ...patch } : s));
 
   const run = useCallback(async () => {
     if (!anonKey || !email || !password) return;
     setRunning(true);
-    setSteps(initialE2E.map((s) => ({ ...s, status: "idle" as Status, detail: undefined })));
+    setSteps(initialE2E.map((s) => ({ ...s, status: "idle" as Status, detail: undefined, ms: undefined, attempts: undefined })));
 
+    const cfg: RetryConfig = { maxRetries: Math.max(0, maxRetries), baseDelayMs: 500, maxDelayMs: 6000 };
     const authed = (token: string): Record<string, string> => ({
-      "content-type": "application/json",
-      apikey: anonKey,
-      authorization: `Bearer ${token}`,
+      "content-type": "application/json", apikey: anonKey, authorization: `Bearer ${token}`,
     });
+
+    // Generic step runner with backoff. `probe` returns { ok, ...data }.
+    async function runStep<T>(
+      key: string,
+      probe: () => Promise<{ ok: boolean; value: T; detail?: string; skip?: boolean }>,
+    ): Promise<{ ok: boolean; value: T }> {
+      setStep(key, { status: "running", detail: undefined, ms: undefined, attempts: 0 });
+      const start = performance.now();
+      const r = await retryWithBackoff(
+        async (attempt) => {
+          setStep(key, { attempts: attempt + 1, detail: attempt > 0 ? `retry #${attempt}` : undefined });
+          const p = await probe();
+          return { ok: p.ok, value: p };
+        },
+        cfg,
+      );
+      const ms = Math.round(performance.now() - start);
+      if (r.value.skip) setStep(key, { status: "skipped", detail: r.value.detail, ms, attempts: r.attempts });
+      else if (r.ok)    setStep(key, { status: "ok",       detail: r.value.detail, ms, attempts: r.attempts });
+      else              setStep(key, { status: "fail",     detail: r.value.detail, ms, attempts: r.attempts });
+      return { ok: r.ok, value: r.value.value };
+    }
 
     // 1) sign in
-    set("signin", { status: "running" });
-    const signin = await jsonFetch(`${apiBase}/v1/auth/token?grant_type=password`, {
-      method: "POST",
-      headers: { "content-type": "application/json", apikey: anonKey },
-      body: JSON.stringify({ email, password }),
+    const signin = await runStep<{ token?: string; userId?: string }>("signin", async () => {
+      const s = await jsonFetch(`${apiBase}/v1/auth/token?grant_type=password`, {
+        method: "POST", headers: { "content-type": "application/json", apikey: anonKey },
+        body: JSON.stringify({ email, password }),
+      });
+      const b = s.body as { access_token?: string; user?: { id: string }; error?: string; msg?: string };
+      if (s.ok && b?.access_token) return { ok: true, value: { token: b.access_token, userId: b.user?.id ?? "unknown" }, detail: `user ${b.user?.id ?? "?"}` };
+      return { ok: false, value: {}, detail: `HTTP ${s.status} — ${b?.error ?? b?.msg ?? "no access_token"}` };
     });
-    const body = signin.body as { access_token?: string; user?: { id: string }; error?: string; msg?: string };
-    if (!signin.ok || !body?.access_token) {
-      set("signin", { status: "fail", detail: `HTTP ${signin.status} — ${body?.error ?? body?.msg ?? "no access_token"}` });
-      setRunning(false); return;
-    }
-    const token = body.access_token;
-    const userId = body.user?.id ?? "unknown";
-    set("signin", { status: "ok", detail: `user ${userId}` });
+    if (!signin.ok || !signin.value.token) { setRunning(false); return; }
+    const token = signin.value.token;
+    const userId = signin.value.userId!;
 
     // 2) upload
-    set("upload", { status: "running" });
     const testName = `${userId}/e2e-${Date.now()}.txt`;
     const testBody = `pluto e2e ${new Date().toISOString()}`;
-    const up = await jsonFetch(`${apiBase}/v1/storage/object/avatars/${encodeURIComponent(testName)}`, {
-      method: "POST",
-      headers: { apikey: anonKey, authorization: `Bearer ${token}`, "content-type": "text/plain" },
-      body: testBody,
+    const up = await runStep<null>("upload", async () => {
+      const r = await jsonFetch(`${apiBase}/v1/storage/object/avatars/${encodeURIComponent(testName)}`, {
+        method: "POST",
+        headers: { apikey: anonKey, authorization: `Bearer ${token}`, "content-type": "text/plain" },
+        body: testBody,
+      });
+      return r.ok
+        ? { ok: true, value: null, detail: testName }
+        : { ok: false, value: null, detail: `HTTP ${r.status} — ${JSON.stringify(r.body).slice(0, 160)}` };
     });
-    if (!up.ok) { set("upload", { status: "fail", detail: `HTTP ${up.status} — ${JSON.stringify(up.body).slice(0, 160)}` }); setRunning(false); return; }
-    set("upload", { status: "ok", detail: testName });
+    if (!up.ok) { setRunning(false); return; }
 
     // 3) download
-    set("download", { status: "running" });
-    const dl = await fetch(`${apiBase}/v1/storage/object/public/avatars/${encodeURIComponent(testName)}`);
-    const dlText = await dl.text();
-    if (dl.ok && dlText === testBody) set("download", { status: "ok", detail: `${dlText.length} bytes match` });
-    else set("download", { status: "fail", detail: `HTTP ${dl.status} — ${dlText.slice(0, 120)}` });
+    await runStep<null>("download", async () => {
+      const dl = await fetch(`${apiBase}/v1/storage/object/public/avatars/${encodeURIComponent(testName)}`);
+      const txt = await dl.text();
+      return (dl.ok && txt === testBody)
+        ? { ok: true, value: null, detail: `${txt.length} bytes match` }
+        : { ok: false, value: null, detail: `HTTP ${dl.status} — ${txt.slice(0, 120)}` };
+    });
 
     // 4) backups
-    set("backups", { status: "running" });
-    const bk = await jsonFetch(`${apiBase}/v1/admin/backups`, { headers: authed(token) });
-    if (bk.ok) {
-      const n = Array.isArray(bk.body) ? bk.body.length : (bk.body as { items?: unknown[] })?.items?.length ?? 0;
-      set("backups", { status: "ok", detail: `${n} backup(s) visible` });
-    } else if (bk.status === 403) {
-      set("backups", { status: "skipped", detail: "admin-only endpoint — sign in as admin to run" });
-    } else {
-      set("backups", { status: "fail", detail: `HTTP ${bk.status}` });
-    }
-
-    // 5) realtime subscribe
-    set("rt-sub", { status: "running" });
-    const wsUrl = wsUrlFrom(apiBase) + `?apikey=${encodeURIComponent(anonKey)}&access_token=${encodeURIComponent(token)}`;
-    let ws: WebSocket | null = null;
-    let gotEvent = false;
-    const evPromise = new Promise<boolean>((resolve) => {
-      const t = setTimeout(() => resolve(gotEvent), 8000);
-      try {
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => {
-          set("rt-sub", { status: "ok", detail: "WS open + subscribed" });
-          ws!.send(JSON.stringify({ type: "subscribe", channel: "realtime:public:todos", ref: "1" }));
-        };
-        ws.onmessage = (ev) => {
-          try {
-            const msg = JSON.parse(String(ev.data));
-            if (msg.type === "postgres_changes" || msg.event === "INSERT" || msg.record) {
-              gotEvent = true; clearTimeout(t); resolve(true);
-            }
-          } catch { /* ignore */ }
-        };
-        ws.onerror = () => { set("rt-sub", { status: "fail", detail: "WS error" }); clearTimeout(t); resolve(false); };
-      } catch (e) {
-        set("rt-sub", { status: "fail", detail: e instanceof Error ? e.message : String(e) });
-        clearTimeout(t); resolve(false);
+    await runStep<null>("backups", async () => {
+      const bk = await jsonFetch(`${apiBase}/v1/admin/backups`, { headers: authed(token) });
+      if (bk.ok) {
+        const n = Array.isArray(bk.body) ? bk.body.length : (bk.body as { items?: unknown[] })?.items?.length ?? 0;
+        return { ok: true, value: null, detail: `${n} backup(s) visible` };
       }
+      if (bk.status === 403) return { ok: true, value: null, skip: true, detail: "admin-only — sign in as admin to run" };
+      return { ok: false, value: null, detail: `HTTP ${bk.status}` };
     });
 
-    // 6) emit insert to trigger event
-    set("rt-emit", { status: "running" });
-    // small delay so the subscribe roundtrips before insert
-    await new Promise((r) => setTimeout(r, 500));
-    const ins = await jsonFetch(`${apiBase}/v1/rest/todos`, {
-      method: "POST",
-      headers: { ...authed(token), Prefer: "return=representation" },
-      body: JSON.stringify({ user_id: userId, title: `e2e ${Date.now()}` }),
-    });
+    // 5+6) realtime subscribe + insert (single retryable block)
+    const wsUrl = wsUrlFrom(apiBase) + `?apikey=${encodeURIComponent(anonKey)}&access_token=${encodeURIComponent(token)}`;
     let todoId: string | null = null;
-    if (ins.ok) {
-      const rows = Array.isArray(ins.body) ? ins.body : [ins.body];
-      todoId = (rows[0] as { id?: string })?.id ?? null;
-    }
-    const eventOk = await evPromise;
-    if (eventOk) set("rt-emit", { status: "ok", detail: "INSERT event received" });
-    else set("rt-emit", { status: "fail", detail: ins.ok ? "insert ok but no event within 8s" : `insert failed HTTP ${ins.status}` });
+    let wsRef: WebSocket | null = null;
 
-    // 7) cleanup
-    set("cleanup", { status: "running" });
-    let cleanupDetail = "";
-    const del = await jsonFetch(`${apiBase}/v1/storage/object/avatars/${encodeURIComponent(testName)}`, {
-      method: "DELETE", headers: authed(token),
+    const rtSub = await runStep<{ ws: WebSocket | null; evPromise: Promise<boolean> }>("rt-sub", async () => {
+      return await new Promise((resolve) => {
+        let ws: WebSocket;
+        try { ws = new WebSocket(wsUrl); }
+        catch (e) { resolve({ ok: false, value: { ws: null, evPromise: Promise.resolve(false) }, detail: e instanceof Error ? e.message : String(e) }); return; }
+        const t = setTimeout(() => resolve({ ok: false, value: { ws, evPromise: Promise.resolve(false) }, detail: "WS open timeout (6s)" }), 6000);
+        ws.onopen = () => {
+          clearTimeout(t);
+          ws.send(JSON.stringify({ type: "subscribe", channel: "realtime:public:todos", ref: "1" }));
+          const evPromise = new Promise<boolean>((r2) => {
+            const t2 = setTimeout(() => r2(false), 8000);
+            ws.onmessage = (ev) => {
+              try {
+                const msg = JSON.parse(String(ev.data));
+                if (msg.type === "postgres_changes" || msg.event === "INSERT" || msg.record) { clearTimeout(t2); r2(true); }
+              } catch { /* ignore */ }
+            };
+          });
+          resolve({ ok: true, value: { ws, evPromise }, detail: "WS open + subscribed" });
+        };
+        ws.onerror = () => { clearTimeout(t); resolve({ ok: false, value: { ws, evPromise: Promise.resolve(false) }, detail: "WS error" }); };
+      });
     });
+    wsRef = rtSub.value.ws;
+
+    await runStep<null>("rt-emit", async () => {
+      await new Promise((r) => setTimeout(r, 500));
+      const ins = await jsonFetch(`${apiBase}/v1/rest/todos`, {
+        method: "POST",
+        headers: { ...authed(token), Prefer: "return=representation" },
+        body: JSON.stringify({ user_id: userId, title: `e2e ${Date.now()}` }),
+      });
+      if (ins.ok) {
+        const rows = Array.isArray(ins.body) ? ins.body : [ins.body];
+        todoId = (rows[0] as { id?: string })?.id ?? null;
+      }
+      const eventOk = await rtSub.value.evPromise;
+      return eventOk
+        ? { ok: true, value: null, detail: "INSERT event received" }
+        : { ok: false, value: null, detail: ins.ok ? "insert ok but no event within 8s" : `insert failed HTTP ${ins.status}` };
+    });
+
+    // 7) cleanup — no retries, best-effort
+    setStep("cleanup", { status: "running" });
+    let cleanupDetail = "";
+    const del = await jsonFetch(`${apiBase}/v1/storage/object/avatars/${encodeURIComponent(testName)}`, { method: "DELETE", headers: authed(token) });
     cleanupDetail += `file: ${del.ok ? "ok" : `HTTP ${del.status}`}`;
     if (todoId) {
-      const dt = await jsonFetch(`${apiBase}/v1/rest/todos?id=eq.${todoId}`, {
-        method: "DELETE", headers: authed(token),
-      });
+      const dt = await jsonFetch(`${apiBase}/v1/rest/todos?id=eq.${todoId}`, { method: "DELETE", headers: authed(token) });
       cleanupDetail += ` · todo: ${dt.ok ? "ok" : `HTTP ${dt.status}`}`;
     }
-    try { (ws as WebSocket | null)?.close(); } catch { /* ignore */ }
-    set("cleanup", { status: "ok", detail: cleanupDetail });
+    try { wsRef?.close(); } catch { /* ignore */ }
+    setStep("cleanup", { status: "ok", detail: cleanupDetail });
 
     setRunning(false);
-  }, [apiBase, anonKey, email, password]);
+  }, [apiBase, anonKey, email, password, maxRetries]);
 
   const canRun = anonKey && email && password && !running;
+
+  const doExport = (kind: "json" | "html") => {
+    const reportSteps: ReportStep[] = steps.map((s) => ({
+      key: s.key, label: s.label,
+      status: s.status === "idle" ? "idle" : s.status,
+      ms: s.ms, detail: s.detail, attempts: s.attempts,
+      error: s.status === "fail" ? s.detail : undefined,
+    }));
+    const report = buildReport({ tool: "e2e-runner", apiBase, steps: reportSteps });
+    (kind === "json" ? downloadReportJson : downloadReportHtml)(report);
+  };
+  const hasResults = steps.some((s) => s.status !== "idle");
 
   return (
     <div className="mt-3 rounded-md border border-border/60 bg-muted/30 p-3">
       <div className="grid gap-2 sm:grid-cols-3">
-        <input
-          type="password" placeholder="pk_anon_…" value={anonKey}
+        <input type="password" placeholder="pk_anon_…" value={anonKey}
           onChange={(e) => setAnonKey(e.target.value)}
-          className="rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono"
-        />
-        <input
-          type="email" placeholder="test@example.com" value={email}
+          className="rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono" />
+        <input type="email" placeholder="test@example.com" value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono"
-        />
-        <input
-          type="password" placeholder="password" value={password}
+          className="rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono" />
+        <input type="password" placeholder="password" value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono"
-        />
+          className="rounded-md border border-border/60 bg-background px-2 py-1.5 text-xs font-mono" />
       </div>
-      <div className="mt-2 flex items-center gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <button onClick={run} disabled={!canRun}
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           Run end-to-end flow
+        </button>
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          Max retries per step
+          <input type="number" min={0} max={8} value={maxRetries}
+            onChange={(e) => setMaxRetries(Math.max(0, Math.min(8, Number(e.target.value) || 0)))}
+            className="w-14 rounded-md border border-border/60 bg-background px-2 py-1 text-xs font-mono" />
+        </label>
+        <button onClick={() => doExport("json")} disabled={running || !hasResults}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileJson className="h-3.5 w-3.5" /> JSON
+        </button>
+        <button onClick={() => doExport("html")} disabled={running || !hasResults}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-card/60 px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50">
+          <FileCode className="h-3.5 w-3.5" /> HTML
         </button>
         <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
           <AlertCircle className="h-3 w-3" /> Uses a real test user + inserts a real todo (auto-cleaned up).
@@ -620,7 +768,15 @@ export function E2ETestRunner({ apiBase }: { apiBase: string }) {
           <li key={s.key} className="flex items-start gap-2 rounded border border-border/50 bg-background/60 p-2">
             <StatusDot s={s.status} />
             <div className="min-w-0 flex-1">
-              <div className="font-medium">{s.label}</div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{s.label}</span>
+                {typeof s.ms === "number" && <span className="ml-auto text-muted-foreground">{s.ms}ms</span>}
+                {typeof s.attempts === "number" && s.attempts > 1 && (
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                    {s.attempts} attempts
+                  </span>
+                )}
+              </div>
               {s.detail && <div className="mt-0.5 whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">{s.detail}</div>}
             </div>
           </li>
@@ -628,7 +784,7 @@ export function E2ETestRunner({ apiBase }: { apiBase: string }) {
       </ol>
 
       <div className="mt-2 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-        <Save className="h-3 w-3" /> Credentials stay in browser memory only.
+        <Save className="h-3 w-3" /> Credentials stay in browser memory only. Retries use exponential backoff (500ms base, cap 6s).
       </div>
     </div>
   );
