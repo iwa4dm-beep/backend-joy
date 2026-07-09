@@ -294,9 +294,9 @@ function Hero() {
             <a href="#code" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-input bg-background/60 px-5 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <Code2 className="h-4 w-4" aria-hidden="true" /> View SDK
             </a>
-            <a href="https://github.com" target="_blank" rel="noreferrer" aria-label="View source on GitHub (opens in a new tab)" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-input bg-background/60 px-5 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <Github className="h-4 w-4" aria-hidden="true" /> Source
-            </a>
+            <Link to="/docs/api" className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-input bg-background/60 px-5 py-2.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Github className="h-4 w-4" aria-hidden="true" /> API Docs
+            </Link>
           </div>
         </div>
 
