@@ -308,8 +308,8 @@ function NewKeysDialog({ data, onClose }: { kind: string; data: { slug: string; 
 function CollapsibleCard({
   icon, title, subtitle, defaultOpen = false, children,
 }: {
-  icon: React.ReactNode; title: string; subtitle?: string;
-  defaultOpen?: boolean; children: React.ReactNode;
+  icon: ReactNode; title: string; subtitle?: string;
+  defaultOpen?: boolean; children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
