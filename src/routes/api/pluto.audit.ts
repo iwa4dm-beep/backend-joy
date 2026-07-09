@@ -21,9 +21,13 @@ type Probe = {
 const PROBES: Probe[] = [
   { path: "/readyz",              label: "Liveness (readyz)",  method: "GET",     expectStatuses: [200, 204] },
   { path: "/healthz",             label: "Health (healthz)",   method: "GET",     expectStatuses: [200, 204, 404] },
+  // Preflight — sent with proper CORS headers below; backend also accepts a plain
+  // 401/403/404 as "reachable" for unauthenticated callers.
   { path: "/admin/v1/workspaces", label: "Admin · workspaces", method: "OPTIONS", expectStatuses: [200, 204, 401, 403, 404] },
   { path: "/auth/v1/settings",    label: "Auth · settings",    method: "GET",     expectStatuses: [200, 401, 404] },
-  { path: "/rest/v1/",            label: "REST · root",        method: "GET",     expectStatuses: [200, 401, 404] },
+  // PostgREST-style root returns 400 "invalid_identifier" without a table segment
+  // — that still proves the REST service is up and routing.
+  { path: "/rest/v1/",            label: "REST · root",        method: "GET",     expectStatuses: [200, 400, 401, 404] },
   { path: "/storage/v1/bucket",   label: "Storage · buckets",  method: "GET",     expectStatuses: [200, 401, 403, 404] },
 ];
 
@@ -55,7 +59,15 @@ async function runOnce(base: string, p: Probe, timeoutMs: number, captureBody: b
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { method: p.method, signal: ctrl.signal });
+    const headers: Record<string, string> = {};
+    if (p.method === "OPTIONS") {
+      // Send a valid CORS preflight so the upstream doesn't reject with 400
+      // "Invalid Preflight Request".
+      headers["Origin"] = new URL(base).origin;
+      headers["Access-Control-Request-Method"] = "GET";
+      headers["Access-Control-Request-Headers"] = "authorization,content-type";
+    }
+    const res = await fetch(url, { method: p.method, headers, signal: ctrl.signal });
     const ok = p.expectStatuses.includes(res.status);
     let snippet: string | null = null;
     if (!ok && captureBody) {
