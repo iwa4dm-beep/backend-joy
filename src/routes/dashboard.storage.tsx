@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { FolderPlus, Trash2, Upload } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardStorageHelp } from "@/content/help/dashboard.storage";
 import { pluto, type PlutoBucket, type PlutoFile } from "@/lib/pluto/client";
 
 export const Route = createFileRoute("/dashboard/storage")({
@@ -65,7 +66,7 @@ function StoragePage() {
           </button>
         }
       />
-      <AutoHelpPanel slug={'dashboard.storage'} title={'Storage'} description={'Public/private buckets ও file management।'} />
+      <HelpPanel help={dashboardStorageHelp} />
 
       <div className="grid lg:grid-cols-[240px_1fr] gap-6">
         <aside className="rounded-lg border border-border bg-card p-3 h-fit">

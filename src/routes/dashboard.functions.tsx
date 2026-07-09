@@ -9,7 +9,8 @@ import { KeyRound, Clock, ScrollText, Plus, RefreshCw, Trash2, Play, Pause, Boxe
 import { PaginatedTable } from "@/components/pluto/PaginatedTable";
 import { usePaginatedTable } from "@/lib/pluto/usePaginatedTable";
 import { toast } from "sonner";
-import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
+import { HelpPanel } from "@/components/help/HelpPanel";
+import { dashboardFunctionsHelp } from "@/content/help/dashboard.functions";
 
 export const Route = createFileRoute("/dashboard/functions")({ component: FunctionsPage });
 
@@ -90,7 +91,7 @@ function FunctionsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Edge Functions</h1>
-      <AutoHelpPanel slug={'dashboard.functions'} title={'Edge Functions'} description={''} />
+      <HelpPanel help={dashboardFunctionsHelp} />
           <p className="text-sm text-muted-foreground">Per-function secrets, cron schedules, and invocation logs.</p>
         </div>
         <div className="flex gap-2">
