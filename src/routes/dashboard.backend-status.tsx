@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import {
+import { AutoHelpPanel } from "@/components/help/AutoHelpPanel";
   Activity, CheckCircle2, XCircle, RefreshCw, Database, ShieldCheck, GitCommit,
   Lock, Plug, Clock, TrendingUp,
 } from "lucide-react";
@@ -252,6 +253,7 @@ function BackendStatusPage() {
       <main className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center p-6 text-center">
         <Lock className="mb-3 h-8 w-8 text-muted-foreground" />
         <h1 className="text-xl font-semibold text-foreground">Sign in required</h1>
+      <AutoHelpPanel slug={'dashboard.backend-status'} title={'Sign in required'} description={''} />
         <p className="mt-2 text-sm text-muted-foreground">
           Backend status is available to authenticated users only.
         </p>
