@@ -65,6 +65,16 @@ export const HELP_REGISTRY: HelpEntry[] = [
   dashboardPlutoOrgsHelp,
   dashboardRbacHelp,
   dashboardTokensHelp,
+  // Storage & Files
+  dashboardStorageHelp,
+  dashboardPlutoStoragePlusHelp,
+  // Realtime & Functions
+  dashboardRealtimeHelp,
+  dashboardFunctionsHelp,
+  dashboardPlutoFunctionsPlusHelp,
+  dashboardJobsHelp,
+  dashboardPlutoQueuesHelp,
+  dashboardPlutoWebhooksHelp,
   // Ops
   dashboardCorsHelp,
   dashboardAuditHelp,
