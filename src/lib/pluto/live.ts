@@ -1512,7 +1512,7 @@ export const studio = {
 export type WorkspaceRole = "owner" | "admin" | "member" | "viewer" | "global_admin" | "service_role" | "anon";
 
 export const me = {
-  workspaceRole: () => api<{ role: WorkspaceRole; can_admin: boolean }>("/me/v1/workspace-role"),
+  workspaceRole: () => api<{ role: WorkspaceRole; can_admin: boolean; is_domain_admin?: boolean }>("/me/v1/workspace-role"),
 };
 
 export const usage = {
