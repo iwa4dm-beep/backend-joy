@@ -23,6 +23,7 @@ export const dashboardPlutoBillingHelp: PageHelp = {
     {
       id: "plan",
       title: { bn: "Plan upgrade / downgrade", en: "Upgrading / downgrading plan" },
+      whatItDoes: { bn: "Plan upgrade / downgrade", en: "Upgrading / downgrading plan" },
       howToUse: [
         { bn: "ধাপ ১: 'Change plan' → target plan বাছাই।", en: "Step 1: 'Change plan' → pick target." },
         { bn: "ধাপ ২: proration preview দেখুন (mid-cycle change হলে prorated invoice)।", en: "Step 2: check proration preview (mid-cycle changes prorate)." },

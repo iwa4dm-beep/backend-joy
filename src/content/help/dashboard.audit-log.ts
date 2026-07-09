@@ -23,6 +23,7 @@ export const dashboardAuditLogHelp: PageHelp = {
     {
       id: "search",
       title: { bn: "Search ও filter", en: "Search & filter" },
+      whatItDoes: { bn: "Search ও filter", en: "Search & filter" },
       howToUse: [
         { bn: "ধাপ ১: actor = user@email বা token prefix দিন।", en: "Step 1: actor = user@email or token prefix." },
         { bn: "ধাপ ২: action dropdown (create/update/delete/access/config_change)।", en: "Step 2: action dropdown (create/update/delete/access/config_change)." },
