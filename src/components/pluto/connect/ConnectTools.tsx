@@ -577,7 +577,7 @@ export function E2ETestRunner({ apiBase }: { apiBase: string }) {
       });
       cleanupDetail += ` · todo: ${dt.ok ? "ok" : `HTTP ${dt.status}`}`;
     }
-    try { ws?.close(); } catch { /* ignore */ }
+    try { (ws as WebSocket | null)?.close(); } catch { /* ignore */ }
     set("cleanup", { status: "ok", detail: cleanupDetail });
 
     setRunning(false);
