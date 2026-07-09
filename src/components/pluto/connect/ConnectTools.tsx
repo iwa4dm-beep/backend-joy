@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check, Copy, Download, Loader2, Play, Radio, ShieldCheck,
   Database as DBIcon, HardDrive, Save, AlertCircle, FileJson, FileCode,
