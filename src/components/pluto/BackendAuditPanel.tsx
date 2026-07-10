@@ -37,6 +37,7 @@ export function BackendAuditPanel() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [timeoutMs, setTimeoutMs] = useState(3500);
   const [maxRetries, setMaxRetries] = useState(1);
+  const [autoRefreshSec, setAutoRefreshSec] = useState(0); // 0 = off
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -48,6 +49,12 @@ export function BackendAuditPanel() {
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setLoading(false); }
   }, [timeoutMs, maxRetries]);
+
+  useEffect(() => {
+    if (!autoRefreshSec) return;
+    const id = setInterval(() => { void load(); }, autoRefreshSec * 1000);
+    return () => clearInterval(id);
+  }, [autoRefreshSec, load]);
 
   useEffect(() => { void load(); }, [load]);
 
