@@ -1,10 +1,9 @@
 // Parse generated SQL into inspectable statements for dry-run preview.
 import type { SqlStatement } from "./types";
 
-const DESTRUCTIVE = /\b(DROP\s+(TABLE|COLUMN|SCHEMA|POLICY)|TRUNCATE|ALTER\s+TABLE\s+\S+\s+DROP\s+COLUMN)\b/i;
+const DESTRUCTIVE = /\b(DROP\s+(TABLE|COLUMN|SCHEMA|POLICY)|TRUNCATE|ALTER\s+TABLE\s+\S+\s+DROP\s+COLUMN|ALTER\s+COLUMN\s+\S+\s+TYPE|REVOKE)\b/i;
 
 export function analyzeSql(sql: string): SqlStatement[] {
-  // Naive splitter: statements end on ;\n. Good enough for our generated output.
   const chunks = sql.split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
   const out: SqlStatement[] = [];
   for (const raw of chunks) {
@@ -46,19 +45,45 @@ export type SqlImpact = {
   policies: number;
   grants: number;
   affectedTables: string[];
+  // extended
+  columnsAdded: number;
+  columnsDropped: number;
+  indexes: number;
+  fkAdded: number;
+  rolesTouched: string[];
+  destructiveStatements: { index: number; kind: SqlStatement["kind"]; table?: string; sample: string }[];
+  rowsEstimate: "0" | "unknown";
 };
 
 export function summarizeImpact(stmts: SqlStatement[]): SqlImpact {
   const tables = new Set<string>();
+  const roles = new Set<string>();
   let newTables = 0, destructive = 0, rlsEnabled = 0, policies = 0, grants = 0;
-  for (const s of stmts) {
+  let columnsAdded = 0, columnsDropped = 0, indexes = 0, fkAdded = 0;
+  const destructiveStatements: SqlImpact["destructiveStatements"] = [];
+  let hasAlterOrDrop = false;
+
+  stmts.forEach((s, i) => {
     if (s.table) tables.add(s.table);
     if (s.kind === "create_table") newTables++;
-    if (s.destructive) destructive++;
     if (s.kind === "rls") rlsEnabled++;
     if (s.kind === "policy") policies++;
-    if (s.kind === "grant") grants++;
-  }
+    if (s.kind === "grant") {
+      grants++;
+      const m = s.sql.match(/TO\s+([\w, ]+?)(?:;|$)/i);
+      if (m) m[1].split(",").map((x) => x.trim()).forEach((r) => r && roles.add(r));
+    }
+    if (s.kind === "alter" || s.kind === "drop") hasAlterOrDrop = true;
+    if (/ADD\s+COLUMN/i.test(s.sql)) columnsAdded += (s.sql.match(/ADD\s+COLUMN/gi) || []).length;
+    if (/DROP\s+COLUMN/i.test(s.sql)) columnsDropped += (s.sql.match(/DROP\s+COLUMN/gi) || []).length;
+    if (/CREATE\s+(UNIQUE\s+)?INDEX/i.test(s.sql)) indexes++;
+    if (/FOREIGN\s+KEY|REFERENCES\s+/i.test(s.sql)) fkAdded++;
+    if (s.destructive) {
+      destructive++;
+      destructiveStatements.push({ index: i, kind: s.kind, table: s.table, sample: s.sql.slice(0, 180) });
+    }
+  });
+
   return {
     total: stmts.length,
     newTables,
@@ -67,5 +92,12 @@ export function summarizeImpact(stmts: SqlStatement[]): SqlImpact {
     policies,
     grants,
     affectedTables: Array.from(tables),
+    columnsAdded,
+    columnsDropped,
+    indexes,
+    fkAdded,
+    rolesTouched: Array.from(roles),
+    destructiveStatements,
+    rowsEstimate: hasAlterOrDrop ? "unknown" : "0",
   };
 }

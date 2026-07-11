@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, useCallback, useRef, useMemo } from "react";
 import JSZip from "jszip";
-import { Upload, FileArchive, Sparkles, Database, Wand2, Download, Loader2, CheckCircle2, AlertTriangle, RefreshCw, ShieldCheck, FileText, PlugZap } from "lucide-react";
+import { Upload, FileArchive, Sparkles, Database, Wand2, Download, Loader2, CheckCircle2, AlertTriangle, RefreshCw, ShieldCheck, FileText, PlugZap, PlayCircle, ScrollText, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { analyzeZip } from "@/lib/autoconnect/analyzer";
 import { planIntegration } from "@/lib/autoconnect/ai-planner.functions";
@@ -11,7 +11,10 @@ import { mysqlToPg } from "@/lib/autoconnect/mysql-to-pg";
 import { analyzeSql, summarizeImpact } from "@/lib/autoconnect/sql-analyzer";
 import { validateDbConnection } from "@/lib/autoconnect/db-wizard.functions";
 import { buildStructureReport, groupFiles } from "@/lib/autoconnect/structure-report";
-import type { AnalyzeResult, DbConfig, IntegrationPlan } from "@/lib/autoconnect/types";
+import { verifyZip, type VerifyResult } from "@/lib/autoconnect/zip-verify";
+import { parseRollbackLog, type LogSummary } from "@/lib/autoconnect/rollback-log";
+import { runE2E, type E2EReport } from "@/lib/autoconnect/e2e-runner";
+import type { AnalyzeResult, DbConfig, IntegrationPlan, SqlStatement } from "@/lib/autoconnect/types";
 
 export const Route = createFileRoute("/auto-connect")({
   head: () => ({
@@ -25,15 +28,20 @@ export const Route = createFileRoute("/auto-connect")({
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6;
 
+type Tab = "wizard" | "test" | "logs";
+
 function AutoConnectPage() {
+  const [tab, setTab] = useState<Tab>("wizard");
   const [step, setStep] = useState<Step>(1);
   const [file, setFile] = useState<File | null>(null);
   const [zip, setZip] = useState<JSZip | null>(null);
+  const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [analyze, setAnalyze] = useState<AnalyzeResult | null>(null);
   const [plan, setPlan] = useState<IntegrationPlan | null>(null);
   const [planModel, setPlanModel] = useState<string>("");
   const [db, setDb] = useState<DbConfig>({ driver: "postgres", url: "" });
   const [ackDestructive, setAckDestructive] = useState(false);
+  const [ackTyped, setAckTyped] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [artifacts, setArtifacts] = useState<{ frontend: Blob; migrations: Blob; report: Blob } | null>(null);
@@ -46,12 +54,17 @@ function AutoConnectPage() {
   const onFile = async (f: File) => {
     if (!f.name.endsWith(".zip")) { toast.error("শুধু .zip ফাইল দেওয়া যাবে"); return; }
     if (f.size > 200 * 1024 * 1024) { toast.error("ফাইল ২০০MB এর বেশি"); return; }
-    setFile(f); setLogs([]);
+    setFile(f); setLogs([]); setVerify(null);
     log(`Loaded ${f.name} (${(f.size / 1024 / 1024).toFixed(1)} MB)`);
     setBusy(true);
     try {
       const z = await JSZip.loadAsync(f);
       setZip(z); log("ZIP extracted in-memory ✓");
+      log("Running integrity verification…");
+      const v = await verifyZip(z);
+      setVerify(v);
+      log(v.ok ? `✓ Integrity: ${v.message}` : `✘ Integrity: ${v.message}`);
+      if (v.hasManifest && !v.ok) { toast.error("ZIP integrity check failed"); return; }
       setStep(2);
     } catch (e) { toast.error("ZIP পড়া যায়নি: " + (e as Error).message); }
     finally { setBusy(false); }
@@ -113,30 +126,52 @@ function AutoConnectPage() {
           </p>
         </header>
 
-        <Stepper current={step} />
+        <div className="mb-4 flex gap-2">
+          {([
+            ["wizard", "Wizard", Wand2],
+            ["test", "Test Mode", PlayCircle],
+            ["logs", "Rollback Logs", ScrollText],
+          ] as const).map(([k, label, Icon]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+                tab === k ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"
+              }`}>
+              <Icon className="h-4 w-4" /> {label}
+            </button>
+          ))}
+        </div>
 
-        <div className="mt-8 grid gap-6 md:grid-cols-[1fr_360px]">
+        {tab === "wizard" && <Stepper current={step} />}
+
+        <div className="mt-6 grid gap-6 md:grid-cols-[1fr_360px]">
           <main className="rounded-lg border border-border bg-card p-6">
-            {step === 1 && <UploadStep onFile={onFile} busy={busy} inputRef={inputRef} />}
-            {step === 2 && <AnalyzeStep file={file} onRun={runAnalyze} busy={busy} />}
-            {step === 3 && analyze && (
-              <PlanStep analyze={analyze} plan={plan} planModel={planModel} onPlan={runPlan} onNext={() => setStep(4)} busy={busy} />
-            )}
-            {step === 4 && plan && (
-              <MigrationsStep
-                plan={plan}
-                db={db}
-                setDb={setDb}
-                onValidateDb={runValidateDb}
-                ack={ackDestructive}
-                setAck={setAckDestructive}
-                onNext={() => setStep(5)}
-                busy={busy}
-              />
-            )}
-            {step === 5 && plan && <WireStep plan={plan} onBuild={runBuild} busy={busy} />}
-            {step === 6 && artifacts && <DownloadStep artifacts={artifacts} />}
+            {tab === "wizard" && <>
+              {step === 1 && <UploadStep onFile={onFile} busy={busy} inputRef={inputRef} verify={verify} />}
+              {step === 2 && <AnalyzeStep file={file} onRun={runAnalyze} busy={busy} />}
+              {step === 3 && analyze && (
+                <PlanStep analyze={analyze} plan={plan} planModel={planModel} onPlan={runPlan} onNext={() => setStep(4)} busy={busy} />
+              )}
+              {step === 4 && plan && (
+                <MigrationsStep
+                  plan={plan}
+                  db={db}
+                  setDb={setDb}
+                  onValidateDb={runValidateDb}
+                  ack={ackDestructive}
+                  setAck={setAckDestructive}
+                  ackTyped={ackTyped}
+                  setAckTyped={setAckTyped}
+                  onNext={() => setStep(5)}
+                  busy={busy}
+                />
+              )}
+              {step === 5 && plan && <WireStep plan={plan} onBuild={runBuild} busy={busy} />}
+              {step === 6 && artifacts && <DownloadStep artifacts={artifacts} />}
+            </>}
+            {tab === "test" && <TestModePanel plan={plan} db={db} />}
+            {tab === "logs" && <RollbackLogPanel />}
           </main>
+
 
           <aside className="rounded-lg border border-border bg-card p-4">
             <h3 className="mb-2 text-sm font-semibold text-foreground">Live Log</h3>
@@ -146,7 +181,7 @@ function AutoConnectPage() {
             </div>
             {step > 1 && (
               <button
-                onClick={() => { setStep(1); setFile(null); setZip(null); setAnalyze(null); setPlan(null); setArtifacts(null); setLogs([]); setDb({ driver: "postgres", url: "" }); setAckDestructive(false); }}
+                onClick={() => { setStep(1); setFile(null); setZip(null); setVerify(null); setAnalyze(null); setPlan(null); setArtifacts(null); setLogs([]); setDb({ driver: "postgres", url: "" }); setAckDestructive(false); setAckTyped(""); }}
                 className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground hover:bg-muted"
               >
                 <RefreshCw className="h-4 w-4" /> নতুন করে শুরু
@@ -188,7 +223,7 @@ function Stepper({ current }: { current: Step }) {
   );
 }
 
-function UploadStep({ onFile, busy, inputRef }: { onFile: (f: File) => void; busy: boolean; inputRef: React.RefObject<HTMLInputElement | null> }) {
+function UploadStep({ onFile, busy, inputRef, verify }: { onFile: (f: File) => void; busy: boolean; inputRef: React.RefObject<HTMLInputElement | null>; verify: VerifyResult | null }) {
   return (
     <div>
       <h2 className="text-lg font-semibold text-foreground">১. প্রজেক্ট ZIP আপলোড</h2>
@@ -210,9 +245,43 @@ function UploadStep({ onFile, busy, inputRef }: { onFile: (f: File) => void; bus
           onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
         <p className="mt-4 text-xs text-muted-foreground">সর্বোচ্চ ২০০MB</p>
       </label>
+      {verify && <VerifyPanel verify={verify} />}
     </div>
   );
 }
+
+function VerifyPanel({ verify }: { verify: VerifyResult }) {
+  const bad = verify.entries.filter((e) => !e.ok);
+  return (
+    <div className={`mt-4 rounded-md border p-3 text-sm ${
+      !verify.hasManifest ? "border-border bg-muted/40"
+        : verify.ok ? "border-green-500/40 bg-green-500/5"
+        : "border-red-500/40 bg-red-500/5"
+    }`}>
+      <div className="flex items-center gap-2 font-medium">
+        {!verify.hasManifest ? <FileText className="h-4 w-4" /> :
+          verify.ok ? <CheckCircle2 className="h-4 w-4 text-green-600" /> :
+          <ShieldAlert className="h-4 w-4 text-red-600" />}
+        Integrity check: {verify.message}
+      </div>
+      {verify.hasManifest && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          Manifest generated: {verify.manifest?.generatedAt ?? "—"} · files: {verify.entries.length}
+        </div>
+      )}
+      {bad.length > 0 && (
+        <ul className="mt-2 max-h-40 space-y-0.5 overflow-auto font-mono text-xs">
+          {bad.slice(0, 30).map((e) => (
+            <li key={e.path} className="text-red-700 dark:text-red-300">
+              ✘ {e.path} {e.actual ? "hash mismatch" : "missing"}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 
 function AnalyzeStep({ file, onRun, busy }: { file: File | null; onRun: () => void; busy: boolean }) {
   return (
@@ -340,9 +409,10 @@ function StructureReport({ analyze }: { analyze: AnalyzeResult }) {
   );
 }
 
-function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, onNext, busy }: {
+function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, ackTyped, setAckTyped, onNext, busy }: {
   plan: IntegrationPlan; db: DbConfig; setDb: (d: DbConfig) => void;
   onValidateDb: () => void; ack: boolean; setAck: (v: boolean) => void;
+  ackTyped: string; setAckTyped: (v: string) => void;
   onNext: () => void; busy: boolean;
 }) {
   const tables = plan.tables.map((t) => ({ name: t.name, columns: t.columns, timestamps: true }));
@@ -350,7 +420,8 @@ function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, onNext, bu
   const sql = db.driver === "mysql" ? mysqlToPg(rawSql) : rawSql;
   const stmts = useMemo(() => analyzeSql(sql), [sql]);
   const impact = useMemo(() => summarizeImpact(stmts), [stmts]);
-  const canProceed = impact.destructive === 0 || ack;
+  const needsTyped = impact.destructive > 0;
+  const canProceed = !needsTyped || (ack && ackTyped.trim().toUpperCase() === "APPLY");
 
   return (
     <div className="space-y-6">
@@ -393,13 +464,23 @@ function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, onNext, bu
         <h2 className="text-lg font-semibold text-foreground">৪b. Dry-Run Preview</h2>
         <p className="mt-1 text-sm text-muted-foreground">apply-এর আগে diff + impact — destructive statement থাকলে ম্যানুয়াল acknowledgement লাগবে।</p>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-          <Stat label="Total" value={impact.total} />
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Stat label="Total stmts" value={impact.total} />
           <Stat label="New tables" value={impact.newTables} />
-          <Stat label="RLS" value={impact.rlsEnabled} />
+          <Stat label="RLS enabled" value={impact.rlsEnabled} />
+          <Stat label="Policies" value={impact.policies} />
           <Stat label="Grants" value={impact.grants} />
+          <Stat label="Cols +/−" value={`${impact.columnsAdded}/${impact.columnsDropped}`} tone={impact.columnsDropped > 0 ? "danger" : undefined} />
+          <Stat label="Indexes/FKs" value={`${impact.indexes}/${impact.fkAdded}`} />
           <Stat label="Destructive" value={impact.destructive} tone={impact.destructive > 0 ? "danger" : "ok"} />
         </div>
+        <div className="mt-2 text-xs text-muted-foreground">
+          Tables touched ({impact.affectedTables.length}): <code>{impact.affectedTables.slice(0, 12).join(", ") || "—"}</code>
+          {impact.affectedTables.length > 12 && ` +${impact.affectedTables.length - 12}`}
+          {" · "}Roles: <code>{impact.rolesTouched.join(", ") || "—"}</code>
+          {" · "}Row-impact estimate: <b>{impact.rowsEstimate}</b>
+        </div>
+
 
         <div className="mt-3 max-h-80 overflow-auto rounded-md border border-border">
           <table className="w-full text-xs font-mono">
@@ -434,14 +515,38 @@ function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, onNext, bu
         </div>
 
         {impact.destructive > 0 && (
-          <label className="mt-3 flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm">
-            <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="mt-1" />
-            <span className="text-red-800 dark:text-red-200">
-              <ShieldCheck className="inline h-4 w-4" /> <b>{impact.destructive}</b> destructive statement আছে — আমি বুঝেছি এবং apply-এ সম্মতি দিচ্ছি। ব্যর্থ হলে <code>apply.sh</code> auto-rollback করবে।
-            </span>
-          </label>
+          <div className="mt-3 space-y-2 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm">
+            <div className="font-medium text-red-800 dark:text-red-200">
+              <ShieldAlert className="mr-1 inline h-4 w-4" />
+              {impact.destructive} destructive statement — data loss risk
+            </div>
+            <ul className="max-h-32 overflow-auto pl-5 text-xs font-mono text-red-700 dark:text-red-300">
+              {impact.destructiveStatements.slice(0, 6).map((d, i) => (
+                <li key={i} className="list-disc">
+                  #{d.index} {d.kind} {d.table ? `on ${d.table}` : ""} — <span className="opacity-80">{d.sample}</span>
+                </li>
+              ))}
+            </ul>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="mt-1" />
+              <span className="text-red-800 dark:text-red-200">
+                <ShieldCheck className="inline h-4 w-4" /> আমি impact বুঝেছি ও apply-এ সম্মতি দিচ্ছি (auto-rollback থাকবে)।
+              </span>
+            </label>
+            <div className="text-xs text-red-800 dark:text-red-200">
+              নিশ্চিতকরণ হিসেবে টাইপ করুন <code className="font-mono">APPLY</code>:
+              <input
+                type="text"
+                value={ackTyped}
+                onChange={(e) => setAckTyped(e.target.value)}
+                placeholder="APPLY"
+                className="ml-2 rounded-md border border-red-500/40 bg-background px-2 py-0.5 font-mono text-xs"
+              />
+            </div>
+          </div>
         )}
       </div>
+
 
       <button onClick={onNext} disabled={!canProceed}
         className="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
@@ -519,3 +624,178 @@ function FileCard({ name, size, onClick }: { name: string; size: number; onClick
     </button>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Test Mode — placeholder DB dry-run / apply / induced-fail + rollback loop
+// ---------------------------------------------------------------------------
+function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfig }) {
+  const [failAt, setFailAt] = useState(2);
+  const [report, setReport] = useState<E2EReport | null>(null);
+
+  const stmts = useMemo<SqlStatement[]>(() => {
+    if (!plan) return [];
+    const tables = plan.tables.map((t) => ({ name: t.name, columns: t.columns, timestamps: true }));
+    let sql = buildMigrationBundle(tables);
+    if (db.driver === "mysql") sql = mysqlToPg(sql);
+    return analyzeSql(sql);
+  }, [plan, db.driver]);
+
+  const run = (mode: "dry-run" | "apply" | "induced-fail") => {
+    setReport(runE2E(stmts, { mode, failAt }));
+  };
+
+  if (!plan) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        <PlayCircle className="mb-2 h-6 w-6" />
+        আগে Wizard-এ ZIP আপলোড → Analyze → AI Plan চালান, তারপর এখানে ফিরে আসুন।
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">End-to-End Test Mode</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Placeholder in-browser simulator — কোনো real DB ছুঁবে না। Dry-run, apply, এবং induced-fail + rollback flow বারবার চালান।
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => run("dry-run")}
+          className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted">Dry-Run</button>
+        <button onClick={() => run("apply")}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">Simulated Apply</button>
+        <div className="flex items-center gap-1 text-sm">
+          <span className="text-muted-foreground">Induced fail at #</span>
+          <input type="number" value={failAt} min={0} max={Math.max(0, stmts.length - 1)}
+            onChange={(e) => setFailAt(Number(e.target.value))}
+            className="w-20 rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          <button onClick={() => run("induced-fail")}
+            className="rounded-md bg-red-500 px-3 py-1.5 text-sm text-white hover:bg-red-600">Force Fail + Rollback</button>
+        </div>
+        <div className="ml-auto text-xs text-muted-foreground">total statements: {stmts.length}</div>
+      </div>
+
+      {report && (
+        <div className={`rounded-md border p-3 text-sm ${
+          report.passed ? "border-green-500/40 bg-green-500/5" : "border-red-500/40 bg-red-500/5"
+        }`}>
+          <div className="font-medium">
+            {report.passed ? "✓ PASS" : "✘ FAIL"} · mode: <code>{report.mode}</code> ·
+            {" "}{report.durationMs}ms · rolledBack: {String(report.rolledBack)} ·
+            {" "}final tables: {report.finalTables.length}
+          </div>
+          <ul className="mt-2 max-h-64 space-y-0.5 overflow-auto font-mono text-xs">
+            {report.steps.map((s) => (
+              <li key={s.index} className={
+                s.status === "failed" ? "text-red-700 dark:text-red-300"
+                  : s.status === "skipped" ? "text-muted-foreground"
+                  : "text-green-700 dark:text-green-300"
+              }>
+                #{s.index} [{s.status}] {s.sql.slice(0, 120)}
+                {s.message && ` — ${s.message}`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rollback Log Viewer — parse JSONL logs from apply.sh
+// ---------------------------------------------------------------------------
+function RollbackLogPanel() {
+  const [summary, setSummary] = useState<LogSummary | null>(null);
+  const [raw, setRaw] = useState<string>("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const load = (text: string) => {
+    setRaw(text);
+    setSummary(parseRollbackLog(text));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Rollback Log Viewer</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          VPS-এর <code>/var/log/pluto-autoconnect/&lt;jobId&gt;.jsonl</code> ফাইল আপলোড করুন — কোন step এ কেন ব্যর্থ হলো বিস্তারিত দেখা যাবে।
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => fileRef.current?.click()}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">
+          .jsonl ফাইল লোড করুন
+        </button>
+        <input ref={fileRef} type="file" accept=".jsonl,.log,.txt,application/json"
+          className="hidden"
+          onChange={async (e) => {
+            const f = e.target.files?.[0]; if (!f) return;
+            load(await f.text());
+          }} />
+        <textarea
+          placeholder='অথবা এখানে paste করুন…  {"ts":"…","step":"apply_sql","status":"fail",…}'
+          className="min-h-[80px] flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+          value={raw}
+          onChange={(e) => load(e.target.value)}
+        />
+      </div>
+
+      {summary && (
+        <div className="space-y-3">
+          <div className={`rounded-md border p-3 text-sm ${
+            summary.ok ? "border-green-500/40 bg-green-500/5"
+              : summary.rolledBack ? "border-yellow-500/40 bg-yellow-500/5"
+              : "border-red-500/40 bg-red-500/5"
+          }`}>
+            <div className="font-medium">
+              Job <code>{summary.jobId}</code> — {summary.ok ? "✔ success" : summary.rolledBack ? "⟲ failed + rolled back" : "✘ failed"}
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {summary.startedAt} → {summary.endedAt} · steps: {summary.entries.length}
+            </div>
+            {summary.failedStep && (
+              <div className="mt-2 rounded bg-red-500/10 p-2 text-xs">
+                <div className="font-semibold text-red-700 dark:text-red-300">Failed step: {summary.failedStep.step}</div>
+                <div className="mt-1 font-mono">{summary.failedStep.error ?? "(no error captured)"}</div>
+                <div className="mt-1 text-muted-foreground">Fix: run <code>bash rollback.sh {summary.jobId}</code> or inspect <code>db.dump</code> / <code>vol-*.tgz</code> in the snapshot dir.</div>
+              </div>
+            )}
+          </div>
+
+          <ol className="space-y-1">
+            {summary.entries.map((e, i) => (
+              <li key={i} className="flex items-start gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-xs">
+                <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                  e.status === "ok" || e.status === "done" ? "bg-green-500/15 text-green-700 dark:text-green-300"
+                    : e.status === "fail" ? "bg-red-500/15 text-red-700 dark:text-red-300"
+                    : e.status === "skip" ? "bg-muted text-muted-foreground"
+                    : "bg-primary/15 text-primary"
+                }`}>{e.status}</span>
+                <span className="w-40 shrink-0 font-mono text-muted-foreground">{e.ts}</span>
+                <span className="flex-1"><b>{e.step}</b>
+                  {e.file && <> · <code>{e.file}</code></>}
+                  {e.volume && <> · volume:<code>{e.volume}</code></>}
+                  {e.reason && <> · {e.reason}</>}
+                  {e.error && <div className="mt-0.5 font-mono text-red-700 dark:text-red-300">{e.error}</div>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {!summary && (
+        <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+          <AlertTriangle className="mx-auto mb-2 h-6 w-6" />
+          কোনো log লোড হয়নি — উপরে ফাইল দিন অথবা JSONL paste করুন।
+        </div>
+      )}
+    </div>
+  );
+}
+
