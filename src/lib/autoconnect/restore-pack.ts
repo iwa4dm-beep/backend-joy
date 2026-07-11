@@ -139,7 +139,8 @@ cat > "$SNAP_DIR/snapshot.json" <<JSON
 JSON
 jlog "snapshot_manifest" "ok"
 
-# 5) Apply
+# 5) Apply (cooperative cancel check before starting the transaction)
+check_cancel
 jlog "apply_sql" "start" "\\"file\\":\\"${sql}\\""
 echo "▶ Applying ${sql} in single transaction (ON_ERROR_STOP)…" | tee -a "$LOG_TXT"
 if psql "$DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$BUNDLE_DIR/${sql}" 2>>"$LOG_TXT"; then
