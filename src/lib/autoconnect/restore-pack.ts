@@ -323,6 +323,12 @@ SNAP_ROOT="\${SNAP_ROOT:-${snapRoot}}"
 LOG_DIR="\${LOG_DIR:-$SNAP_ROOT/logs}"
 JOB_ID="\${1:-\${JOB_ID:-$(ls -1t "$LOG_DIR"/*.jsonl 2>/dev/null | head -1 | xargs -n1 basename | sed 's/\\.jsonl$//')}}"
 [ -n "$JOB_ID" ] || { echo "no JOB_ID"; exit 1; }
+LOG_JSON="$LOG_DIR/$JOB_ID.jsonl"
+# Guard: refuse if the job is already finished — nothing to cancel.
+if [ -f "$LOG_JSON" ] && tail -n 40 "$LOG_JSON" | grep -Eq '"step":"done","status":"ok"|"step":"rollback","status":"done"|"step":"cancel","status":"done"|"exitCode"'; then
+  echo "✘ refusing to cancel: job $JOB_ID has already finished (see $LOG_JSON)" >&2
+  exit 5
+fi
 touch "$LOG_DIR/$JOB_ID.cancel"
 echo "✔ cancel flag set for $JOB_ID at $LOG_DIR/$JOB_ID.cancel"
 `;
