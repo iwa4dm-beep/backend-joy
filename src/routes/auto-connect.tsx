@@ -197,13 +197,14 @@ function AutoConnectPage() {
                   setAckTyped={setAckTyped}
                   onNext={() => setStep(5)}
                   busy={busy}
+                  verify={verify}
                 />
               )}
-              {step === 5 && plan && <WireStep plan={plan} retentionDays={retentionDays} setRetentionDays={setRetentionDays} onBuild={runBuild} busy={busy} />}
-              {step === 6 && artifacts && <DownloadStep artifacts={artifacts} buildAudit={buildAudit} />}
+              {step === 5 && plan && <WireStep plan={plan} retentionDays={retentionDays} setRetentionDays={setRetentionDays} snapshotRoot={snapshotRoot} setSnapshotRoot={setSnapshotRoot} onBuild={runBuild} busy={busy} />}
+              {step === 6 && artifacts && <DownloadStep artifacts={artifacts} buildAudit={buildAudit} rawLog={rawLog} />}
             </>}
             {tab === "test" && <TestModePanel plan={plan} db={db} />}
-            {tab === "logs" && <RollbackLogPanel onLoaded={setLastRollback} />}
+            {tab === "logs" && <RollbackLogPanel onLoaded={setLastRollback} rawLog={rawLog} setRawLog={setRawLog} cancellation={cancellation} setCancellation={setCancellation} log={log} />}
           </main>
 
 
