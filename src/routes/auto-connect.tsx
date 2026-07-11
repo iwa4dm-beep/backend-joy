@@ -862,9 +862,11 @@ function RollbackLogPanel({ onLoaded, rawLog, setRawLog, cancellation, setCancel
   }, [streamUrl, connectTo]);
 
   // Auto-discover: probe common host:port combinations that serve-progress.sh
-  // typically listens on (SSH tunnels, same-origin dev proxy, common LAN IPs).
+  // typically listens on. Uses exponential backoff so the /auto-connect page
+  // still succeeds if the stream server starts a few seconds later than the
+  // click (e.g. bash serve-progress.sh & racing the browser).
   const autoDiscover = useCallback(async () => {
-    setDiscovering(true); log("Auto-discovering SSE endpoints…");
+    setDiscovering(true); log("Auto-discovering SSE endpoints (with retry)…");
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const candidates = [
       "http://127.0.0.1:8787",
@@ -873,27 +875,32 @@ function RollbackLogPanel({ onLoaded, rawLog, setRawLog, cancellation, setCancel
       "http://localhost:9787",
       origin ? `${origin}/api/public/autoconnect` : "",
     ].filter(Boolean);
-    for (const base of candidates) {
-      try {
-        const r = await Promise.race([
-          fetch(`${base}/jobs`, { method: "GET" }),
-          new Promise<Response>((_, rej) => setTimeout(() => rej(new Error("timeout")), 1200)),
-        ]);
-        if (!r.ok) continue;
-        const j = await r.json().catch(() => null) as { jobs?: string[]; current?: string } | null;
-        const job = j?.current || j?.jobs?.[0];
-        const url = job ? `${base}/stream?job=${encodeURIComponent(job)}` : `${base}/stream`;
-        setStreamUrl(url);
-        log(`✓ Found progress server at ${base}${job ? ` (job=${job})` : ""}`);
-        connectTo(url);
-        setDiscovering(false);
-        toast.success(`Connected to ${base}`);
-        return;
-      } catch { /* try next */ }
+    const delays = [0, 500, 1000, 2000, 4000, 8000]; // ~15s total window
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
+      log(`↻ attempt ${attempt + 1}/${delays.length}…`);
+      for (const base of candidates) {
+        try {
+          const r = await Promise.race([
+            fetch(`${base}/jobs`, { method: "GET" }),
+            new Promise<Response>((_, rej) => setTimeout(() => rej(new Error("timeout")), 1200)),
+          ]);
+          if (!r.ok) continue;
+          const j = await r.json().catch(() => null) as { jobs?: string[]; current?: string } | null;
+          const job = j?.current || j?.jobs?.[0];
+          const url = job ? `${base}/stream?job=${encodeURIComponent(job)}` : `${base}/stream`;
+          setStreamUrl(url);
+          log(`✓ Found progress server at ${base}${job ? ` (job=${job})` : ""} on attempt ${attempt + 1}`);
+          connectTo(url);
+          setDiscovering(false);
+          toast.success(`Connected to ${base}`);
+          return;
+        } catch { /* try next */ }
+      }
     }
     setDiscovering(false);
-    log("✗ Auto-detect failed — কোনো serve-progress.sh reachable নেই");
-    toast.error("Auto-detect failed — SSH tunnel চালু আছে কিনা দেখুন");
+    log("✗ Auto-detect gave up after " + delays.length + " attempts");
+    toast.error("Auto-detect failed — SSH tunnel / serve-progress.sh চালু আছে কিনা দেখুন");
   }, [connectTo, log]);
 
   // Download raw JSONL from stream server (or fall back to whatever's loaded).
