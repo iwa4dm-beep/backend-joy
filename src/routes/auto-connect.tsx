@@ -409,9 +409,10 @@ function StructureReport({ analyze }: { analyze: AnalyzeResult }) {
   );
 }
 
-function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, onNext, busy }: {
+function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, ackTyped, setAckTyped, onNext, busy }: {
   plan: IntegrationPlan; db: DbConfig; setDb: (d: DbConfig) => void;
   onValidateDb: () => void; ack: boolean; setAck: (v: boolean) => void;
+  ackTyped: string; setAckTyped: (v: string) => void;
   onNext: () => void; busy: boolean;
 }) {
   const tables = plan.tables.map((t) => ({ name: t.name, columns: t.columns, timestamps: true }));
@@ -419,7 +420,8 @@ function MigrationsStep({ plan, db, setDb, onValidateDb, ack, setAck, onNext, bu
   const sql = db.driver === "mysql" ? mysqlToPg(rawSql) : rawSql;
   const stmts = useMemo(() => analyzeSql(sql), [sql]);
   const impact = useMemo(() => summarizeImpact(stmts), [stmts]);
-  const canProceed = impact.destructive === 0 || ack;
+  const needsTyped = impact.destructive > 0;
+  const canProceed = !needsTyped || (ack && ackTyped.trim().toUpperCase() === "APPLY");
 
   return (
     <div className="space-y-6">
