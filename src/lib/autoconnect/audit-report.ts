@@ -58,6 +58,15 @@ export function buildAuditJson(input: AuditInput): AuditReport {
     ? "n/a"
     : input.rollback.ok ? "ok"
     : input.rollback.rolledBack ? "rolled_back" : "failed";
+  const exitCode =
+    input.cancellation?.exitCode ??
+    input.rollback?.exitCode ??
+    (rollbackStatus === "cancelled" ? 4
+      : rollbackStatus === "ok" ? 0
+      : rollbackStatus === "rolled_back" ? 1
+      : rollbackStatus === "failed" ? 2
+      : null);
+  const cancelRefused = !!input.cancellation?.refusedBecauseFinished;
   return {
     generatedAt,
     summary: {
@@ -66,9 +75,39 @@ export function buildAuditJson(input: AuditInput): AuditReport {
       destructive: input.impact?.destructive ?? 0,
       tables: input.impact?.affectedTables.length ?? 0,
       rollbackStatus,
+      exitCode,
+      cancelRefused,
     },
     input,
   };
+}
+
+// Build a single downloadable ZIP that contains the JSON + HTML audit report,
+// the raw JSONL progress log, and a verification-mismatch CSV so an operator
+// has one artifact to attach to a change-request / incident ticket.
+export async function buildAuditBundle(input: AuditInput): Promise<Blob> {
+  const report = buildAuditJson(input);
+  const html = buildAuditHtml(report);
+  const zip = new JSZip();
+  const jobId = input.rollback?.jobId || input.cancellation?.jobId || "audit";
+  const stamp = (input.generatedAt ?? report.generatedAt).replace(/[:.]/g, "-");
+  const dir = `audit-${jobId}-${stamp}`;
+  zip.folder(dir)!.file("audit-report.json", JSON.stringify(report, null, 2));
+  zip.folder(dir)!.file("audit-report.html", html);
+  if (input.rawLogJsonl) zip.folder(dir)!.file(`${jobId}.jsonl`, input.rawLogJsonl);
+  if (input.verification?.entries?.length) {
+    const rows = ["path,ok,expected,actual,note"];
+    for (const e of input.verification.entries) {
+      rows.push([e.path, e.ok ? "1" : "0", e.expected, e.actual, e.ok ? "" : (e.actual ? "hash-mismatch" : "missing")].join(","));
+    }
+    zip.folder(dir)!.file("verification-mismatches.csv", rows.join("\n") + "\n");
+  }
+  if (input.cancellation) {
+    zip.folder(dir)!.file("cancellation.json", JSON.stringify(input.cancellation, null, 2));
+  }
+  zip.folder(dir)!.file("README.txt",
+    `Audit bundle for job ${jobId}\nGenerated: ${report.generatedAt}\nExit code: ${report.summary.exitCode ?? "n/a"}\nRollback: ${report.summary.rollbackStatus}\n`);
+  return await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
 }
 
 const escapeHtml = (s: string) =>
