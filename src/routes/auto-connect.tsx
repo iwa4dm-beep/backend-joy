@@ -121,7 +121,7 @@ function AutoConnectPage() {
     finally { setBusy(false); }
   };
 
-  const buildAudit = useCallback(() => {
+  const auditInput = useMemo<AuditInput>(() => {
     let impact = null;
     if (plan) {
       const tables = plan.tables.map((t) => ({ name: t.name, columns: t.columns, timestamps: true }));
@@ -129,24 +129,29 @@ function AutoConnectPage() {
       if (db.driver === "mysql") sql = mysqlToPg(sql);
       impact = summarizeImpact(analyzeSql(sql));
     }
-    const input: AuditInput = {
+    return {
       project: { file: file?.name, sizeBytes: file?.size },
-      db,
-      plan,
-      impact,
+      db, plan, impact,
       ack: { checkbox: ackDestructive, typed: ackTyped, required: (impact?.destructive ?? 0) > 0 },
       verification: verify,
       rollback: lastRollback,
-      retentionDays,
-      snapshotRoot,
-      cancellation,
+      retentionDays, snapshotRoot, cancellation,
       rawLogJsonl: rawLog || null,
     };
-    const report = buildAuditJson(input);
+  }, [plan, db, file, ackDestructive, ackTyped, verify, lastRollback, retentionDays, snapshotRoot, cancellation, rawLog]);
+
+  const buildAudit = useCallback(() => {
+    const report = buildAuditJson(auditInput);
     const json = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
     const html = new Blob([buildAuditHtml(report)], { type: "text/html" });
     return { json, html };
-  }, [plan, db, file, ackDestructive, ackTyped, verify, lastRollback, retentionDays, snapshotRoot, cancellation, rawLog]);
+  }, [auditInput]);
+
+  const downloadAuditZip = useCallback(async () => {
+    const blob = await buildAuditBundle(auditInput);
+    const jobId = lastRollback?.jobId || cancellation?.jobId || "audit";
+    downloadBlob(blob, `audit-${jobId}.zip`);
+  }, [auditInput, lastRollback, cancellation]);
 
 
   return (
