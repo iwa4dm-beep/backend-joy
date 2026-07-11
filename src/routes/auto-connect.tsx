@@ -925,22 +925,43 @@ function RollbackLogPanel({ onLoaded, rawLog, setRawLog, cancellation, setCancel
   }, [streamUrl, summary, rawLog]);
 
   // Cancel the running job — POST to the progress server's /cancel endpoint.
+  // Refuses (locally and server-side) if the job has already finished, and
+  // records a "refused" cancellation in the audit so operators see WHY.
   const cancelJob = useCallback(async () => {
     const job = summary?.jobId;
     if (!job || job === "unknown") { toast.error("জব চলছে না — cancel করার কিছু নেই"); return; }
+    if (summary?.finished) {
+      const at = new Date().toISOString();
+      setCancellation({ at, jobId: job, via: "ui", refusedBecauseFinished: true,
+        note: `Cancel refused — job already ${summary.ok ? "succeeded" : summary.rolledBack ? "rolled back" : summary.cancelled ? "cancelled" : "failed"} (exit ${summary.exitCode ?? "n/a"})` });
+      log(`⚠ cancel refused for ${job} — job already terminated (exit ${summary.exitCode ?? "n/a"})`);
+      toast.error("Cancel refused — job already finished");
+      return;
+    }
+    if (!window.confirm(`Cancel job ${job}?\n\napply.sh will roll back at the next checkpoint. Continue?`)) return;
     setCancelling(true);
     try {
       const base = streamUrl.replace(/\/stream.*$/, "");
       const r = await fetch(`${base}/cancel?job=${encodeURIComponent(job)}`, { method: "POST" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const at = new Date().toISOString();
-      setCancellation({ at, jobId: job, via: "ui", note: `Cancelled via UI against ${base}` });
+      if (r.status === 409) {
+        const body = await r.json().catch(() => ({}));
+        setCancellation({ at, jobId: job, via: "ui", refusedBecauseFinished: true,
+          note: `Server refused: ${body?.reason ?? "already finished"}` });
+        log(`⚠ server refused cancel for ${job}: ${body?.reason ?? "already finished"}`);
+        toast.error("Server refused cancel — job already finished");
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const phase = summary?.entries.some((e) => e.step === "apply_sql") ? "sql" : "snapshot";
+      setCancellation({ at, jobId: job, via: "ui", phase, exitCode: 4,
+        note: `Cancelled via UI against ${base}` });
       log(`✔ cancel signal sent for ${job} — apply.sh will rollback at next checkpoint`);
       toast.success("Cancel signal sent — apply.sh will roll back safely");
     } catch (e) {
-      // Record cancellation attempt even if server unreachable — audit log still useful.
       const at = new Date().toISOString();
-      setCancellation({ at, jobId: job, via: "ui", note: `Cancel attempted but server unreachable: ${(e as Error).message}` });
+      setCancellation({ at, jobId: job, via: "ui",
+        note: `Cancel attempted but server unreachable: ${(e as Error).message}` });
       toast.error("Cancel failed: " + (e as Error).message + " — manual: bash cancel.sh " + job);
     } finally { setCancelling(false); }
   }, [summary, streamUrl, log, setCancellation]);
