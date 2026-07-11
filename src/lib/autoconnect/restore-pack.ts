@@ -325,18 +325,28 @@ bash apply.sh
 - সফল হলে \`$SNAP_ROOT\` ও \`$LOG_DIR\`-এ \`RETENTION_DAYS\`-এর চেয়ে পুরনো ফাইল স্বয়ংক্রিয়ভাবে delete হবে।
 - Structured log: \`/var/log/pluto-autoconnect/<jobId>.jsonl\`।
 
-## Real-time progress → /auto-connect
+## Real-time progress + auto-discovery + cancel → /auto-connect
 \`\`\`bash
-JOB_ID=job-20260711T… bash serve-progress.sh 8787
-# local dev machine:
+SNAP_ROOT=/var/backups/pluto-autoconnect bash serve-progress.sh 8787
+# local dev machine (SSH tunnel):
 ssh -L 8787:127.0.0.1:8787 you@vps
-# then in the "Rollback Logs" tab, paste: http://127.0.0.1:8787/stream
 \`\`\`
+Endpoints exposed on \`http://127.0.0.1:8787\`:
+- \`GET /stream[?job=…]\` — SSE live tail (auto-discovered by the UI's "Auto-detect" button)
+- \`GET /jobs\` — list of jobIds (used for auto-discovery)
+- \`GET /log?job=…\` — raw JSONL download (also downloadable from the UI)
+- \`POST /cancel?job=…\` — cooperative cancel (used by the UI's Cancel button)
 
 ## Manual Rollback (bundle + snapshot both checksum-verified)
 \`\`\`bash
 bash rollback.sh                 # latest snapshot
 bash rollback.sh job-20260711T…  # specific job
+\`\`\`
+
+## Manual cancel
+\`\`\`bash
+bash cancel.sh                   # latest job
+bash cancel.sh job-20260711T…    # specific job
 \`\`\`
 
 ## Exit codes
@@ -346,5 +356,6 @@ bash rollback.sh job-20260711T…  # specific job
 | 1 | মাইগ্রেশন ব্যর্থ, auto-rollback সম্পন্ন |
 | 2 | verify / snapshot ব্যর্থ (কারণ stderr-এ) |
 | 3 | rollback ব্যর্থ — manual দরকার |
+| 4 | ব্যবহারকারী cancel করেছেন, rollback সম্পন্ন |
 `;
 }
