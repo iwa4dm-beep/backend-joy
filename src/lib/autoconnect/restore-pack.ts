@@ -128,16 +128,25 @@ jlog "snapshot_manifest" "ok"
 # 5) Apply
 jlog "apply_sql" "start" "\\"file\\":\\"${sql}\\""
 echo "▶ Applying ${sql} in single transaction (ON_ERROR_STOP)…" | tee -a "$LOG_TXT"
-if psql "$DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "${sql}" 2>>"$LOG_TXT"; then
+if psql "$DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$BUNDLE_DIR/${sql}" 2>>"$LOG_TXT"; then
   jlog "apply_sql" "ok"
-  echo "$JOB_ID" > "\${SNAP_DIR%/*}/last-good.txt"
+  echo "$JOB_ID" > "$SNAP_ROOT/last-good.txt"
+
+  # 7) Retention cleanup — remove snapshots & logs older than RETENTION_DAYS
+  jlog "retention" "start" "\\"days\\":$RETENTION_DAYS"
+  REMOVED_SNAPS=$(find "$SNAP_ROOT" -maxdepth 1 -mindepth 1 -type d -mtime +$RETENTION_DAYS 2>/dev/null | wc -l | tr -d ' ')
+  find "$SNAP_ROOT" -maxdepth 1 -mindepth 1 -type d -mtime +$RETENTION_DAYS -exec rm -rf {} + 2>>"$LOG_TXT" || true
+  REMOVED_LOGS=$(find "$LOG_DIR" -maxdepth 1 -type f \\( -name '*.log' -o -name '*.jsonl' \\) -mtime +$RETENTION_DAYS 2>/dev/null | wc -l | tr -d ' ')
+  find "$LOG_DIR" -maxdepth 1 -type f \\( -name '*.log' -o -name '*.jsonl' \\) -mtime +$RETENTION_DAYS -delete 2>>"$LOG_TXT" || true
+  jlog "retention" "ok" "\\"snapshotsRemoved\\":$REMOVED_SNAPS,\\"logsRemoved\\":$REMOVED_LOGS"
+
   jlog "done" "ok"
-  echo "✔ migrations applied successfully" | tee -a "$LOG_TXT"
+  echo "✔ migrations applied successfully (retention: -$RETENTION_DAYS d, cleaned $REMOVED_SNAPS snap / $REMOVED_LOGS log)" | tee -a "$LOG_TXT"
   trap - EXIT
   exit 0
 fi
 
-# 6) Failure → rollback
+# 8) Failure → rollback
 ERR="$(tail -n 20 "$LOG_TXT" | tr '\\n' ' ' | sed 's/"/\\\\"/g' | cut -c1-400)"
 jlog "apply_sql" "fail" "\\"error\\":\\"$ERR\\""
 echo "✘ migration failed — automatic rollback" | tee -a "$LOG_TXT"
