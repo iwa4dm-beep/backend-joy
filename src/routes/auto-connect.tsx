@@ -767,28 +767,86 @@ function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfi
 // ---------------------------------------------------------------------------
 // Rollback Log Viewer — parse JSONL logs from apply.sh
 // ---------------------------------------------------------------------------
-function RollbackLogPanel() {
+function RollbackLogPanel({ onLoaded }: { onLoaded: (s: LogSummary | null) => void }) {
   const [summary, setSummary] = useState<LogSummary | null>(null);
   const [raw, setRaw] = useState<string>("");
+  const [streamUrl, setStreamUrl] = useState<string>("");
+  const [streaming, setStreaming] = useState(false);
+  const esRef = useRef<EventSource | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const load = (text: string) => {
+  const load = useCallback((text: string) => {
     setRaw(text);
-    setSummary(parseRollbackLog(text));
-  };
+    const s = parseRollbackLog(text);
+    setSummary(s);
+    onLoaded(s);
+  }, [onLoaded]);
+
+  const stopStream = useCallback(() => {
+    esRef.current?.close(); esRef.current = null; setStreaming(false);
+  }, []);
+
+  const startStream = useCallback(() => {
+    if (!streamUrl) { toast.error("SSE URL দিন (e.g. http://127.0.0.1:8787/stream)"); return; }
+    stopStream();
+    try {
+      const es = new EventSource(streamUrl);
+      esRef.current = es;
+      setStreaming(true);
+      let buf = "";
+      es.onmessage = (ev) => {
+        buf += ev.data + "\n";
+        setRaw(buf);
+        const s = parseRollbackLog(buf);
+        setSummary(s);
+        onLoaded(s);
+      };
+      es.onerror = () => { toast.error("SSE সংযোগ বিচ্ছিন্ন"); stopStream(); };
+    } catch (e) { toast.error("Stream শুরু করা যায়নি: " + (e as Error).message); }
+  }, [streamUrl, stopStream, onLoaded]);
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold text-foreground">Rollback Log Viewer</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          VPS-এর <code>/var/log/pluto-autoconnect/&lt;jobId&gt;.jsonl</code> ফাইল আপলোড করুন — কোন step এ কেন ব্যর্থ হলো বিস্তারিত দেখা যাবে।
+          VPS-এর <code>/var/log/pluto-autoconnect/&lt;jobId&gt;.jsonl</code> ফাইল আপলোড করুন,
+          অথবা <code>serve-progress.sh</code>-এর SSE URL দিয়ে real-time apply/rollback progress stream করুন।
         </p>
+      </div>
+
+      <div className="rounded-md border border-primary/40 bg-primary/5 p-3">
+        <div className="mb-2 text-sm font-semibold text-primary">Live Stream (SSE)</div>
+        <div className="flex gap-2">
+          <input
+            type="url"
+            placeholder="http://127.0.0.1:8787/stream"
+            value={streamUrl}
+            onChange={(e) => setStreamUrl(e.target.value)}
+            className="flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+          />
+          {!streaming ? (
+            <button onClick={startStream}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">
+              Connect
+            </button>
+          ) : (
+            <button onClick={stopStream}
+              className="rounded-md bg-red-500 px-3 py-1.5 text-sm text-white hover:bg-red-600">
+              Disconnect
+            </button>
+          )}
+        </div>
+        {streaming && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-primary">
+            <Loader2 className="h-3 w-3 animate-spin" /> live — {summary?.entries.length ?? 0} events received
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
         <button onClick={() => fileRef.current?.click()}
-          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">
+          className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted">
           .jsonl ফাইল লোড করুন
         </button>
         <input ref={fileRef} type="file" accept=".jsonl,.log,.txt,application/json"
@@ -804,6 +862,7 @@ function RollbackLogPanel() {
           onChange={(e) => load(e.target.value)}
         />
       </div>
+
 
       {summary && (
         <div className="space-y-3">
