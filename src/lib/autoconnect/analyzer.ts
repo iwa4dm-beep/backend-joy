@@ -1,7 +1,7 @@
 // Client-side Laravel + React/Vite project analyzer.
 // Uses JSZip to walk the uploaded archive without ever executing user code.
 import JSZip from "jszip";
-import type { AnalyzeResult, Column, LaravelRoute, TableDef } from "./types";
+import type { AnalyzeResult, Column, FileNode, LaravelRoute, TableDef } from "./types";
 
 const SKIP_DIRS = [
   "node_modules/", "vendor/", ".git/", "dist/", "build/",
@@ -139,9 +139,17 @@ export async function analyzeZip(
     frontend: { detected: false, hasVite: false, apiCallSites: [], envKeys: [], baseUrls: [] },
     backend: {
       detected: false, tables: [], models: [], routes: [], controllers: [],
-      storageDisks: [], envKeys: [], rawMigrationFiles: 0,
+      storageDisks: [], envKeys: [], envExample: {}, rawMigrationFiles: 0,
     },
-    stats: { totalFiles: 0, totalBytes: 0, skipped: [] },
+    files: [],
+    stats: { totalFiles: 0, totalBytes: 0, usedFiles: 0, skipped: [] },
+  };
+  const pushFile = (n: FileNode) => { result.files.push(n); if (n.used) result.stats.usedFiles++; };
+  const kindOf = (p: string): FileNode["kind"] => {
+    if (/\.(php|blade\.php)$/i.test(p) || p.includes("/app/") || p.includes("/routes/") || p.includes("/database/")) return "backend";
+    if (/\.(tsx?|jsx?|css|html)$/i.test(p) || p.includes("/src/") || p.includes("/resources/js/")) return "frontend";
+    if (/\.(json|env|yml|yaml|toml|md)$/i.test(p) || p.includes("/config/")) return "config";
+    return "other";
   };
 
   const entries = Object.values(zip.files).filter((e) => !e.dir);
