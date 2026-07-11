@@ -1155,27 +1155,79 @@ function PreApplyVerification({ verify }: { verify: VerifyResult | null }) {
           <div className={`text-lg font-bold ${bad.length ? "text-red-700 dark:text-red-300" : "text-foreground"}`}>{bad.length}</div>
         </div>
       </div>
-      {bad.length > 0 && (
-        <div className="mt-2 rounded bg-red-500/10 p-2 text-xs">
-          <div className="font-semibold text-red-700 dark:text-red-300">apply.sh will refuse to run:</div>
-          <ul className="mt-1 max-h-40 space-y-0.5 overflow-auto font-mono">
-            {bad.slice(0, 30).map((e) => (
-              <li key={e.path} className="text-red-700 dark:text-red-300">
-                ✘ <code>{e.path}</code> — {e.actual ? "hash mismatch" : "missing from ZIP"}
-              </li>
+      {bad.length > 0 && <MismatchTable entries={bad} title="apply.sh will refuse to run — mismatches:" defaultSort="component" />}
+      {expanded && <MismatchTable entries={verify.entries} title={`All ${verify.entries.length} files`} defaultSort="path" />}
+    </div>
+  );
+}
+
+// Classify each verified/mismatched file by which "component" of the bundle
+// it belongs to, so operators can quickly see whether the tampering is in
+// SQL vs. scripts vs. frontend vs. metadata.
+function componentOf(path: string): { label: string; tone: string } {
+  if (/\.sql$/i.test(path)) return { label: "SQL migration", tone: "bg-purple-500/15 text-purple-700 dark:text-purple-300" };
+  if (/^(apply|rollback|cancel|serve-progress|install-secrets)\.sh$/i.test(path)) return { label: "restore script", tone: "bg-blue-500/15 text-blue-700 dark:text-blue-300" };
+  if (/\.(sh|bash)$/i.test(path)) return { label: "shell script", tone: "bg-blue-500/15 text-blue-700 dark:text-blue-300" };
+  if (/\.env|secrets/i.test(path)) return { label: "env / secrets", tone: "bg-amber-500/15 text-amber-700 dark:text-amber-300" };
+  if (/manifest\.json|SHA256SUMS|snapshot\.json/i.test(path)) return { label: "manifest", tone: "bg-slate-500/15 text-slate-700 dark:text-slate-300" };
+  if (/README|REPORT|\.md$/i.test(path)) return { label: "docs", tone: "bg-muted text-muted-foreground" };
+  if (/\.(ts|tsx|js|jsx|css|html)$/i.test(path)) return { label: "frontend", tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" };
+  if (/db\.config|driver/i.test(path)) return { label: "db config", tone: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300" };
+  return { label: "other", tone: "bg-muted text-muted-foreground" };
+}
+
+type MismatchRow = { path: string; expected: string; actual: string; ok: boolean };
+type SortKey = "path" | "component" | "status";
+
+function MismatchTable({ entries, title, defaultSort }: { entries: MismatchRow[]; title: string; defaultSort: SortKey }) {
+  const [sort, setSort] = useState<SortKey>(defaultSort);
+  const [dir, setDir] = useState<"asc" | "desc">("asc");
+  const rows = useMemo(() => {
+    const r = entries.map((e) => ({ ...e, component: componentOf(e.path) }));
+    r.sort((a, b) => {
+      const av = sort === "component" ? a.component.label : sort === "status" ? (a.ok ? "ok" : a.actual ? "mismatch" : "missing") : a.path;
+      const bv = sort === "component" ? b.component.label : sort === "status" ? (b.ok ? "ok" : b.actual ? "mismatch" : "missing") : b.path;
+      return dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+    return r;
+  }, [entries, sort, dir]);
+  const toggle = (k: SortKey) => { if (sort === k) setDir(dir === "asc" ? "desc" : "asc"); else { setSort(k); setDir("asc"); } };
+  const arrow = (k: SortKey) => sort === k ? (dir === "asc" ? " ▲" : " ▼") : "";
+  return (
+    <div className="mt-2 rounded border border-border bg-background/40">
+      <div className="border-b border-border px-2 py-1 text-xs font-semibold text-foreground">{title}</div>
+      <div className="max-h-72 overflow-auto">
+        <table className="w-full text-[11px] font-mono">
+          <thead className="sticky top-0 bg-muted text-muted-foreground">
+            <tr>
+              <th className="cursor-pointer px-2 py-1 text-left" onClick={() => toggle("status")}>·{arrow("status")}</th>
+              <th className="cursor-pointer px-2 py-1 text-left" onClick={() => toggle("component")}>Component{arrow("component")}</th>
+              <th className="cursor-pointer px-2 py-1 text-left" onClick={() => toggle("path")}>Path{arrow("path")}</th>
+              <th className="px-2 py-1 text-left">Expected SHA-256</th>
+              <th className="px-2 py-1 text-left">Actual SHA-256</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.path} className={r.ok ? "" : "bg-red-500/5"}>
+                <td className="px-2 py-1 align-top">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                    r.ok ? "bg-green-500/15 text-green-700 dark:text-green-300"
+                      : r.actual ? "bg-red-500/20 text-red-700 dark:text-red-300"
+                      : "bg-yellow-500/20 text-yellow-700 dark:text-yellow-300"
+                  }`}>{r.ok ? "ok" : r.actual ? "mismatch" : "missing"}</span>
+                </td>
+                <td className="px-2 py-1 align-top"><span className={`rounded px-1.5 py-0.5 text-[10px] ${r.component.tone}`}>{r.component.label}</span></td>
+                <td className="px-2 py-1 align-top break-all">{r.path}</td>
+                <td className="px-2 py-1 align-top text-muted-foreground" title={r.expected}>{r.expected.slice(0, 16)}…</td>
+                <td className={`px-2 py-1 align-top ${r.ok ? "text-muted-foreground" : "text-red-700 dark:text-red-300"}`} title={r.actual}>
+                  {r.actual ? r.actual.slice(0, 16) + "…" : "(missing)"}
+                </td>
+              </tr>
             ))}
-          </ul>
-        </div>
-      )}
-      {expanded && (
-        <ul className="mt-2 max-h-64 space-y-0.5 overflow-auto font-mono text-[11px]">
-          {verify.entries.map((e) => (
-            <li key={e.path} className={e.ok ? "text-green-700 dark:text-green-300" : "text-red-700 dark:text-red-300"}>
-              {e.ok ? "✓" : "✘"} {e.path} <span className="text-muted-foreground">— sha:{e.expected.slice(0, 10)}…</span>
-            </li>
-          ))}
-        </ul>
-      )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
