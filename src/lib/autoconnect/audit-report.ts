@@ -1,10 +1,21 @@
 // Build a single JSON + HTML audit report combining every safety signal
 // (impact, typed-ack, ZIP verification, rollback outcome) so it can be
 // downloaded and archived / attached to change requests.
+import JSZip from "jszip";
 import type { SqlImpact } from "./sql-analyzer";
 import type { VerifyResult } from "./zip-verify";
 import type { LogSummary } from "./rollback-log";
 import type { DbConfig, IntegrationPlan } from "./types";
+
+export type CancellationRecord = {
+  at: string;
+  jobId?: string;
+  via: "ui" | "cli";
+  note?: string;
+  exitCode?: number;
+  phase?: "snapshot" | "sql" | "unknown";
+  refusedBecauseFinished?: boolean;
+};
 
 export type AuditInput = {
   generatedAt?: string;
