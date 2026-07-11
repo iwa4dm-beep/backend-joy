@@ -734,8 +734,13 @@ function FileCard({ name, size, onClick }: { name: string; size: number; onClick
 // ---------------------------------------------------------------------------
 // Test Mode — placeholder DB dry-run / apply / induced-fail + rollback loop
 // ---------------------------------------------------------------------------
-function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfig }) {
+function TestModePanel({ plan, db, onSimulated, auditInput }: {
+  plan: IntegrationPlan | null; db: DbConfig;
+  onSimulated?: (r: E2EReport) => void;
+  auditInput?: AuditInput;
+}) {
   const [failAt, setFailAt] = useState(2);
+  const [cancelAt, setCancelAt] = useState(1);
   const [report, setReport] = useState<E2EReport | null>(null);
 
   const stmts = useMemo<SqlStatement[]>(() => {
@@ -746,8 +751,28 @@ function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfi
     return analyzeSql(sql);
   }, [plan, db.driver]);
 
-  const run = (mode: "dry-run" | "apply" | "induced-fail") => {
-    setReport(runE2E(stmts, { mode, failAt }));
+  const run = (mode: E2EReport["mode"]) => {
+    const r = runE2E(stmts, { mode, failAt, cancelAt });
+    setReport(r);
+    onSimulated?.(r);
+  };
+
+  const downloadSimulatedAudit = async () => {
+    if (!report || !auditInput) return;
+    const merged: AuditInput = {
+      ...auditInput,
+      rollback: parseRollbackLog(report.jsonl),
+      rawLogJsonl: report.jsonl,
+      cancellation: report.cancelled ? {
+        at: new Date().toISOString(), via: "ui",
+        jobId: `sim-${report.mode}`,
+        phase: report.mode === "cancel-snapshot" ? "snapshot" : report.mode === "cancel-sql" ? "sql" : "unknown",
+        exitCode: report.exitCode,
+        note: `E2E ${report.mode} — passed=${report.passed}, rolledBack=${report.rolledBack}, exit=${report.exitCode}`,
+      } : auditInput.cancellation,
+    };
+    const blob = await buildAuditBundle(merged);
+    downloadBlob(blob, `audit-e2e-${report.mode}.zip`);
   };
 
   if (!plan) {
@@ -763,7 +788,8 @@ function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfi
       <div>
         <h2 className="text-lg font-semibold text-foreground">End-to-End Test Mode</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Placeholder in-browser simulator — কোনো real DB ছুঁবে না। Dry-run, apply, এবং induced-fail + rollback flow বারবার চালান।
+          Placeholder in-browser simulator — কোনো real DB ছুঁবে না। Dry-run, apply, induced-fail,
+          এবং <b>snapshot/SQL phase cancel → rollback + exit code 4</b> flow বারবার চালান।
         </p>
       </div>
 
@@ -783,19 +809,55 @@ function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfi
         <div className="ml-auto text-xs text-muted-foreground">total statements: {stmts.length}</div>
       </div>
 
+      <div className="rounded-md border border-yellow-500/40 bg-yellow-500/5 p-3">
+        <div className="mb-2 text-sm font-semibold text-yellow-800 dark:text-yellow-200">
+          <StopCircle className="mr-1 inline h-4 w-4" /> Cancel-during-phase test
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Cancel at step #</span>
+          <input type="number" value={cancelAt} min={0} max={Math.max(0, stmts.length - 1)}
+            onChange={(e) => setCancelAt(Number(e.target.value))}
+            className="w-20 rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          <button onClick={() => run("cancel-snapshot")}
+            className="rounded-md bg-yellow-600 px-3 py-1.5 text-sm text-white hover:bg-yellow-700">
+            Cancel during snapshot
+          </button>
+          <button onClick={() => run("cancel-sql")}
+            className="rounded-md bg-yellow-600 px-3 py-1.5 text-sm text-white hover:bg-yellow-700">
+            Cancel during SQL
+          </button>
+        </div>
+        <div className="mt-1 text-xs text-yellow-800/80 dark:text-yellow-200/80">
+          Verifies rollback runs and exit code <b>4</b> is journaled → audit report captures it.
+        </div>
+      </div>
+
       {report && (
         <div className={`rounded-md border p-3 text-sm ${
           report.passed ? "border-green-500/40 bg-green-500/5" : "border-red-500/40 bg-red-500/5"
         }`}>
-          <div className="font-medium">
-            {report.passed ? "✓ PASS" : "✘ FAIL"} · mode: <code>{report.mode}</code> ·
-            {" "}{report.durationMs}ms · rolledBack: {String(report.rolledBack)} ·
-            {" "}final tables: {report.finalTables.length}
+          <div className="flex items-center justify-between">
+            <div className="font-medium">
+              {report.passed ? "✓ PASS" : "✘ FAIL"} · mode: <code>{report.mode}</code> ·
+              {" "}{report.durationMs}ms · rolledBack: <b>{String(report.rolledBack)}</b> ·
+              cancelled: <b>{String(report.cancelled)}</b> · exit: <b>{report.exitCode}</b> ·
+              tables: {report.finalTables.length}
+            </div>
+            <button onClick={downloadSimulatedAudit} disabled={!auditInput}
+              className="inline-flex items-center gap-1 rounded-md bg-primary/90 px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary disabled:opacity-40">
+              <FileArchive className="h-3 w-3" /> audit .zip
+            </button>
           </div>
+          {report.cancelled && report.exitCode === 4 && (
+            <div className="mt-1 text-xs text-yellow-800 dark:text-yellow-200">
+              ✓ cancel recorded · rollback ran · exit code <b>4</b> journaled in JSONL
+            </div>
+          )}
           <ul className="mt-2 max-h-64 space-y-0.5 overflow-auto font-mono text-xs">
             {report.steps.map((s) => (
               <li key={s.index} className={
                 s.status === "failed" ? "text-red-700 dark:text-red-300"
+                  : s.status === "cancelled" ? "text-yellow-700 dark:text-yellow-300"
                   : s.status === "skipped" ? "text-muted-foreground"
                   : "text-green-700 dark:text-green-300"
               }>
@@ -808,6 +870,7 @@ function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfi
       )}
     </div>
   );
+}
 }
 
 // ---------------------------------------------------------------------------
