@@ -125,7 +125,14 @@ code,.mono{font-family:ui-monospace,Menlo,monospace}
 <p class="small">Generated: <code>${escapeHtml(generatedAt)}</code>
 ${input.project?.file ? ` · Source: <code>${escapeHtml(input.project.file)}</code>` : ""}
 ${input.db ? ` · DB: <code>${escapeHtml(input.db.driver)}://${escapeHtml(input.db.host ?? "?")}:${input.db.port ?? "?"}/${escapeHtml(input.db.database ?? "?")}</code>` : ""}
-${input.retentionDays != null ? ` · Retention: <b>${input.retentionDays}d</b>` : ""}</p>
+${input.retentionDays != null ? ` · Retention: <b>${input.retentionDays}d</b>` : ""}
+${input.snapshotRoot ? ` · Snapshot root: <code>${escapeHtml(input.snapshotRoot)}</code>` : ""}</p>
+
+${input.cancellation ? `<div class="card" style="border-color:#7f1d1d"><small>Cancellation recorded</small>
+<b>${badge(false, "", "cancelled")}</b>
+<div class="small">At <code>${escapeHtml(input.cancellation.at)}</code>
+${input.cancellation.jobId ? ` · job <code>${escapeHtml(input.cancellation.jobId)}</code>` : ""}
+· via ${input.cancellation.via}${input.cancellation.note ? ` — ${escapeHtml(input.cancellation.note)}` : ""}</div></div>` : ""}
 
 <div class="grid">
   <div class="card"><small>ZIP integrity</small><b>${badge(summary.verified, "verified", "failed")}</b></div>
