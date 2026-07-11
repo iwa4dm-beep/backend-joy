@@ -180,11 +180,16 @@ ${input.db ? ` · DB: <code>${escapeHtml(input.db.driver)}://${escapeHtml(input.
 ${input.retentionDays != null ? ` · Retention: <b>${input.retentionDays}d</b>` : ""}
 ${input.snapshotRoot ? ` · Snapshot root: <code>${escapeHtml(input.snapshotRoot)}</code>` : ""}</p>
 
-${input.cancellation ? `<div class="card" style="border-color:#7f1d1d"><small>Cancellation recorded</small>
-<b>${badge(false, "", "cancelled")}</b>
+${input.cancellation ? `<div class="card" style="border-color:${input.cancellation.refusedBecauseFinished ? "#a16207" : "#7f1d1d"}">
+<small>Cancellation ${input.cancellation.refusedBecauseFinished ? "REFUSED (job already finished)" : "recorded"}</small>
+<b>${badge(!!input.cancellation.refusedBecauseFinished, "refused", "cancelled")}</b>
 <div class="small">At <code>${escapeHtml(input.cancellation.at)}</code>
 ${input.cancellation.jobId ? ` · job <code>${escapeHtml(input.cancellation.jobId)}</code>` : ""}
-· via ${input.cancellation.via}${input.cancellation.note ? ` — ${escapeHtml(input.cancellation.note)}` : ""}</div></div>` : ""}
+${input.cancellation.phase ? ` · phase <b>${escapeHtml(input.cancellation.phase)}</b>` : ""}
+${input.cancellation.exitCode != null ? ` · exit code <b>${input.cancellation.exitCode}</b>` : ""}
+· via ${input.cancellation.via}${input.cancellation.note ? ` — ${escapeHtml(input.cancellation.note)}` : ""}
+${input.cancellation.refusedBecauseFinished ? `<br><i>Job had already terminated — no cancel signal was sent. See rollback status below.</i>` : ""}
+</div></div>` : ""}
 
 <div class="grid">
   <div class="card"><small>ZIP integrity</small><b>${badge(summary.verified, "verified", "failed")}</b></div>
@@ -192,6 +197,7 @@ ${input.cancellation.jobId ? ` · job <code>${escapeHtml(input.cancellation.jobI
   <div class="card"><small>Destructive stmts</small><b>${summary.destructive}</b></div>
   <div class="card"><small>Tables touched</small><b>${summary.tables}</b></div>
   <div class="card"><small>Rollback</small><b>${badge(summary.rollbackStatus === "ok", summary.rollbackStatus, summary.rollbackStatus)}</b></div>
+  <div class="card"><small>Exit code</small><b>${summary.exitCode ?? "n/a"}</b></div>
 </div>
 
 <h2>1. ZIP / Manifest Verification</h2>
