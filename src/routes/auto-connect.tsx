@@ -54,12 +54,17 @@ function AutoConnectPage() {
   const onFile = async (f: File) => {
     if (!f.name.endsWith(".zip")) { toast.error("শুধু .zip ফাইল দেওয়া যাবে"); return; }
     if (f.size > 200 * 1024 * 1024) { toast.error("ফাইল ২০০MB এর বেশি"); return; }
-    setFile(f); setLogs([]);
+    setFile(f); setLogs([]); setVerify(null);
     log(`Loaded ${f.name} (${(f.size / 1024 / 1024).toFixed(1)} MB)`);
     setBusy(true);
     try {
       const z = await JSZip.loadAsync(f);
       setZip(z); log("ZIP extracted in-memory ✓");
+      log("Running integrity verification…");
+      const v = await verifyZip(z);
+      setVerify(v);
+      log(v.ok ? `✓ Integrity: ${v.message}` : `✘ Integrity: ${v.message}`);
+      if (v.hasManifest && !v.ok) { toast.error("ZIP integrity check failed"); return; }
       setStep(2);
     } catch (e) { toast.error("ZIP পড়া যায়নি: " + (e as Error).message); }
     finally { setBusy(false); }
