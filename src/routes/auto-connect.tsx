@@ -816,8 +816,8 @@ function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfi
 function RollbackLogPanel({ onLoaded, rawLog, setRawLog, cancellation, setCancellation, log }: {
   onLoaded: (s: LogSummary | null) => void;
   rawLog: string; setRawLog: (s: string) => void;
-  cancellation: { at: string; jobId?: string; via: "ui" | "cli"; note?: string } | null;
-  setCancellation: (c: { at: string; jobId?: string; via: "ui" | "cli"; note?: string } | null) => void;
+  cancellation: CancellationRecord | null;
+  setCancellation: (c: CancellationRecord | null) => void;
   log: (m: string) => void;
 }) {
   const [summary, setSummary] = useState<LogSummary | null>(null);
