@@ -624,3 +624,178 @@ function FileCard({ name, size, onClick }: { name: string; size: number; onClick
     </button>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Test Mode — placeholder DB dry-run / apply / induced-fail + rollback loop
+// ---------------------------------------------------------------------------
+function TestModePanel({ plan, db }: { plan: IntegrationPlan | null; db: DbConfig }) {
+  const [failAt, setFailAt] = useState(2);
+  const [report, setReport] = useState<E2EReport | null>(null);
+
+  const stmts = useMemo<SqlStatement[]>(() => {
+    if (!plan) return [];
+    const tables = plan.tables.map((t) => ({ name: t.name, columns: t.columns, timestamps: true }));
+    let sql = buildMigrationBundle(tables);
+    if (db.driver === "mysql") sql = mysqlToPg(sql);
+    return analyzeSql(sql);
+  }, [plan, db.driver]);
+
+  const run = (mode: "dry-run" | "apply" | "induced-fail") => {
+    setReport(runE2E(stmts, { mode, failAt }));
+  };
+
+  if (!plan) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        <PlayCircle className="mb-2 h-6 w-6" />
+        আগে Wizard-এ ZIP আপলোড → Analyze → AI Plan চালান, তারপর এখানে ফিরে আসুন।
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">End-to-End Test Mode</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Placeholder in-browser simulator — কোনো real DB ছুঁবে না। Dry-run, apply, এবং induced-fail + rollback flow বারবার চালান।
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => run("dry-run")}
+          className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted">Dry-Run</button>
+        <button onClick={() => run("apply")}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">Simulated Apply</button>
+        <div className="flex items-center gap-1 text-sm">
+          <span className="text-muted-foreground">Induced fail at #</span>
+          <input type="number" value={failAt} min={0} max={Math.max(0, stmts.length - 1)}
+            onChange={(e) => setFailAt(Number(e.target.value))}
+            className="w-20 rounded-md border border-border bg-background px-2 py-1 text-sm" />
+          <button onClick={() => run("induced-fail")}
+            className="rounded-md bg-red-500 px-3 py-1.5 text-sm text-white hover:bg-red-600">Force Fail + Rollback</button>
+        </div>
+        <div className="ml-auto text-xs text-muted-foreground">total statements: {stmts.length}</div>
+      </div>
+
+      {report && (
+        <div className={`rounded-md border p-3 text-sm ${
+          report.passed ? "border-green-500/40 bg-green-500/5" : "border-red-500/40 bg-red-500/5"
+        }`}>
+          <div className="font-medium">
+            {report.passed ? "✓ PASS" : "✘ FAIL"} · mode: <code>{report.mode}</code> ·
+            {" "}{report.durationMs}ms · rolledBack: {String(report.rolledBack)} ·
+            {" "}final tables: {report.finalTables.length}
+          </div>
+          <ul className="mt-2 max-h-64 space-y-0.5 overflow-auto font-mono text-xs">
+            {report.steps.map((s) => (
+              <li key={s.index} className={
+                s.status === "failed" ? "text-red-700 dark:text-red-300"
+                  : s.status === "skipped" ? "text-muted-foreground"
+                  : "text-green-700 dark:text-green-300"
+              }>
+                #{s.index} [{s.status}] {s.sql.slice(0, 120)}
+                {s.message && ` — ${s.message}`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rollback Log Viewer — parse JSONL logs from apply.sh
+// ---------------------------------------------------------------------------
+function RollbackLogPanel() {
+  const [summary, setSummary] = useState<LogSummary | null>(null);
+  const [raw, setRaw] = useState<string>("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const load = (text: string) => {
+    setRaw(text);
+    setSummary(parseRollbackLog(text));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Rollback Log Viewer</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          VPS-এর <code>/var/log/pluto-autoconnect/&lt;jobId&gt;.jsonl</code> ফাইল আপলোড করুন — কোন step এ কেন ব্যর্থ হলো বিস্তারিত দেখা যাবে।
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => fileRef.current?.click()}
+          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">
+          .jsonl ফাইল লোড করুন
+        </button>
+        <input ref={fileRef} type="file" accept=".jsonl,.log,.txt,application/json"
+          className="hidden"
+          onChange={async (e) => {
+            const f = e.target.files?.[0]; if (!f) return;
+            load(await f.text());
+          }} />
+        <textarea
+          placeholder='অথবা এখানে paste করুন…  {"ts":"…","step":"apply_sql","status":"fail",…}'
+          className="min-h-[80px] flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+          value={raw}
+          onChange={(e) => load(e.target.value)}
+        />
+      </div>
+
+      {summary && (
+        <div className="space-y-3">
+          <div className={`rounded-md border p-3 text-sm ${
+            summary.ok ? "border-green-500/40 bg-green-500/5"
+              : summary.rolledBack ? "border-yellow-500/40 bg-yellow-500/5"
+              : "border-red-500/40 bg-red-500/5"
+          }`}>
+            <div className="font-medium">
+              Job <code>{summary.jobId}</code> — {summary.ok ? "✔ success" : summary.rolledBack ? "⟲ failed + rolled back" : "✘ failed"}
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {summary.startedAt} → {summary.endedAt} · steps: {summary.entries.length}
+            </div>
+            {summary.failedStep && (
+              <div className="mt-2 rounded bg-red-500/10 p-2 text-xs">
+                <div className="font-semibold text-red-700 dark:text-red-300">Failed step: {summary.failedStep.step}</div>
+                <div className="mt-1 font-mono">{summary.failedStep.error ?? "(no error captured)"}</div>
+                <div className="mt-1 text-muted-foreground">Fix: run <code>bash rollback.sh {summary.jobId}</code> or inspect <code>db.dump</code> / <code>vol-*.tgz</code> in the snapshot dir.</div>
+              </div>
+            )}
+          </div>
+
+          <ol className="space-y-1">
+            {summary.entries.map((e, i) => (
+              <li key={i} className="flex items-start gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-xs">
+                <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                  e.status === "ok" || e.status === "done" ? "bg-green-500/15 text-green-700 dark:text-green-300"
+                    : e.status === "fail" ? "bg-red-500/15 text-red-700 dark:text-red-300"
+                    : e.status === "skip" ? "bg-muted text-muted-foreground"
+                    : "bg-primary/15 text-primary"
+                }`}>{e.status}</span>
+                <span className="w-40 shrink-0 font-mono text-muted-foreground">{e.ts}</span>
+                <span className="flex-1"><b>{e.step}</b>
+                  {e.file && <> · <code>{e.file}</code></>}
+                  {e.volume && <> · volume:<code>{e.volume}</code></>}
+                  {e.reason && <> · {e.reason}</>}
+                  {e.error && <div className="mt-0.5 font-mono text-red-700 dark:text-red-300">{e.error}</div>}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {!summary && (
+        <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+          <AlertTriangle className="mx-auto mb-2 h-6 w-6" />
+          কোনো log লোড হয়নি — উপরে ফাইল দিন অথবা JSONL paste করুন।
+        </div>
+      )}
+    </div>
+  );
+}
+
