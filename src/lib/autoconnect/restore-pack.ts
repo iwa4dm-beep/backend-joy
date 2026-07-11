@@ -219,13 +219,18 @@ echo "✔ rollback complete for $JOB_ID"
 
 // Server-Sent-Events tailer served by the VPS so the /auto-connect page
 // can stream real-time apply/rollback progress via EventSource.
+// Also exposes:
+//   GET /jobs          → JSON list of jobIds (for auto-discovery)
+//   GET /log?job=…     → raw JSONL download
+//   POST /cancel?job=… → touches the cancel flag (apply.sh polls it)
 export function buildServeProgressScript(): string {
   return `#!/usr/bin/env bash
 # Serve the running JOB's JSONL log over HTTP/SSE for the /auto-connect page.
 # Usage:  JOB_ID=job-... bash serve-progress.sh [PORT]   # default port 8787
 #         (bind 127.0.0.1 by default — expose over SSH tunnel: ssh -L 8787:127.0.0.1:8787 …)
 set -euo pipefail
-LOG_DIR="\${LOG_DIR:-/var/log/pluto-autoconnect}"
+SNAP_ROOT="\${SNAP_ROOT:-/var/backups/pluto-autoconnect}"
+LOG_DIR="\${LOG_DIR:-$SNAP_ROOT/logs}"
 JOB_ID="\${JOB_ID:-$(ls -1t "$LOG_DIR"/*.jsonl 2>/dev/null | head -1 | xargs -n1 basename | sed 's/\\.jsonl$//')}"
 PORT="\${1:-8787}"
 BIND="\${BIND:-127.0.0.1}"
