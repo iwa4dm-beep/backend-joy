@@ -1,0 +1,234 @@
+// Client-side Laravel + React/Vite project analyzer.
+// Uses JSZip to walk the uploaded archive without ever executing user code.
+import JSZip from "jszip";
+import type { AnalyzeResult, Column, LaravelRoute, TableDef } from "./types";
+
+const SKIP_DIRS = [
+  "node_modules/", "vendor/", ".git/", "dist/", "build/",
+  "storage/logs/", "storage/framework/cache/", ".next/", ".cache/",
+];
+
+function shouldSkip(path: string): boolean {
+  return SKIP_DIRS.some((d) => path.includes(d));
+}
+
+// ── Laravel migration PHP parser (regex-based, static-only) ──────────────
+function parseMigration(php: string): TableDef[] {
+  const tables: TableDef[] = [];
+  const createRe = /Schema::create\s*\(\s*['"]([^'"]+)['"]\s*,\s*function\s*\([^)]*\)\s*\{([\s\S]*?)\n\s*\}\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = createRe.exec(php)) !== null) {
+    const name = m[1];
+    const body = m[2];
+    const cols: Column[] = [];
+    let timestamps = false;
+    let softDeletes = false;
+
+    // $table->id();
+    if (/\$table->id\s*\(/.test(body)) {
+      cols.push({ name: "id", type: "uuid", primary: true, default: "gen_random_uuid()" });
+    }
+    if (/\$table->timestamps\s*\(/.test(body)) timestamps = true;
+    if (/\$table->softDeletes\s*\(/.test(body)) softDeletes = true;
+
+    // Generic columns: $table->TYPE('name'[, ...])
+    const colRe = /\$table->(\w+)\s*\(\s*['"]([^'"]+)['"](.*?)\)(->[^;]*)?;/g;
+    let cm: RegExpExecArray | null;
+    while ((cm = colRe.exec(body)) !== null) {
+      const t = cm[1];
+      const cname = cm[2];
+      const chain = cm[4] ?? "";
+      if (["id", "timestamps", "softDeletes"].includes(t)) continue;
+      const pgType = mapLaravelType(t, cm[3]);
+      if (!pgType) continue;
+      const col: Column = {
+        name: cname,
+        type: pgType,
+        nullable: /->nullable\s*\(/.test(chain),
+        unique: /->unique\s*\(/.test(chain),
+      };
+      const defMatch = chain.match(/->default\s*\(\s*(['"]?)([^'")]+)\1\s*\)/);
+      if (defMatch) col.default = defMatch[2];
+      if (t === "foreignId" || cname.endsWith("_id")) {
+        const table = cname.replace(/_id$/, "") + "s";
+        col.references = { table, column: "id" };
+        col.type = "uuid";
+      }
+      cols.push(col);
+    }
+
+    tables.push({ name, columns: cols, timestamps, softDeletes });
+  }
+  return tables;
+}
+
+function mapLaravelType(t: string, _args: string): string | null {
+  const map: Record<string, string> = {
+    string: "text", text: "text", longText: "text", mediumText: "text",
+    integer: "integer", bigInteger: "bigint", smallInteger: "smallint",
+    tinyInteger: "smallint", unsignedBigInteger: "bigint", unsignedInteger: "integer",
+    boolean: "boolean", date: "date", dateTime: "timestamptz",
+    timestamp: "timestamptz", time: "time", json: "jsonb", jsonb: "jsonb",
+    decimal: "numeric", float: "double precision", double: "double precision",
+    uuid: "uuid", ipAddress: "inet", macAddress: "macaddr",
+    binary: "bytea", enum: "text", foreignId: "uuid",
+  };
+  return map[t] ?? null;
+}
+
+// ── Laravel routes/api.php parser ────────────────────────────────────────
+function parseRoutes(php: string): LaravelRoute[] {
+  const out: LaravelRoute[] = [];
+  const re = /Route::(get|post|put|patch|delete|any|match)\s*\(\s*['"]([^'"]+)['"]\s*,\s*(\[?[^)]*)\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(php)) !== null) {
+    out.push({
+      method: m[1].toUpperCase(),
+      uri: m[2].startsWith("/") ? m[2] : "/" + m[2],
+      controller: m[3].replace(/\s+/g, " ").slice(0, 200),
+    });
+  }
+  // Route::apiResource('posts', PostController::class)
+  const resRe = /Route::apiResource\s*\(\s*['"]([^'"]+)['"]\s*,\s*([\w\\]+)/g;
+  while ((m = resRe.exec(php)) !== null) {
+    const base = m[1];
+    const ctl = m[2];
+    for (const [method, path] of [
+      ["GET", `/${base}`], ["POST", `/${base}`],
+      ["GET", `/${base}/{id}`], ["PUT", `/${base}/{id}`],
+      ["PATCH", `/${base}/{id}`], ["DELETE", `/${base}/{id}`],
+    ] as const) {
+      out.push({ method, uri: path, controller: ctl });
+    }
+  }
+  return out;
+}
+
+// ── Laravel model parser ─────────────────────────────────────────────────
+function parseModel(php: string, file: string) {
+  const nameM = php.match(/class\s+(\w+)\s+extends\s+Model/);
+  if (!nameM) return null;
+  const tableM = php.match(/protected\s+\$table\s*=\s*['"]([^'"]+)['"]/);
+  const fillM = php.match(/protected\s+\$fillable\s*=\s*\[([^\]]*)\]/);
+  const fillable = fillM
+    ? Array.from(fillM[1].matchAll(/['"]([^'"]+)['"]/g)).map((x) => x[1])
+    : undefined;
+  return { name: nameM[1], file, table: tableM?.[1], fillable };
+}
+
+// ── Frontend API call site scanner ───────────────────────────────────────
+function scanApiCalls(file: string, src: string) {
+  const hits: { file: string; snippet: string; line: number }[] = [];
+  const re = /(axios\.(?:get|post|put|patch|delete)|fetch)\s*\(\s*(['"`])([^'"`]+)\2/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const before = src.slice(0, m.index);
+    const line = before.split("\n").length;
+    hits.push({ file, snippet: m[0].slice(0, 160), line });
+  }
+  return hits;
+}
+
+// ── Main entry ───────────────────────────────────────────────────────────
+export async function analyzeZip(
+  file: File,
+  onProgress?: (msg: string) => void,
+): Promise<AnalyzeResult> {
+  const zip = await JSZip.loadAsync(file);
+  const result: AnalyzeResult = {
+    frontend: { detected: false, hasVite: false, apiCallSites: [], envKeys: [], baseUrls: [] },
+    backend: {
+      detected: false, tables: [], models: [], routes: [], controllers: [],
+      storageDisks: [], envKeys: [], rawMigrationFiles: 0,
+    },
+    stats: { totalFiles: 0, totalBytes: 0, skipped: [] },
+  };
+
+  const entries = Object.values(zip.files).filter((e) => !e.dir);
+  for (const entry of entries) {
+    if (shouldSkip(entry.name)) {
+      result.stats.skipped.push(entry.name);
+      continue;
+    }
+    result.stats.totalFiles += 1;
+    const lower = entry.name.toLowerCase();
+
+    // Read only reasonable text files
+    const isText = /\.(php|ts|tsx|js|jsx|json|env|md|yml|yaml|blade\.php)$/.test(lower);
+    if (!isText) continue;
+
+    const text = await entry.async("string");
+    result.stats.totalBytes += text.length;
+
+    // ── Backend signals ──
+    if (lower.endsWith("composer.json")) {
+      result.backend.detected = true;
+      try {
+        const j = JSON.parse(text);
+        const laravel = j.require?.["laravel/framework"] ?? j.require?.["laravel/lumen-framework"];
+        if (laravel) result.backend.laravelVersion = String(laravel);
+      } catch { /* ignore */ }
+      onProgress?.(`Laravel detected (${entry.name})`);
+    }
+    if (/database\/migrations\/.+\.php$/.test(lower)) {
+      result.backend.rawMigrationFiles += 1;
+      result.backend.tables.push(...parseMigration(text));
+    }
+    if (/app\/models\/.+\.php$/.test(lower)) {
+      const mm = parseModel(text, entry.name);
+      if (mm) result.backend.models.push(mm);
+    }
+    if (/routes\/(api|web)\.php$/.test(lower)) {
+      result.backend.routes.push(...parseRoutes(text));
+    }
+    if (/app\/http\/controllers\/.+\.php$/.test(lower)) {
+      const nameM = text.match(/class\s+(\w+)/);
+      const methods = Array.from(text.matchAll(/public\s+function\s+(\w+)/g)).map((x) => x[1]);
+      if (nameM) result.backend.controllers.push({ name: nameM[1], file: entry.name, methods });
+    }
+    if (lower.endsWith("config/auth.php")) {
+      const m = text.match(/'default'\s*=>\s*\[[^\]]*'guard'\s*=>\s*['"]([^'"]+)/);
+      if (m) result.backend.authGuard = m[1];
+    }
+    if (lower.endsWith("config/filesystems.php")) {
+      const disks = Array.from(text.matchAll(/'(local|public|s3|ftp|sftp)'\s*=>\s*\[/g)).map((x) => x[1]);
+      result.backend.storageDisks.push(...new Set(disks));
+    }
+
+    // ── Frontend signals ──
+    if (lower.endsWith("package.json") && !entry.name.includes("/vendor/")) {
+      try {
+        const j = JSON.parse(text);
+        const deps = { ...j.dependencies, ...j.devDependencies };
+        if (deps.react) {
+          result.frontend.detected = true;
+          result.frontend.framework = "react";
+        }
+        if (deps.vite) result.frontend.hasVite = true;
+      } catch { /* ignore */ }
+    }
+    if (/vite\.config\.(t|j)s$/.test(lower)) {
+      result.frontend.hasVite = true;
+      result.frontend.detected = true;
+    }
+    if (/\.(tsx?|jsx?)$/.test(lower) && !entry.name.includes("/vendor/")) {
+      const hits = scanApiCalls(entry.name, text);
+      if (hits.length) result.frontend.apiCallSites.push(...hits);
+      const base = text.match(/baseURL\s*[:=]\s*['"`]([^'"`]+)/);
+      if (base) result.frontend.baseUrls.push(base[1]);
+    }
+
+    // ── .env keys ──
+    if (lower.endsWith(".env") || lower.endsWith(".env.example")) {
+      const keys = Array.from(text.matchAll(/^([A-Z0-9_]+)=/gm)).map((x) => x[1]);
+      if (entry.name.includes("frontend") || entry.name.startsWith("client")) {
+        result.frontend.envKeys.push(...keys);
+      } else {
+        result.backend.envKeys.push(...keys);
+      }
+    }
+  }
+
+  onProgress?.(`Scanned ${result.stats.totalFiles} files`);
+  return result;
+}
