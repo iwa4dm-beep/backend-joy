@@ -192,17 +192,35 @@ function PlutoAdminPage() {
 
       {/* Connection */}
       <Card>
-        <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Server className="h-4 w-4"/> Upstream connection</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Server className="h-4 w-4"/> Upstream connection
+            {source && (
+              <Badge variant="outline" className="ml-2 gap-1">
+                <Lock className="h-3 w-3"/>
+                {source === "configured_jwt" ? "fixed · configured JWT" : "fixed · minted from PLUTO_JWT_SECRET"}
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div><Label>Upstream URL</Label><Input placeholder="https://api.your-domain.com" value={url} onChange={e => setUrl(e.target.value)} /></div>
-            <div><Label>Admin JWT (paste or login below)</Label><Input placeholder="eyJhbGciOi..." value={token} onChange={e => setToken(e.target.value)} /></div>
+            <div>
+              <Label>Upstream URL</Label>
+              <Input placeholder="https://api.your-domain.com" value={url} readOnly={!!source} onChange={e => setUrl(e.target.value)} />
+            </div>
+            <div>
+              <Label>Admin JWT {source && <span className="text-xs text-muted-foreground">(auto-loaded from server secrets)</span>}</Label>
+              <Input placeholder="eyJhbGciOi..." value={token ? `${token.slice(0, 24)}…${token.slice(-8)}` : ""} readOnly={!!source} onChange={e => setToken(e.target.value)} />
+            </div>
           </div>
-          <LoginRow onLogin={login} disabled={!url || loading} />
-          {!configured && <Alert><AlertDescription>Set URL + token to load projects.</AlertDescription></Alert>}
+          {!source && <LoginRow onLogin={login} disabled={!url || loading} />}
+          {bootErr && <Alert variant="destructive"><AlertDescription>Auto-config failed: {bootErr}</AlertDescription></Alert>}
+          {!configured && !bootErr && <Alert><AlertDescription>Loading upstream config…</AlertDescription></Alert>}
           {err && <Alert variant="destructive"><AlertDescription>{err}</AlertDescription></Alert>}
         </CardContent>
       </Card>
+
 
       {configured && (
         <>
