@@ -18,9 +18,10 @@ import {
   type StepDebug,
 } from "@/lib/pluto/vps-deployer.functions";
 import {
-  saveHistoryEntry, downloadEntryAsJson,
+  saveHistoryEntry, downloadEntryAsJson, consumeRedeployPrefill,
   type HistoryStep, type HistoryEntry,
 } from "@/lib/pluto/deploy-history";
+import { useLogStream, statusLabel, type StreamStatus } from "@/lib/pluto/use-log-stream";
 
 type StepKey = "sql" | "upload" | "verify";
 type StepState = "idle" | "running" | "ok" | "error" | "skipped";
