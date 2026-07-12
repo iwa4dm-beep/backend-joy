@@ -83,12 +83,12 @@ function DeploymentComparePage() {
 
                 {diff.steps.map((s) => (
                   <div key={s.key} className="rounded-lg border border-border bg-card">
-                    <div className="p-3 border-b border-border flex items-center gap-3">
+                    <div className="p-3 border-b border-border flex items-center gap-3 flex-wrap">
                       <span className="font-semibold text-sm">{s.label}</span>
                       {s.stateChanged && <Badge tone="amber">state changed</Badge>}
                       {s.statusChanged && <Badge tone="amber">HTTP status changed</Badge>}
-                      {s.reqBodyChanged && <Badge tone="amber">request body changed</Badge>}
-                      {s.resBodyChanged && <Badge tone="amber">response body changed</Badge>}
+                      {s.reqBodyChanged && <Badge tone="amber">input differs</Badge>}
+                      {s.resBodyChanged && <Badge tone="amber">output differs</Badge>}
                       {s.latencyDeltaMs !== null && s.latencyDeltaMs !== 0 && (
                         <Badge tone={Math.abs(s.latencyDeltaMs) > 500 ? "amber" : "muted"}>
                           latency Δ {s.latencyDeltaMs > 0 ? "+" : ""}{s.latencyDeltaMs}ms
@@ -102,6 +102,21 @@ function DeploymentComparePage() {
                       <StepSide side={s.left} highlight={s.stateChanged || s.statusChanged || s.reqBodyChanged || s.resBodyChanged} />
                       <StepSide side={s.right} highlight={s.stateChanged || s.statusChanged || s.reqBodyChanged || s.resBodyChanged} />
                     </div>
+                    <TimingVariance left={s.left} right={s.right} />
+                    {(s.reqBodyChanged || s.resBodyChanged) && (
+                      <div className="border-t border-border p-3 space-y-3">
+                        {s.reqBodyChanged && (
+                          <BodyDiff title="Input (request body) diff"
+                            left={s.left?.debug?.reqBodyPreview ?? ""}
+                            right={s.right?.debug?.reqBodyPreview ?? ""} />
+                        )}
+                        {s.resBodyChanged && (
+                          <BodyDiff title="Output (response body) diff"
+                            left={s.left?.debug?.resBodyPreview ?? ""}
+                            right={s.right?.debug?.resBodyPreview ?? ""} />
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
