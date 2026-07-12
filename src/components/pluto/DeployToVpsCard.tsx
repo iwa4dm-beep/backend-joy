@@ -39,7 +39,7 @@ const INITIAL: StepInfo[] = [
   { key: "verify", label: "Verify latest deployment", state: "idle", debug: null },
 ];
 
-type LogEvent = { t: number; level: "info" | "ok" | "error"; msg: string };
+type LogEvent = { t: number; level: "info" | "ok" | "error"; msg: string; source?: "local" | "ws" };
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer());
