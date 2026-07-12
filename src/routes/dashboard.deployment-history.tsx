@@ -15,8 +15,14 @@ export const Route = createFileRoute("/dashboard/deployment-history")({
 });
 
 function DeploymentHistoryPage() {
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const redeploy = (e: HistoryEntry) => {
+    setRedeployPrefill({ workspaceId: e.workspaceId, sql: e.sql, bundleName: e.bundleName });
+    navigate({ to: "/dashboard/auto-connect" });
+  };
 
   useEffect(() => {
     const refresh = () => setEntries(loadHistory());
