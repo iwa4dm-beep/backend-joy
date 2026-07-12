@@ -213,7 +213,7 @@ export function DeployToVpsCard({
 
     setBusy(dryOnly ? "dry" : "all");
     setSteps(INITIAL);
-    setLogs([]);
+    resetLogs();
     historyWritten.current = null;
     log("info", `── ${dryOnly ? "DRY RUN" : "DEPLOY"} start · workspace ${wsId} ──`);
 
