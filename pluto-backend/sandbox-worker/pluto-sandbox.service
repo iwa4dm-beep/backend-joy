@@ -1,0 +1,22 @@
+[Unit]
+Description=Pluto Sandbox Worker (ZIP unpacker + static site host)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+EnvironmentFile=/etc/pluto/sandbox-worker.env
+ExecStart=/usr/bin/node /opt/pluto/sandbox-worker/sandbox-worker.mjs
+Restart=on-failure
+RestartSec=3s
+StandardOutput=journal
+StandardError=journal
+# Filesystem
+ReadWritePaths=/var/lib/pluto/sites
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

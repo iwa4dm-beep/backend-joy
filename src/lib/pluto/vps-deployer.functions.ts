@@ -309,10 +309,10 @@ const DeployAllInput = z.object({
   ensureInfra: z.boolean().default(true),
 });
 
-export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "activate-service" | "health-check";
+export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
 export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
-export type DeployAllResult = { ok: boolean; workspaceId: string; totalMs: number; steps: DeployStepLog[]; liveUrls?: { functionsHealth: string; bootstrapInvoke: string } };
+export type DeployAllResult = { ok: boolean; workspaceId: string; totalMs: number; steps: DeployStepLog[]; liveUrls?: { functionsHealth: string; bootstrapInvoke: string; servedSite?: string } };
 
 function nowIso(): string { return new Date().toISOString(); }
 
@@ -411,13 +411,53 @@ export const deployAll = createServerFn({ method: "POST" })
     });
     steps.push(verStep);
 
+    // Step 3.5: unpack + serve — call the sandbox-worker on the VPS to
+    //           unpack the just-uploaded ZIP and flip the "current" symlink
+    //           that nginx serves. Requires PLUTO_SANDBOX_URL + PLUTO_SANDBOX_SECRET.
+    //           If unset, we log a "skipped" attempt and keep going — this makes
+    //           the pipeline safe to run on hosts where the worker isn't installed.
+    const bundleKey = `${data.bucket}/${cleanPath}`;
+    const sandboxUrl = (process.env.PLUTO_SANDBOX_URL ?? "").replace(/\/+$/, "");
+    const sandboxSecret = process.env.PLUTO_SANDBOX_SECRET ?? "";
+    const servedSiteFromWorker: { url?: string } = {};
+    const unpackStep = await withRetry("unpack-serve", "Unpack bundle + serve (sandbox worker)", data.maxRetries, async () => {
+      if (!sandboxUrl || !sandboxSecret) {
+        return {
+          ok: true,
+          detail: "skipped — PLUTO_SANDBOX_URL / PLUTO_SANDBOX_SECRET not configured. Install pluto-backend/sandbox-worker on the VPS to enable auto-serve.",
+          debug: null,
+          result: { skipped: true },
+        };
+      }
+      const body = JSON.stringify({ workspaceId: data.workspaceId, bucket: data.bucket, key: cleanPath });
+      const r = await rawFetch(
+        `${sandboxUrl}/unpack`,
+        "POST",
+        { "content-type": "application/json", "x-sandbox-secret": sandboxSecret, accept: "application/json" },
+        body,
+        body,
+        180_000,
+      );
+      if (!r.ok) return { ok: false, detail: `unpack HTTP ${r.status}: ${r.text.slice(0, 240)}`, debug: r.debug, result: null };
+      let parsed: { webRoot?: string; releaseDir?: string; servedAt?: string; sizeBytes?: number; durationMs?: number } = {};
+      try { parsed = JSON.parse(r.text); } catch { /* ignore */ }
+      servedSiteFromWorker.url = parsed.webRoot;
+      return {
+        ok: true,
+        detail: `unpacked ${parsed.sizeBytes ?? "?"} bytes in ${parsed.durationMs ?? "?"}ms → ${parsed.webRoot ?? "(root)"}`,
+        debug: r.debug,
+        result: parsed,
+      };
+    });
+    steps.push(unpackStep);
+
     // Step 4: activate service — register/patch a `bootstrap` function that
     //         announces the deployed bundle. This is the closest thing the
     //         upstream Pluto BaaS (v0.1) exposes to "start server after unpack":
     //         the function record marks the workspace's default project as
     //         having live code. If the upstream sandbox worker is unavailable,
     //         the register call still succeeds and health-check will surface it.
-    const bundleKey = `${data.bucket}/${cleanPath}`;
+
     let projectId: string | null = null;
     const activateStep = await withRetry("activate-service", "Activate service (register bootstrap function)", data.maxRetries, async () => {
       // 4a. Resolve the workspace's default project.
@@ -456,28 +496,41 @@ export const deployAll = createServerFn({ method: "POST" })
     });
     steps.push(activateStep);
 
-    // Step 5: health check — probe public functions health + invoke bootstrap.
+    // Step 5: health check — probe public functions health + invoke bootstrap
+    //         + (if configured) the served frontend at PLUTO_SERVED_SITE_URL.
     //         Non-fatal for overall deploy: reports upstream runtime status
     //         even when the sandbox worker is not yet installed on the VPS.
-    const healthStep = await withRetry("health-check", "Health check (functions runtime + bootstrap invoke)", data.maxRetries, async () => {
+    const servedSiteUrl = (process.env.PLUTO_SERVED_SITE_URL ?? "").replace(/\/+$/, "");
+    const healthStep = await withRetry("health-check", "Health check (functions runtime + bootstrap + served site)", data.maxRetries, async () => {
       const healthUrl = `${base}/functions/v1/health`;
       const h = await rawFetch(healthUrl, "GET", { accept: "application/json" }, null, null, 10_000);
       const invokeUrl = `${base}/functions/v1/invoke/bootstrap`;
       const inv = await rawFetch(invokeUrl, "POST", { ...headers, "content-type": "application/json" }, "{}", "{}", 15_000);
+      let siteLine = "served site: (PLUTO_SERVED_SITE_URL not set)";
+      let siteResult: { status: number; url: string; snippet: string } | null = null;
+      if (servedSiteUrl) {
+        const s = await rawFetch(`${servedSiteUrl}/`, "GET", { accept: "text/html" }, null, null, 15_000);
+        siteResult = { status: s.status, url: `${servedSiteUrl}/`, snippet: s.text.slice(0, 240) };
+        siteLine = `served site: ${s.ok ? `✓ HTTP ${s.status}` : `✗ HTTP ${s.status}`} @ ${servedSiteUrl}`;
+      }
       const runtimeOk = h.ok;
       const invokeOk = inv.ok;
       const detail = [
         `runtime: ${runtimeOk ? `✓ HTTP ${h.status}` : `✗ HTTP ${h.status}`} (${h.text.slice(0, 120)})`,
         `bootstrap invoke: ${invokeOk ? `✓ HTTP ${inv.status}` : `✗ HTTP ${inv.status}`} (${inv.text.slice(0, 160)})`,
+        siteLine,
       ].join(" | ");
-      // Consider the step "ok" if the runtime endpoint is up. Invoke failure
-      // (e.g. missing sandbox-worker.mjs on the VPS host) is diagnostic, not
-      // a deploy-blocking regression from our side.
-      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) } } };
+      // Consider the step "ok" if the runtime endpoint is up. Invoke / served-site failure
+      // is diagnostic, not a deploy-blocking regression from our side.
+      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult } };
     });
     steps.push(healthStep);
 
-    const liveUrls = { functionsHealth: `${base}/functions/v1/health`, bootstrapInvoke: `${base}/functions/v1/invoke/bootstrap` };
+    const liveUrls = {
+      functionsHealth: `${base}/functions/v1/health`,
+      bootstrapInvoke: `${base}/functions/v1/invoke/bootstrap`,
+      ...(servedSiteUrl ? { servedSite: `${servedSiteUrl}/` } : {}),
+    };
     return { ok: steps.every(s => s.ok), workspaceId: data.workspaceId, totalMs: Date.now() - t0, steps, liveUrls };
   });
 
