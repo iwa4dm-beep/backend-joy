@@ -311,7 +311,7 @@ const DeployAllInput = z.object({
 
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
-export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: unknown };
+export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: Record<string, unknown> | null };
 export type DeployAllResult = { ok: boolean; workspaceId: string; totalMs: number; steps: DeployStepLog[] };
 
 function nowIso(): string { return new Date().toISOString(); }
