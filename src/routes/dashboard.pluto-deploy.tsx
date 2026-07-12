@@ -113,6 +113,11 @@ function DeployPage() {
         label: `deploy-${bundleFile.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80)}`,
       } });
       setDeployResult(r);
+      // Auto-refresh post-deploy health so the Result panel shows live status.
+      try {
+        const h = await postDeployHealthFn({ data: { workspaceId: workspaceId.trim() } });
+        setPostHealth(h);
+      } catch { /* non-fatal — user can click Refresh health */ }
     } catch (e) {
       setDeployError((e as Error).message);
     } finally {
