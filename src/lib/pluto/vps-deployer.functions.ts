@@ -311,33 +311,36 @@ const DeployAllInput = z.object({
 
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
-export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: Record<string, unknown> | null };
+export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
 export type DeployAllResult = { ok: boolean; workspaceId: string; totalMs: number; steps: DeployStepLog[] };
 
 function nowIso(): string { return new Date().toISOString(); }
 
-async function withRetry<T>(
+type AttemptOutcome = { ok: boolean; detail: string; debug: StepDebug | null; result: unknown };
+
+async function withRetry(
   key: DeployStepKey,
   label: string,
   maxRetries: number,
-  attemptFn: (attempt: number) => Promise<{ ok: boolean; detail: string; debug: StepDebug | null; result: T }>,
-): Promise<DeployStepLog & { result: T }> {
+  attemptFn: (attempt: number) => Promise<AttemptOutcome>,
+): Promise<DeployStepLog> {
   const attempts: DeployStepAttempt[] = [];
-  let last: { ok: boolean; detail: string; debug: StepDebug | null; result: T } | null = null;
+  let last: AttemptOutcome | null = null;
   for (let i = 0; i <= maxRetries; i++) {
     const started = Date.now();
     const startedAt = nowIso();
     try {
       last = await attemptFn(i + 1);
     } catch (e) {
-      last = { ok: false, detail: (e as Error).message, debug: null, result: null as unknown as T };
+      last = { ok: false, detail: (e as Error).message, debug: null, result: null };
     }
     attempts.push({ attempt: i + 1, ok: last.ok, detail: last.detail, debug: last.debug, startedAt, latencyMs: Date.now() - started });
     if (last.ok) break;
-    // exponential backoff between retries: 400ms, 800ms, 1600ms...
     if (i < maxRetries) await new Promise(r => setTimeout(r, 400 * 2 ** i));
   }
-  return { key, label, ok: !!last?.ok, attempts, result: last?.result as T };
+  let serialized: string | null = null;
+  try { serialized = last?.result != null ? JSON.stringify(last.result) : null; } catch { serialized = null; }
+  return { key, label, ok: !!last?.ok, attempts, result: serialized };
 }
 
 export const deployAll = createServerFn({ method: "POST" })
