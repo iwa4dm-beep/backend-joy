@@ -18,9 +18,10 @@ import {
   type StepDebug,
 } from "@/lib/pluto/vps-deployer.functions";
 import {
-  saveHistoryEntry, downloadEntryAsJson,
+  saveHistoryEntry, downloadEntryAsJson, consumeRedeployPrefill,
   type HistoryStep, type HistoryEntry,
 } from "@/lib/pluto/deploy-history";
+import { useLogStream, statusLabel, type StreamStatus } from "@/lib/pluto/use-log-stream";
 
 type StepKey = "sql" | "upload" | "verify";
 type StepState = "idle" | "running" | "ok" | "error" | "skipped";
@@ -38,7 +39,7 @@ const INITIAL: StepInfo[] = [
   { key: "verify", label: "Verify latest deployment", state: "idle", debug: null },
 ];
 
-type LogEvent = { t: number; level: "info" | "ok" | "error"; msg: string };
+type LogEvent = { t: number; level: "info" | "ok" | "error"; msg: string; source?: "local" | "ws" };
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer());
@@ -75,14 +76,33 @@ export function DeployToVpsCard({
   const [steps, setSteps] = useState<StepInfo[]>(INITIAL);
   const [expanded, setExpanded] = useState<Record<StepKey, boolean>>({ sql: false, upload: false, verify: false });
   const [dryOnly, setDryOnly] = useState(false);
-  const [logs, setLogs] = useState<LogEvent[]>([]);
   const [showLogs, setShowLogs] = useState(true);
   const lastEntry = useRef<HistoryEntry | null>(null);
   const historyWritten = useRef<string | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
 
+  // Live log stream (WebSocket + auto-reconnect + interruption status).
+  const wsBase = (import.meta.env.VITE_DEPLOY_LOG_WS_URL as string | undefined) ?? "";
+  const wsUrl = wsBase && workspaceId.trim()
+    ? `${wsBase.replace(/\/$/, "")}/${encodeURIComponent(workspaceId.trim())}`
+    : null;
+  const { status: streamStatus, events: logs, attempt, append: pushLog, reset: resetLogs, reconnectNow } =
+    useLogStream({ url: wsUrl });
+
   const bundleBlob: Blob | null = file ?? defaultBundle ?? null;
   const bundleName = file?.name ?? defaultBundleName ?? "bundle.zip";
+
+  // Consume redeploy prefill (from history "Redeploy") once on mount.
+  useEffect(() => {
+    const p = consumeRedeployPrefill();
+    if (!p) return;
+    if (p.workspaceId) setWorkspaceId(p.workspaceId);
+    if (typeof p.sql === "string") setSql(p.sql);
+    toast.info(p.bundleName && !file && !defaultBundle
+      ? `Redeploy: SQL restored. Please re-select bundle "${p.bundleName}" if needed.`
+      : "Redeploy: SQL and workspace restored.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setStep = useCallback(
     (key: StepKey, patch: Partial<StepInfo>) =>
@@ -91,8 +111,8 @@ export function DeployToVpsCard({
   );
 
   const log = useCallback((level: LogEvent["level"], msg: string) => {
-    setLogs((l) => [...l, { t: Date.now(), level, msg }]);
-  }, []);
+    pushLog(level, msg);
+  }, [pushLog]);
 
   // Auto-scroll log console
   useEffect(() => {
@@ -181,10 +201,14 @@ export function DeployToVpsCard({
       state: s.state === "ok" ? "ok" : s.state === "skipped" ? "skipped" : "error",
       detail: s.detail, debug: s.debug,
     }));
-    const entry: HistoryEntry = { id, timestamp: Date.now(), workspaceId: wsId, overallOk, steps: historySteps };
+    const entry: HistoryEntry = {
+      id, timestamp: Date.now(), workspaceId: wsId, overallOk, steps: historySteps,
+      sql: sql.trim() || undefined,
+      bundleName: bundleBlob ? bundleName : undefined,
+    };
     saveHistoryEntry(entry);
     lastEntry.current = entry;
-  }, []);
+  }, [sql, bundleBlob, bundleName]);
 
   const runAll = useCallback(async (wsIdOverride?: string) => {
     const wsId = (wsIdOverride ?? workspaceId).trim();
@@ -193,7 +217,7 @@ export function DeployToVpsCard({
 
     setBusy(dryOnly ? "dry" : "all");
     setSteps(INITIAL);
-    setLogs([]);
+    resetLogs();
     historyWritten.current = null;
     log("info", `── ${dryOnly ? "DRY RUN" : "DEPLOY"} start · workspace ${wsId} ──`);
 
@@ -221,7 +245,7 @@ export function DeployToVpsCard({
     log(ok1 && ok2 && ok3 ? "ok" : "error", `── DEPLOY ${ok1 && ok2 && ok3 ? "completed" : "failed"} ──`);
     if (ok1 && ok2 && ok3) toast.success("Deploy সম্পন্ন ✓");
     else toast.error("Deploy failed — retry individual steps below");
-  }, [workspaceId, dryOnly, sql, dryRun, runSql, runUpload, runVerify, persistHistory, log]);
+  }, [workspaceId, dryOnly, sql, dryRun, runSql, runUpload, runVerify, persistHistory, log, resetLogs]);
 
   const retryStep = useCallback(async (key: StepKey) => {
     const wsId = workspaceId.trim();
@@ -323,15 +347,25 @@ export function DeployToVpsCard({
       </div>
 
       {showLogs && (
-        <div ref={logRef} className="max-h-56 overflow-auto rounded-md border border-border bg-black/90 text-white p-3 font-mono text-[11px] space-y-0.5">
-          {logs.length === 0 && <div className="text-white/40">(waiting for events…)</div>}
-          {logs.map((e, i) => (
-            <div key={i} className={
-              e.level === "error" ? "text-red-400" : e.level === "ok" ? "text-emerald-300" : "text-white/80"
-            }>
-              <span className="text-white/40">{new Date(e.t).toISOString().slice(11, 23)}</span>{" "}{e.msg}
-            </div>
-          ))}
+        <div className="space-y-1.5">
+          <StreamStatusPill
+            status={streamStatus}
+            attempt={attempt}
+            onReconnect={reconnectNow}
+            canReconnect={wsUrl !== null}
+          />
+          <div ref={logRef} className="max-h-56 overflow-auto rounded-md border border-border bg-black/90 text-white p-3 font-mono text-[11px] space-y-0.5">
+            {logs.length === 0 && <div className="text-white/40">(waiting for events…)</div>}
+            {logs.map((e, i) => (
+              <div key={i} className={
+                e.level === "error" ? "text-red-400" : e.level === "ok" ? "text-emerald-300" : "text-white/80"
+              }>
+                <span className="text-white/40">{new Date(e.t).toISOString().slice(11, 23)}</span>
+                {e.source === "ws" && <span className="text-sky-400"> ⟳</span>}
+                {" "}{e.msg}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -388,6 +422,35 @@ export function DeployToVpsCard({
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+function StreamStatusPill({
+  status, attempt, onReconnect, canReconnect,
+}: { status: StreamStatus; attempt: number; onReconnect: () => void; canReconnect: boolean }) {
+  const dotCls =
+    status === "connected" ? "bg-emerald-500"
+    : status === "connecting" || status === "reconnecting" ? "bg-amber-500 animate-pulse"
+    : status === "interrupted" ? "bg-red-500"
+    : "bg-muted-foreground/60";
+  const boxCls =
+    status === "interrupted" ? "border-red-500/40 bg-red-500/10 text-red-600"
+    : status === "reconnecting" || status === "connecting" ? "border-amber-500/40 bg-amber-500/10 text-amber-700"
+    : status === "connected" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700"
+    : "border-border bg-muted/30 text-muted-foreground";
+  return (
+    <div className={`inline-flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] font-mono ${boxCls}`}>
+      <span className={`h-2 w-2 rounded-full ${dotCls}`} />
+      <span>{statusLabel(status, attempt)}</span>
+      {(status === "interrupted" || status === "reconnecting") && canReconnect && (
+        <button
+          onClick={onReconnect}
+          className="ml-1 rounded border border-current/40 px-1.5 py-0.5 text-[10px] hover:bg-white/10"
+        >
+          Reconnect now
+        </button>
+      )}
     </div>
   );
 }

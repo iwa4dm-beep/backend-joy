@@ -1,7 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { CheckCircle2, XCircle, Circle, Trash2, ChevronDown, ChevronRight, History, Download, GitCompare } from "lucide-react";
-import { loadHistory, clearHistory, downloadEntryAsJson, type HistoryEntry } from "@/lib/pluto/deploy-history";
+import { CheckCircle2, XCircle, Circle, Trash2, ChevronDown, ChevronRight, History, Download, GitCompare, RotateCw } from "lucide-react";
+import { loadHistory, clearHistory, downloadEntryAsJson, setRedeployPrefill, type HistoryEntry } from "@/lib/pluto/deploy-history";
 
 export const Route = createFileRoute("/dashboard/deployment-history")({
   head: () => ({
@@ -15,8 +15,14 @@ export const Route = createFileRoute("/dashboard/deployment-history")({
 });
 
 function DeploymentHistoryPage() {
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const redeploy = (e: HistoryEntry) => {
+    setRedeployPrefill({ workspaceId: e.workspaceId, sql: e.sql, bundleName: e.bundleName });
+    navigate({ to: "/dashboard/auto-connect" });
+  };
 
   useEffect(() => {
     const refresh = () => setEntries(loadHistory());
@@ -96,6 +102,14 @@ function DeploymentHistoryPage() {
                         verify?.state ?? "—"
                       )}
                     </div>
+                  </button>
+                  <button
+                    onClick={() => redeploy(e)}
+                    className="px-3 border-l border-border hover:bg-accent flex items-center gap-1.5 text-xs font-medium"
+                    title="Start a new deployment with the same SQL/workspace"
+                    aria-label="Redeploy"
+                  >
+                    <RotateCw className="h-4 w-4" /> Redeploy
                   </button>
                   <button
                     onClick={() => downloadEntryAsJson(e)}
