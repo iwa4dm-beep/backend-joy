@@ -185,3 +185,67 @@ function Badge({ tone, children }: { tone: "amber" | "emerald" | "muted"; childr
       : "bg-muted text-muted-foreground border-border";
   return <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>{children}</span>;
 }
+
+function TimingVariance({ left, right }: { left: HistoryStep | null; right: HistoryStep | null }) {
+  const l = left?.debug?.latencyMs ?? null;
+  const r = right?.debug?.latencyMs ?? null;
+  if (l === null || r === null) return null;
+  const max = Math.max(l, r, 1);
+  const delta = r - l;
+  const pct = l > 0 ? ((r - l) / l) * 100 : null;
+  const tone = Math.abs(delta) > 500 ? "text-amber-600" : Math.abs(delta) > 100 ? "text-amber-500" : "text-muted-foreground";
+  return (
+    <div className="border-t border-border px-3 py-2 space-y-1 text-[11px]">
+      <div className="flex items-center gap-2 font-medium">
+        <Timer className="h-3.5 w-3.5" /> Timing variance
+        <span className={`ml-auto font-mono ${tone}`}>
+          {delta > 0 ? "+" : ""}{delta}ms{pct !== null && ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)`}
+        </span>
+      </div>
+      <TimingBar label="left" ms={l} max={max} color="bg-sky-500/70" />
+      <TimingBar label="right" ms={r} max={max} color="bg-violet-500/70" />
+    </div>
+  );
+}
+
+function TimingBar({ label, ms, max, color }: { label: string; ms: number; max: number; color: string }) {
+  const w = Math.max(2, (ms / max) * 100);
+  return (
+    <div className="flex items-center gap-2 font-mono">
+      <span className="w-10 text-muted-foreground">{label}</span>
+      <div className="flex-1 h-2 rounded bg-muted overflow-hidden">
+        <div className={`h-full ${color}`} style={{ width: `${w}%` }} />
+      </div>
+      <span className="w-16 text-right">{ms}ms</span>
+    </div>
+  );
+}
+
+function BodyDiff({ title, left, right }: { title: string; left: string; right: string }) {
+  const lines = useMemo(() => diffLines(left, right), [left, right]);
+  const { add, del } = useMemo(() => diffCounts(lines), [lines]);
+  return (
+    <div className="rounded-md border border-border bg-background/60">
+      <div className="flex items-center gap-2 px-2 py-1.5 border-b border-border text-[11px] font-medium">
+        <span>{title}</span>
+        <span className="ml-auto font-mono">
+          <span className="text-emerald-600">+{add}</span>{" "}
+          <span className="text-red-500">-{del}</span>
+        </span>
+      </div>
+      <pre className="max-h-72 overflow-auto p-2 text-[11px] font-mono leading-snug">
+        {lines.map((ln: DiffLine, i) => {
+          const cls = ln.type === "add" ? "bg-emerald-500/10 text-emerald-700"
+            : ln.type === "del" ? "bg-red-500/10 text-red-600"
+            : "text-muted-foreground";
+          const marker = ln.type === "add" ? "+" : ln.type === "del" ? "-" : " ";
+          return (
+            <div key={i} className={`whitespace-pre-wrap break-all px-1 ${cls}`}>
+              <span className="select-none opacity-60">{marker} </span>{ln.text}
+            </div>
+          );
+        })}
+      </pre>
+    </div>
+  );
+}
