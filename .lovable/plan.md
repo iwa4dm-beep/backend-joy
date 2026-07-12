@@ -1,119 +1,75 @@
-# Auto-Connect Studio — Phase 3 Enhancements
+# VPS Full-Connect Plan — Auto-Connect Studio ↔ api.timescard.cloud
 
-Five focused additions to `/auto-connect`, keeping the existing 6-step wizard intact.
+লক্ষ্য: ব্যবহারকারী Auto-Connect Studio-তে project দিলে সেটি automatic ভাবে VPS-এ deploy হবে, workspace + admin user auto-provision হবে, এবং সব file/data VPS-এ persist হবে।
 
----
-
-## 1. Impact Summary + Explicit Acknowledgement (Dry-Run)
-
-**Files**
-- `src/lib/autoconnect/impact-analyzer.ts` (new)
-- `src/components/autoconnect/ImpactSummary.tsx` (new)
-- `src/components/autoconnect/DryRunPreview.tsx` (edit)
-
-**What it computes** from the already-parsed `SqlStatement[]`:
-- Tables created / altered / dropped (counts + names)
-- Columns added / dropped / type-changed
-- Indexes / constraints / FKs added or dropped
-- RLS policies added/dropped, `GRANT` / `REVOKE` on which roles
-- Estimated affected rows: `0` for `CREATE`, `unknown` for `ALTER/DROP` on existing tables — flagged red
-- Destructive flags: `DROP`, `TRUNCATE`, `ALTER … DROP COLUMN`, `ALTER … TYPE` (data loss risk)
-
-**UI**
-- Panel above statement list: tiles for Tables / Columns / Policies / Grants / Destructive-ops.
-- "I understand the impact" checkbox — **required** when destructive count > 0.
-- Apply button disabled until (a) no destructive ops, or (b) checkbox ticked AND typed confirmation `APPLY`.
+## বর্তমান অবস্থা (সংক্ষেপে)
+- ✅ Frontend ↔ VPS proxy কাজ করছে (`/api/pluto/*` → `https://api.timescard.cloud`)
+- ✅ VPS healthy (Postgres, S3, JWT সব OK)
+- ❌ Auto-Connect শুধু ZIP তৈরি করে — VPS-এ push হয় না
+- ❌ Workspace + admin user auto-provision নেই
+- ❌ File/asset upload VPS storage-এ যায় না
 
 ---
 
-## 2. Snapshot Safety: Docker Volumes + Configs
+## Phase 1 — Auth ও Base Connection Layer (foundation)
+1. `src/lib/pluto/vps-client.ts` তৈরি: `apikey` + `Bearer` header সহ typed fetch wrapper (service-role এবং user-token দুই mode)।
+2. Service-role key `PLUTO_SERVICE_ROLE_KEY` secret হিসেবে সংরক্ষণ (server-only)।
+3. Server function `checkVpsHealth()` — `/livez`, `/readyz`, `/health/deps` একসাথে probe করে UI-তে live status দেখাবে।
 
-**Files**
-- `src/lib/autoconnect/restore-pack.ts` (edit — expand `apply.sh` / `rollback.sh`)
-- `pluto-backend/deploy/backup/snapshot-volumes.sh` (new, referenced by generated pack)
+## Phase 2 — Workspace + Admin User Auto-Provision
+1. Server function `provisionWorkspace({ projectName, adminEmail })`:
+   - `POST /admin/v1/workspaces` — workspace তৈরি
+   - `POST /auth/v1/admin/users` — auto email + generated password সহ admin user
+   - `POST /admin/v1/workspaces/:id/members` — admin role assign
+   - Generated credentials encrypted করে DB-তে সংরক্ষণ + একবার UI-তে দেখানো
+2. Auto-Connect wizard-এ নতুন step "Workspace Provision" যোগ (project name → auto email/password display)।
 
-**apply.sh additions** (runs before `psql`):
-```
-SNAP_DIR=/var/backups/pluto-autoconnect/<jobId>
-# 1. pg_dump (already exists)
-# 2. Docker volume snapshot
-for v in $(docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' pluto-pg pluto-api); do
-  docker run --rm -v $v:/src -v $SNAP_DIR:/dst alpine \
-    tar czf /dst/vol-$v.tgz -C /src .
-done
-# 3. Config snapshot
-tar czf $SNAP_DIR/configs.tgz /etc/pluto /etc/pluto-autoconnect.env docker-compose.yml
-sha256sum $SNAP_DIR/* > $SNAP_DIR/SHA256SUMS
-```
+## Phase 3 — Direct VPS Deployment (ZIP → API push)
+1. `src/lib/autoconnect/vps-deployer.ts`:
+   - Migration SQL → `POST /admin/v1/migrations` (dry-run first, তারপর apply)
+   - Static asset/file → `POST /storage/v1/object/{bucket}/{path}` (multipart)
+   - Progress SSE consume করে UI progress bar-এ দেখাবে
+2. Auto-Connect Studio-তে "Deploy to VPS" button যোগ (existing "Download ZIP" এর পাশে)।
+3. Rollback endpoint `POST /admin/v1/migrations/:version/rollback` UI থেকে trigger।
 
-**rollback.sh**: stop containers → `psql` restore from `pg_dump` → untar each `vol-*.tgz` back into the volume (`docker run --rm -v $v:/dst … tar xzf …`) → restore configs → start containers → health-check.
+## Phase 4 — File/Folder Sync ("লেনদেন")
+1. Auto-Connect-এ upload হওয়া প্রতিটি file VPS `pluto_storage` bucket-এ mirror।
+2. Manifest table `project_assets` (VPS-side) — file path, SHA256, size, uploaded_by track।
+3. Studio dashboard-এ "Synced with VPS" badge (green/red) প্রতিটি file-এ।
 
-Manifest entry `snapshot.json` records volumes, config paths, checksums, timestamps so the rollback script can verify integrity before touching anything.
+## Phase 5 — Verification ও Observability
+1. Post-deploy smoke: `/admin/v1/migrations/last-boot`, `/health/deps`, tables list check।
+2. Audit log stream: `/admin/v1/logs?workspace_id=…` — Studio-তে live tail।
+3. E2E test (`e2e/vps-full-flow.spec.ts`): project create → provision → deploy → verify tables/storage → rollback।
 
----
-
-## 3. Rollback Log Viewer in `/auto-connect`
-
-**Files**
-- `src/lib/autoconnect/rollback-log.functions.ts` (new — `getRollbackLog(jobId)`, `listRollbackJobs()`)
-- `src/components/autoconnect/RollbackLogViewer.tsx` (new)
-- `src/routes/auto-connect.tsx` (edit — new tab "Rollback Logs")
-
-**Log format** written by `apply.sh` to `/var/log/pluto-autoconnect/<jobId>.jsonl`:
-```
-{"ts":"...","step":"snapshot_db","status":"ok","durationMs":812}
-{"ts":"...","step":"apply_sql","status":"fail","stmtIndex":7,"sql":"...","error":"..."}
-{"ts":"...","step":"rollback","status":"ok"}
-```
-
-Server function tails the file via SSH-less local read (assumes VPS has the app running; for MVP the log ships back inside the downloaded ZIP under `logs/<jobId>.jsonl` and the viewer parses uploaded logs).
-
-**Viewer UI**: timeline of steps, expandable failing step showing the offending SQL, error text, and a "Copy rollback command" button.
+## Phase 6 — Failure Handling
+- Timeout 30s + retry with exponential backoff (`retry-backoff.ts` already exists)
+- Deploy failure → auto rollback trigger + user-facing error banner
+- Credential leak protection: password শুধু একবার দেখানো, তারপর mask
 
 ---
 
-## 4. End-to-End Test Mode (Placeholder DB)
+## Technical Details
 
-**Files**
-- `src/lib/autoconnect/e2e-runner.functions.ts` (new)
-- `src/components/autoconnect/E2ETestPanel.tsx` (new)
-- `src/routes/auto-connect.tsx` (edit — "Test Mode" toggle in header)
+**নতুন files:**
+- `src/lib/pluto/vps-client.ts` — typed VPS API client
+- `src/lib/autoconnect/vps-deployer.ts` — ZIP → API push logic
+- `src/lib/autoconnect/workspace-provisioner.functions.ts` — server fn
+- `src/routes/dashboard.vps-status.tsx` — health + audit dashboard
+- `e2e/vps-full-flow.spec.ts`
 
-**How it works**
-- Server fn spins up an in-memory PGlite instance (`@electric-sql/pglite`) per session — no real DB touched.
-- Runs the generated migration SQL against PGlite → captures output.
-- Simulates failure at a chosen statement index (user picks from dropdown) to test rollback.
-- Records per-step results (`dry-run`, `apply`, `induced-fail`, `rollback`) and shows pass/fail badges.
+**Modified files:**
+- `src/routes/dashboard.auto-connect.tsx` — Deploy button + Provision step
+- `src/components/pluto/Sidebar.tsx` — "VPS Status" menu item
+- `src/routes/api/pluto.$.ts` — already OK
 
-Add-package: `bun add @electric-sql/pglite` (WASM, Worker-safe).
+**Secrets:**
+- `PLUTO_SERVICE_ROLE_KEY` (add via `add_secret`)
+- `PLUTO_UPSTREAM_URL` (already set)
 
----
-
-## 5. ZIP Integrity Verification on Upload
-
-**Files**
-- `src/lib/autoconnect/zip-verify.ts` (new)
-- `src/lib/autoconnect/analyzer.ts` (edit — call verifier first)
-- `src/components/autoconnect/UploadStep.tsx` (edit — show verification panel)
-
-**Flow**
-1. On ZIP upload, look for `manifest.json` + `SHA256SUMS` at the root (produced by our backup pipeline / bundler).
-2. If present: for every entry, recompute SHA-256 via `crypto.subtle.digest('SHA-256', bytes)` and compare.
-3. Report table: file path, expected hash, actual hash, ✓/✗. Any mismatch blocks continuation.
-4. If manifest is missing (user uploaded a raw project ZIP), show a warning banner and let them continue — verification just skipped, not failed.
-
-Also emit `manifest.json` + `SHA256SUMS` in `bundler.ts` for every artifact we generate so downloaded packs are self-verifying.
+**Estimate:** ~6 phases, incremental — Phase 1-2 সবচেয়ে জরুরি (foundation), Phase 3 core value, Phase 4-6 polish।
 
 ---
 
-## Stepper After Changes
-```
-Upload (+Verify) → Analyze → Structure Report → AI Plan
-  → DB Wizard → Migrations (Dry-Run + Impact + Ack)
-  → Wire APIs → Download (Restore Pack w/ Volume Snapshots)
-[Header tabs] Test Mode · Rollback Logs
-```
-
-## Non-Goals
-- No live SSH into the VPS from the browser — logs come via uploaded ZIP or a future agent.
-- No editing of generated SQL in-browser (stays read-only with the ack flow).
+## কোথা থেকে শুরু করব?
+প্রথমে Phase 1 + 2 (auth layer + workspace provisioning) implement করব, কারণ এই দুটি ছাড়া deploy step কাজ করবে না। আপনি approve করলে শুরু করছি।
