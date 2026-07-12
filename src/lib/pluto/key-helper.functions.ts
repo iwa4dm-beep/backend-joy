@@ -88,7 +88,6 @@ export const mintAdminJwt = createServerFn({ method: "POST" })
       iss: data.issuer ?? "pluto-key-helper",
       iat: now,
       exp,
-      ...(data.extraClaims ?? {}),
     };
     const h = b64urlEncode(JSON.stringify(header));
     const p = b64urlEncode(JSON.stringify(payload));
