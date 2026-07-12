@@ -309,10 +309,10 @@ const DeployAllInput = z.object({
   ensureInfra: z.boolean().default(true),
 });
 
-export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "activate-service" | "health-check";
+export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
 export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
-export type DeployAllResult = { ok: boolean; workspaceId: string; totalMs: number; steps: DeployStepLog[]; liveUrls?: { functionsHealth: string; bootstrapInvoke: string } };
+export type DeployAllResult = { ok: boolean; workspaceId: string; totalMs: number; steps: DeployStepLog[]; liveUrls?: { functionsHealth: string; bootstrapInvoke: string; servedSite?: string } };
 
 function nowIso(): string { return new Date().toISOString(); }
 
