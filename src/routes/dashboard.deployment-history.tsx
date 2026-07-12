@@ -1,7 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { CheckCircle2, XCircle, Circle, Trash2, ChevronDown, ChevronRight, History, Download, GitCompare } from "lucide-react";
-import { loadHistory, clearHistory, downloadEntryAsJson, type HistoryEntry } from "@/lib/pluto/deploy-history";
+import { CheckCircle2, XCircle, Circle, Trash2, ChevronDown, ChevronRight, History, Download, GitCompare, RotateCw } from "lucide-react";
+import { loadHistory, clearHistory, downloadEntryAsJson, setRedeployPrefill, type HistoryEntry } from "@/lib/pluto/deploy-history";
 
 export const Route = createFileRoute("/dashboard/deployment-history")({
   head: () => ({
