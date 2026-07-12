@@ -104,6 +104,14 @@ function DeploymentHistoryPage() {
                     </div>
                   </button>
                   <button
+                    onClick={() => redeploy(e)}
+                    className="px-3 border-l border-border hover:bg-accent flex items-center gap-1.5 text-xs font-medium"
+                    title="Start a new deployment with the same SQL/workspace"
+                    aria-label="Redeploy"
+                  >
+                    <RotateCw className="h-4 w-4" /> Redeploy
+                  </button>
+                  <button
                     onClick={() => downloadEntryAsJson(e)}
                     className="px-3 border-l border-border hover:bg-accent flex items-center"
                     title="Download this deployment as JSON"
