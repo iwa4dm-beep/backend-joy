@@ -496,28 +496,41 @@ export const deployAll = createServerFn({ method: "POST" })
     });
     steps.push(activateStep);
 
-    // Step 5: health check — probe public functions health + invoke bootstrap.
+    // Step 5: health check — probe public functions health + invoke bootstrap
+    //         + (if configured) the served frontend at PLUTO_SERVED_SITE_URL.
     //         Non-fatal for overall deploy: reports upstream runtime status
     //         even when the sandbox worker is not yet installed on the VPS.
-    const healthStep = await withRetry("health-check", "Health check (functions runtime + bootstrap invoke)", data.maxRetries, async () => {
+    const servedSiteUrl = (process.env.PLUTO_SERVED_SITE_URL ?? "").replace(/\/+$/, "");
+    const healthStep = await withRetry("health-check", "Health check (functions runtime + bootstrap + served site)", data.maxRetries, async () => {
       const healthUrl = `${base}/functions/v1/health`;
       const h = await rawFetch(healthUrl, "GET", { accept: "application/json" }, null, null, 10_000);
       const invokeUrl = `${base}/functions/v1/invoke/bootstrap`;
       const inv = await rawFetch(invokeUrl, "POST", { ...headers, "content-type": "application/json" }, "{}", "{}", 15_000);
+      let siteLine = "served site: (PLUTO_SERVED_SITE_URL not set)";
+      let siteResult: { status: number; url: string; snippet: string } | null = null;
+      if (servedSiteUrl) {
+        const s = await rawFetch(`${servedSiteUrl}/`, "GET", { accept: "text/html" }, null, null, 15_000);
+        siteResult = { status: s.status, url: `${servedSiteUrl}/`, snippet: s.text.slice(0, 240) };
+        siteLine = `served site: ${s.ok ? `✓ HTTP ${s.status}` : `✗ HTTP ${s.status}`} @ ${servedSiteUrl}`;
+      }
       const runtimeOk = h.ok;
       const invokeOk = inv.ok;
       const detail = [
         `runtime: ${runtimeOk ? `✓ HTTP ${h.status}` : `✗ HTTP ${h.status}`} (${h.text.slice(0, 120)})`,
         `bootstrap invoke: ${invokeOk ? `✓ HTTP ${inv.status}` : `✗ HTTP ${inv.status}`} (${inv.text.slice(0, 160)})`,
+        siteLine,
       ].join(" | ");
-      // Consider the step "ok" if the runtime endpoint is up. Invoke failure
-      // (e.g. missing sandbox-worker.mjs on the VPS host) is diagnostic, not
-      // a deploy-blocking regression from our side.
-      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) } } };
+      // Consider the step "ok" if the runtime endpoint is up. Invoke / served-site failure
+      // is diagnostic, not a deploy-blocking regression from our side.
+      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult } };
     });
     steps.push(healthStep);
 
-    const liveUrls = { functionsHealth: `${base}/functions/v1/health`, bootstrapInvoke: `${base}/functions/v1/invoke/bootstrap` };
+    const liveUrls = {
+      functionsHealth: `${base}/functions/v1/health`,
+      bootstrapInvoke: `${base}/functions/v1/invoke/bootstrap`,
+      ...(servedSiteUrl ? { servedSite: `${servedSiteUrl}/` } : {}),
+    };
     return { ok: steps.every(s => s.ok), workspaceId: data.workspaceId, totalMs: Date.now() - t0, steps, liveUrls };
   });
 
