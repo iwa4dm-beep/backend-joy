@@ -289,6 +289,9 @@ function DeployPage() {
             <Button size="sm" onClick={runFullDeploy} disabled={deployBusy !== null || !workspaceIdValid || !bundleFile}>
               <Rocket className="h-4 w-4 mr-2" /> Run full deploy
             </Button>
+            <Button size="sm" variant="outline" onClick={refreshPostHealth} disabled={deployBusy !== null || !workspaceIdValid}>
+              <Activity className="h-4 w-4 mr-2" /> Refresh health
+            </Button>
             {deployBusy && <span className="text-xs text-muted-foreground">running {deployBusy}…</span>}
           </div>
 
