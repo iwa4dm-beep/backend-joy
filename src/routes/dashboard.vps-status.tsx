@@ -107,6 +107,8 @@ function VpsStatusPage() {
           <div className="text-xs text-muted-foreground">
             Last checked: {new Date(data.checkedAt).toLocaleString()} • auto-refresh every 30s
           </div>
+
+          <WorkspaceProvisionCard />
         </>
       )}
     </div>
