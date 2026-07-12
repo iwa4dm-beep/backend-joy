@@ -95,7 +95,7 @@ function VpsStatusPage() {
                     </td>
                     <td className="px-4 py-2 text-muted-foreground">{p.latencyMs} ms</td>
                     <td className="px-4 py-2 text-xs text-muted-foreground truncate max-w-xs">
-                      {p.error ?? (p.body ? JSON.stringify(p.body).slice(0, 80) : "—")}
+                      {p.error ?? p.body ?? "—"}
                     </td>
                   </tr>
                 ))}

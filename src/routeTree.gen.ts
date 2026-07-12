@@ -22,6 +22,7 @@ import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DocsSdkRouteImport } from './routes/docs.sdk'
 import { Route as DocsApiRouteImport } from './routes/docs.api'
 import { Route as DashboardWorkspacesRouteImport } from './routes/dashboard.workspaces'
+import { Route as DashboardVpsStatusRouteImport } from './routes/dashboard.vps-status'
 import { Route as DashboardVerifyRouteImport } from './routes/dashboard.verify'
 import { Route as DashboardVectorRouteImport } from './routes/dashboard.vector'
 import { Route as DashboardUsersRouteImport } from './routes/dashboard.users'
@@ -162,6 +163,11 @@ const DocsApiRoute = DocsApiRouteImport.update({
 const DashboardWorkspacesRoute = DashboardWorkspacesRouteImport.update({
   id: '/workspaces',
   path: '/workspaces',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardVpsStatusRoute = DashboardVpsStatusRouteImport.update({
+  id: '/vps-status',
+  path: '/vps-status',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardVerifyRoute = DashboardVerifyRouteImport.update({
@@ -631,6 +637,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/vector': typeof DashboardVectorRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
+  '/dashboard/vps-status': typeof DashboardVpsStatusRoute
   '/dashboard/workspaces': typeof DashboardWorkspacesRoute
   '/docs/api': typeof DocsApiRoute
   '/docs/sdk': typeof DocsSdkRoute
@@ -721,6 +728,7 @@ export interface FileRoutesByTo {
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/vector': typeof DashboardVectorRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
+  '/dashboard/vps-status': typeof DashboardVpsStatusRoute
   '/dashboard/workspaces': typeof DashboardWorkspacesRoute
   '/docs/api': typeof DocsApiRoute
   '/docs/sdk': typeof DocsSdkRoute
@@ -813,6 +821,7 @@ export interface FileRoutesById {
   '/dashboard/users': typeof DashboardUsersRoute
   '/dashboard/vector': typeof DashboardVectorRoute
   '/dashboard/verify': typeof DashboardVerifyRoute
+  '/dashboard/vps-status': typeof DashboardVpsStatusRoute
   '/dashboard/workspaces': typeof DashboardWorkspacesRoute
   '/docs/api': typeof DocsApiRoute
   '/docs/sdk': typeof DocsSdkRoute
@@ -906,6 +915,7 @@ export interface FileRouteTypes {
     | '/dashboard/users'
     | '/dashboard/vector'
     | '/dashboard/verify'
+    | '/dashboard/vps-status'
     | '/dashboard/workspaces'
     | '/docs/api'
     | '/docs/sdk'
@@ -996,6 +1006,7 @@ export interface FileRouteTypes {
     | '/dashboard/users'
     | '/dashboard/vector'
     | '/dashboard/verify'
+    | '/dashboard/vps-status'
     | '/dashboard/workspaces'
     | '/docs/api'
     | '/docs/sdk'
@@ -1087,6 +1098,7 @@ export interface FileRouteTypes {
     | '/dashboard/users'
     | '/dashboard/vector'
     | '/dashboard/verify'
+    | '/dashboard/vps-status'
     | '/dashboard/workspaces'
     | '/docs/api'
     | '/docs/sdk'
@@ -1211,6 +1223,13 @@ declare module '@tanstack/react-router' {
       path: '/workspaces'
       fullPath: '/dashboard/workspaces'
       preLoaderRoute: typeof DashboardWorkspacesRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/vps-status': {
+      id: '/dashboard/vps-status'
+      path: '/vps-status'
+      fullPath: '/dashboard/vps-status'
+      preLoaderRoute: typeof DashboardVpsStatusRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/verify': {
@@ -1857,6 +1876,7 @@ interface DashboardRouteChildren {
   DashboardUsersRoute: typeof DashboardUsersRoute
   DashboardVectorRoute: typeof DashboardVectorRoute
   DashboardVerifyRoute: typeof DashboardVerifyRoute
+  DashboardVpsStatusRoute: typeof DashboardVpsStatusRoute
   DashboardWorkspacesRoute: typeof DashboardWorkspacesRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
   DashboardAdminInviteRoute: typeof DashboardAdminInviteRoute
@@ -1927,6 +1947,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardUsersRoute: DashboardUsersRoute,
   DashboardVectorRoute: DashboardVectorRoute,
   DashboardVerifyRoute: DashboardVerifyRoute,
+  DashboardVpsStatusRoute: DashboardVpsStatusRoute,
   DashboardWorkspacesRoute: DashboardWorkspacesRoute,
   DashboardIndexRoute: DashboardIndexRoute,
   DashboardAdminInviteRoute: DashboardAdminInviteRoute,

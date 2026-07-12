@@ -8,7 +8,7 @@ export type VpsHealthProbe = {
   ok: boolean;
   status: number;
   latencyMs: number;
-  body?: unknown;
+  body?: string;
   error?: string;
 };
 
@@ -27,11 +27,11 @@ async function probe(base: string, path: string): Promise<VpsHealthProbe> {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(8_000),
     });
-    let body: unknown = null;
+    let body: string | undefined;
     try {
       const text = await res.text();
-      body = text ? JSON.parse(text) : null;
-    } catch { /* ignore parse */ }
+      body = text ? text.slice(0, 500) : undefined;
+    } catch { /* ignore */ }
     return { path, ok: res.ok, status: res.status, latencyMs: Date.now() - started, body };
   } catch (e) {
     return {
