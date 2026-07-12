@@ -28,7 +28,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck (fails on any new TS error project-wide)
         run: bun run typecheck
-      - name: Cancel-flow e2e (asserts exit code 4 + rollback in audit-report.json)
-        run: bunx vitest run src/lib/autoconnect/e2e-cancel.spec.ts
+      - name: Autoconnect e2e (cancel, SSE cancel-sql, audit bundle, checksum mismatch)
+        run: bunx vitest run src/lib/autoconnect/e2e-cancel.spec.ts src/lib/autoconnect/sse-cancel-sql.spec.ts src/lib/autoconnect/audit-bundle.spec.ts src/lib/autoconnect/verify-mismatch.spec.ts
       - name: Build
         run: bun run build
