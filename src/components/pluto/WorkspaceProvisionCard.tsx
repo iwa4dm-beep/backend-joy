@@ -10,10 +10,15 @@ type Result =
   | { ok: true; workspaceId: string; adminEmail: string; adminPassword: string; userId: string }
   | { ok: false; step: string; error: string; status: number };
 
-export function WorkspaceProvisionCard() {
+export function WorkspaceProvisionCard({
+  onProvisioned,
+}: {
+  onProvisioned?: (info: { workspaceId: string; adminEmail: string; autoDeploy: boolean }) => void;
+} = {}) {
   const provision = useServerFn(provisionWorkspace);
   const [projectName, setProjectName] = useState("");
   const [customEmail, setCustomEmail] = useState("");
+  const [autoDeploy, setAutoDeploy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [showPw, setShowPw] = useState(false);
@@ -32,8 +37,11 @@ export function WorkspaceProvisionCard() {
         },
       });
       setResult(r);
-      if (r.ok) toast.success("Workspace + admin user তৈরি হয়েছে ✓");
-      else toast.error(`Failed at ${r.step}: ${r.error}`);
+      if (r.ok) {
+        toast.success("Workspace + admin user তৈরি হয়েছে ✓");
+        onProvisioned?.({ workspaceId: r.workspaceId, adminEmail: r.adminEmail, autoDeploy });
+        if (autoDeploy) toast.info("Auto-deploy শুরু হচ্ছে…");
+      } else toast.error(`Failed at ${r.step}: ${r.error}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Provision failed");
     } finally {
@@ -90,6 +98,19 @@ export function WorkspaceProvisionCard() {
       )}
 
       {!result?.ok && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={autoDeploy}
+            onChange={(e) => setAutoDeploy(e.target.checked)}
+            disabled={busy}
+            className="h-3.5 w-3.5"
+          />
+          Provision-এর পর একই bundle দিয়ে Auto Deploy to VPS চালাও
+        </label>
+      )}
+
+      {!result?.ok && (
         <button
           onClick={run}
           disabled={busy || !projectName.trim()}
@@ -99,6 +120,7 @@ export function WorkspaceProvisionCard() {
           {busy ? "Provisioning…" : "Create workspace"}
         </button>
       )}
+
 
       {result && !result.ok && (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm flex gap-2">
