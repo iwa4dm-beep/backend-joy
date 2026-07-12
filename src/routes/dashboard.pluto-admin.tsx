@@ -110,16 +110,25 @@ function PlutoAdminPage() {
 
   async function loadProjects() {
     setLoading(true); setErr(null);
-    try { setProjects(await api<Project[]>(url, token, "/admin/v1/projects")); }
+    try {
+      const res = await api<Project[] | { workspaces: Project[] }>(url, token, "/admin/v1/workspaces");
+      setProjects(Array.isArray(res) ? res : (res.workspaces ?? []));
+    }
     catch (e: any) { setErr(e.message); }
     finally { setLoading(false); }
   }
   async function loadMembers(id: string) {
-    try { setMembers(await api<Member[]>(url, token, `/admin/v1/projects/${id}/members`)); }
+    try {
+      const res = await api<Member[] | { members: Member[] }>(url, token, `/admin/v1/workspaces/${id}/members`);
+      setMembers(Array.isArray(res) ? res : (res.members ?? []));
+    }
     catch (e: any) { setErr(e.message); }
   }
   async function loadKeys(id: string) {
-    try { setKeys(await api<ApiKey[]>(url, token, `/admin/v1/projects/${id}/keys`)); }
+    try {
+      const res = await api<ApiKey[] | { keys: ApiKey[] }>(url, token, `/admin/v1/workspaces/${id}/keys`);
+      setKeys(Array.isArray(res) ? res : (res.keys ?? []));
+    }
     catch (e: any) { setErr(e.message); }
   }
 
@@ -134,32 +143,32 @@ function PlutoAdminPage() {
   async function createProject() {
     if (!newProj.name || !newProj.slug) return;
     try {
-      const p = await api<Project>(url, token, "/admin/v1/projects", { method: "POST", body: JSON.stringify(newProj) });
+      const p = await api<Project>(url, token, "/admin/v1/workspaces", { method: "POST", body: JSON.stringify(newProj) });
       setProjects([p, ...projects]);
       setNewProj({ name: "", slug: "" });
     } catch (e: any) { setErr(e.message); }
   }
   async function deleteProject(id: string) {
-    if (!confirm("Delete project?")) return;
-    try { await api(url, token, `/admin/v1/projects/${id}`, { method: "DELETE" }); setProjects(projects.filter(p => p.id !== id)); }
+    if (!confirm("Delete workspace?")) return;
+    try { await api(url, token, `/admin/v1/workspaces/${id}`, { method: "DELETE" }); setProjects(projects.filter(p => p.id !== id)); }
     catch (e: any) { setErr(e.message); }
   }
   async function addMember() {
     if (!selected || !newMember.user_id) return;
     try {
-      await api(url, token, `/admin/v1/projects/${selected}/members`, { method: "POST", body: JSON.stringify(newMember) });
+      await api(url, token, `/admin/v1/workspaces/${selected}/members`, { method: "POST", body: JSON.stringify(newMember) });
       await loadMembers(selected); setNewMember({ user_id: "", role: "developer" });
     } catch (e: any) { setErr(e.message); }
   }
   async function removeMember(userId: string) {
     if (!selected) return;
-    try { await api(url, token, `/admin/v1/projects/${selected}/members/${userId}`, { method: "DELETE" }); await loadMembers(selected); }
+    try { await api(url, token, `/admin/v1/workspaces/${selected}/members/${userId}`, { method: "DELETE" }); await loadMembers(selected); }
     catch (e: any) { setErr(e.message); }
   }
   async function createKey() {
     if (!selected || !newKey.name) return;
     try {
-      const r = await api<ApiKey & { api_key: string }>(url, token, `/admin/v1/projects/${selected}/keys`, {
+      const r = await api<ApiKey & { api_key: string }>(url, token, `/admin/v1/workspaces/${selected}/keys`, {
         method: "POST", body: JSON.stringify(newKey),
       });
       setMinted(r.api_key); setNewKey({ name: "", role: "anon" }); await loadKeys(selected);
@@ -168,14 +177,14 @@ function PlutoAdminPage() {
   async function revokeKey(id: string) {
     if (!selected) return;
     if (!confirm("Revoke this API key? Clients using it will immediately fail.")) return;
-    try { await api(url, token, `/admin/v1/projects/${selected}/keys/${id}`, { method: "DELETE" }); await loadKeys(selected); }
+    try { await api(url, token, `/admin/v1/workspaces/${selected}/keys/${id}`, { method: "DELETE" }); await loadKeys(selected); }
     catch (e: any) { setErr(e.message); }
   }
   async function rotateKey(id: string) {
     if (!selected) return;
     if (!confirm("Rotate this key? The old key will be revoked and a replacement minted (shown once).")) return;
     try {
-      const r = await api<ApiKey & { api_key: string }>(url, token, `/admin/v1/projects/${selected}/keys/${id}/rotate`, { method: "POST" });
+      const r = await api<ApiKey & { api_key: string }>(url, token, `/admin/v1/workspaces/${selected}/keys/${id}/rotate`, { method: "POST" });
       setMinted(r.api_key); await loadKeys(selected);
     } catch (e: any) { setErr(e.message); }
   }
