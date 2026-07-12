@@ -109,7 +109,10 @@ export type AdminUpstreamConfig =
 
 export const getAdminUpstreamConfig = createServerFn({ method: "GET" })
   .handler(async (): Promise<AdminUpstreamConfig> => {
-    const url = getVpsBaseUrl();
+    // Return the same-origin proxy path so browsers never hit
+    // api.timescard.cloud directly (avoids CORS + preview fetch-proxy
+    // interference). The proxy forwards Authorization / apikey headers.
+    const url = "/api/pluto";
     const configured = getServiceRoleKey() ?? "";
     if (configured && configured.split(".").length === 3) {
       let exp: number | null = null;
