@@ -425,3 +425,32 @@ export function DeployToVpsCard({
     </div>
   );
 }
+
+function StreamStatusPill({
+  status, attempt, onReconnect, canReconnect,
+}: { status: StreamStatus; attempt: number; onReconnect: () => void; canReconnect: boolean }) {
+  const dotCls =
+    status === "connected" ? "bg-emerald-500"
+    : status === "connecting" || status === "reconnecting" ? "bg-amber-500 animate-pulse"
+    : status === "interrupted" ? "bg-red-500"
+    : "bg-muted-foreground/60";
+  const boxCls =
+    status === "interrupted" ? "border-red-500/40 bg-red-500/10 text-red-600"
+    : status === "reconnecting" || status === "connecting" ? "border-amber-500/40 bg-amber-500/10 text-amber-700"
+    : status === "connected" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700"
+    : "border-border bg-muted/30 text-muted-foreground";
+  return (
+    <div className={`inline-flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] font-mono ${boxCls}`}>
+      <span className={`h-2 w-2 rounded-full ${dotCls}`} />
+      <span>{statusLabel(status, attempt)}</span>
+      {(status === "interrupted" || status === "reconnecting") && canReconnect && (
+        <button
+          onClick={onReconnect}
+          className="ml-1 rounded border border-current/40 px-1.5 py-0.5 text-[10px] hover:bg-white/10"
+        >
+          Reconnect now
+        </button>
+      )}
+    </div>
+  );
+}
