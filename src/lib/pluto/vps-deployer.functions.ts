@@ -373,7 +373,7 @@ export const deployAll = createServerFn({ method: "POST" })
       let parsed: { id?: string } = {}; try { parsed = JSON.parse(created.text); } catch { /* ignore */ }
       const id = parsed.id ?? "";
       if (!id) return { ok: false, detail: "upstream returned no migration id", debug: created.debug, result: null };
-      const applied = await rawFetch(`${base}/admin/v1/migrations/${encodeURIComponent(id)}/apply`, "POST", headers, null, null, 60_000);
+      const applied = await rawFetch(`${base}/admin/v1/migrations/${encodeURIComponent(id)}/apply`, "POST", headers, "{}", "{}", 60_000);
       if (!applied.ok) return { ok: false, detail: `apply HTTP ${applied.status}: ${applied.text.slice(0, 200)}`, debug: applied.debug, result: { migrationId: id } };
       return { ok: true, detail: `migration ${id} applied`, debug: applied.debug, result: { migrationId: id, applyBody: applied.text.slice(0, 500) } };
     });
