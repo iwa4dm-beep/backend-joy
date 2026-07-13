@@ -370,6 +370,81 @@ export function AiDeployPlannerCard({ workspaceId, bundleFile, bundleSql }: Prop
           </div>
         </div>
 
+        {/* Environment presets */}
+        <div className="border rounded-md p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Server className="h-4 w-4" />
+            <span className="font-medium text-sm">Environment presets</span>
+            <span className="text-xs text-muted-foreground">({presets.length} saved · reusable across workspaces)</span>
+          </div>
+          <div className="flex gap-2 flex-wrap items-end">
+            <div className="grid gap-1">
+              <Label htmlFor="preset-name" className="text-xs">Preset name</Label>
+              <Input id="preset-name" value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="e.g. prod-hostinger-01" className="h-8 w-56" />
+            </div>
+            <Button size="sm" variant="outline" onClick={doSavePreset} disabled={!presetName.trim() || !domain.trim()}>
+              Save current as preset
+            </Button>
+          </div>
+          {presets.length > 0 && (
+            <ul className="grid gap-1 text-xs">
+              {presets.map((p) => (
+                <li key={p.id} className="flex items-center gap-2 border rounded p-1.5">
+                  <div className="flex-1">
+                    <b>{p.name}</b>
+                    <span className="ml-2 text-muted-foreground">
+                      <code>{p.domain}</code>{p.vpsIp && <> · <code>{p.vpsIp}</code></>}
+                      {p.workspaceId && <> · ws <code>{p.workspaceId}</code></>}
+                    </span>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => loadPreset(p)}>Load</Button>
+                  <Button size="sm" variant="ghost" onClick={() => removePreset(p.id)}><Trash2 className="h-3 w-3" /></Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Hostinger DNS auto-filled guide */}
+        {domain.trim() && (
+          <div className="border rounded-md p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Wifi className="h-4 w-4" />
+              <span className="font-medium text-sm">Hostinger DNS records (auto-filled)</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              In Hostinger hPanel → <b>Domains → {domain.trim()} → DNS / Nameservers → Manage DNS records</b>,
+              add the following A record. TTL 3600 is fine. Do NOT enable Cloudflare proxy before TLS is issued.
+            </p>
+            <div className="overflow-auto">
+              <table className="text-xs w-full">
+                <thead className="text-muted-foreground">
+                  <tr className="text-left">
+                    <th className="px-2 py-1">Type</th><th className="px-2 py-1">Name</th>
+                    <th className="px-2 py-1">Points to</th><th className="px-2 py-1">TTL</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t">
+                    <td className="px-2 py-1"><Badge variant="outline">A</Badge></td>
+                    <td className="px-2 py-1"><code>app</code></td>
+                    <td className="px-2 py-1"><code>{vpsIp.trim() || "<enter VPS IP above>"}</code></td>
+                    <td className="px-2 py-1"><code>3600</code></td>
+                    <td className="px-2 py-1">
+                      <CopyBtn text={`A\tapp\t${vpsIp.trim() || "<VPS_IP>"}\t3600`} label="Copy row" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Verify after ~2 min: <code>dig +short app.{domain.trim()}</code> should return{" "}
+              <code>{vpsIp.trim() || "<VPS_IP>"}</code>. Then run the port check below before Certbot.
+            </p>
+          </div>
+        )}
+
+
         {/* Secrets wizard */}
         <div className="border rounded-md p-3 space-y-2">
           <div className="flex items-center gap-2">
