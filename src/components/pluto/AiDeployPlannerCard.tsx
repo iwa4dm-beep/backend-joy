@@ -696,6 +696,57 @@ export function AiDeployPlannerCard({ workspaceId, bundleFile, bundleSql }: Prop
           </div>
         )}
 
+        {/* Ports 80/443 result + tips */}
+        {ports && (
+          <div className="border rounded-md p-3 text-xs space-y-2">
+            <div className="flex items-center gap-2">
+              <Badge variant={ports.ok ? "secondary" : "destructive"}>
+                {ports.ok ? "ports 80 & 443 reachable" : "ports blocked"}
+              </Badge>
+              <span className="text-muted-foreground">pre-Certbot check</span>
+            </div>
+            <ul className="grid gap-1">
+              {ports.probes.map((p) => (
+                <li key={p.port} className="flex items-start gap-2">
+                  {p.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600 mt-0.5" /> : <XCircle className="h-3.5 w-3.5 text-destructive mt-0.5" />}
+                  <div><b>Port {p.port}</b> — <span className="text-muted-foreground">{p.detail}</span></div>
+                </li>
+              ))}
+            </ul>
+            {ports.tips.length > 0 && (
+              <div className="rounded bg-muted p-2 space-y-1">
+                <div className="font-medium">Fix tips</div>
+                <ul className="list-disc pl-5 space-y-0.5">
+                  {ports.tips.map((t, i) => <li key={i}>{t}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Consolidated full verification report */}
+        {verification && (
+          <div className="border rounded-md p-3 text-xs space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant={verification.ok ? "secondary" : "destructive"}>
+                {verification.ok ? "full verification PASS" : "full verification FAIL"}
+              </Badge>
+              <span className="text-muted-foreground">{verification.host} · {new Date(verification.checkedAt).toLocaleTimeString()}</span>
+              <Button size="sm" variant="ghost" className="ml-auto" onClick={doFullVerify} disabled={busy !== null}>
+                {busy === "verify" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Retry"}
+              </Button>
+            </div>
+            <ul className="grid gap-1">
+              {verification.probes.map((p, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  {p.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600 mt-0.5" /> : <XCircle className="h-3.5 w-3.5 text-destructive mt-0.5" />}
+                  <div><b>{p.name}</b> — <span className="text-muted-foreground">{p.detail}</span></div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Post-install health results */}
         {postHealth && (
           <div className="border rounded-md p-3 text-xs space-y-2">
