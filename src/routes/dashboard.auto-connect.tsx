@@ -13,6 +13,7 @@ import { validateDbConnection } from "@/lib/autoconnect/db-wizard.functions";
 import { buildStructureReport, groupFiles } from "@/lib/autoconnect/structure-report";
 import { verifyZip, type VerifyResult } from "@/lib/autoconnect/zip-verify";
 import { parseRollbackLog, type LogSummary } from "@/lib/autoconnect/rollback-log";
+import { loadRepoAsFile } from "@/lib/autoconnect/github-loader";
 import { runE2E, type E2EReport } from "@/lib/autoconnect/e2e-runner";
 import { buildAuditJson, buildAuditHtml, buildAuditBundle, type AuditInput, type CancellationRecord } from "@/lib/autoconnect/audit-report";
 import type { AnalyzeResult, DbConfig, IntegrationPlan, SqlStatement } from "@/lib/autoconnect/types";
