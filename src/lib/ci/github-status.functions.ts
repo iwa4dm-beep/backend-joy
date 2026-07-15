@@ -11,6 +11,14 @@ import { createServerFn } from "@tanstack/react-start";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/github";
 
+// Per-instance stale-while-revalidate cache. Keyed by owner/repo/workflow/perPage.
+// TTL = 30s fresh, 5min max stale served while background refresh runs.
+// Reduces GitHub API load when many PR views refresh /dashboard/ci-status.
+type CacheEntry = { data: CiStatusResponse; fetchedAt: number; refreshing?: Promise<void> };
+const CI_CACHE = new Map<string, CacheEntry>();
+const FRESH_MS = 30_000;
+const MAX_STALE_MS = 5 * 60_000;
+
 export type WorkflowRunSummary = {
   id: number;
   name: string;
