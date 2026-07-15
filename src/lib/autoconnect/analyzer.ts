@@ -117,16 +117,59 @@ function parseModel(php: string, file: string) {
 }
 
 // ── Frontend API call site scanner ───────────────────────────────────────
+// Matches axios / fetch AND common Supabase JS client patterns
+// (supabase.from, .rpc, .auth.*, .storage.from, .functions.invoke).
 function scanApiCalls(file: string, src: string) {
   const hits: { file: string; snippet: string; line: number }[] = [];
-  const re = /(axios\.(?:get|post|put|patch|delete)|fetch)\s*\(\s*(['"`])([^'"`]+)\2/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src)) !== null) {
-    const before = src.slice(0, m.index);
-    const line = before.split("\n").length;
-    hits.push({ file, snippet: m[0].slice(0, 160), line });
+  const patterns: RegExp[] = [
+    /(axios\.(?:get|post|put|patch|delete)|fetch)\s*\(\s*(['"`])([^'"`]+)\2/g,
+    /\bsupabase\s*\.\s*(?:from|rpc|storage\.from|functions\.invoke)\s*\(\s*(['"`])([^'"`]+)\1/g,
+    /\bsupabase\s*\.\s*auth\s*\.\s*(\w+)\s*\(/g,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      const before = src.slice(0, m.index);
+      const line = before.split("\n").length;
+      hits.push({ file, snippet: m[0].slice(0, 160), line });
+    }
   }
   return hits;
+}
+
+// ── Supabase SQL migration parser (regex-only, static) ───────────────────
+function parseSupabaseMigration(sql: string): TableDef[] {
+  const tables: TableDef[] = [];
+  const createRe =
+    /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?"?(\w+)"?\s*\(([\s\S]*?)\)\s*;/gi;
+  let m: RegExpExecArray | null;
+  while ((m = createRe.exec(sql)) !== null) {
+    const name = m[1];
+    const body = m[2];
+    const cols: Column[] = [];
+    const lines = body.split(/,\s*\n/).map((l) => l.trim()).filter(Boolean);
+    for (const raw of lines) {
+      const line = raw.replace(/,+$/, "").trim();
+      if (!line) continue;
+      if (/^(primary\s+key|foreign\s+key|unique|check|constraint)\b/i.test(line)) continue;
+      const colM = line.match(/^"?(\w+)"?\s+([a-zA-Z][\w \[\]()]*?)(\s|$)/);
+      if (!colM) continue;
+      const col: Column = {
+        name: colM[1],
+        type: colM[2].trim().toLowerCase(),
+        nullable: !/not\s+null/i.test(line),
+        primary: /\bprimary\s+key\b/i.test(line),
+        unique: /\bunique\b/i.test(line) && !/references/i.test(line),
+      };
+      const def = line.match(/default\s+([^\s,]+(?:\([^)]*\))?)/i);
+      if (def) col.default = def[1];
+      const ref = line.match(/references\s+(?:public\.)?"?(\w+)"?\s*\(\s*"?(\w+)"?\s*\)/i);
+      if (ref) col.references = { table: ref[1], column: ref[2] };
+      cols.push(col);
+    }
+    if (cols.length) tables.push({ name, columns: cols });
+  }
+  return tables;
 }
 
 // ── Main entry ───────────────────────────────────────────────────────────
@@ -162,7 +205,7 @@ export async function analyzeZip(
     const lower = entry.name.toLowerCase();
 
     // Read only reasonable text files
-    const isText = /\.(php|ts|tsx|js|jsx|json|env|md|yml|yaml|blade\.php)$/.test(lower);
+    const isText = /\.(php|ts|tsx|js|jsx|json|env|md|yml|yaml|sql|blade\.php)$/.test(lower);
     let used = false;
     let usedReason: string | undefined;
     const markUsed = (r: string) => { used = true; usedReason = usedReason ?? r; };
@@ -187,6 +230,13 @@ export async function analyzeZip(
     if (/database\/migrations\/.+\.php$/.test(lower)) {
       result.backend.rawMigrationFiles += 1;
       result.backend.tables.push(...parseMigration(text));
+    }
+    // Supabase / Lovable Cloud migrations (`supabase/migrations/*.sql`)
+    if (/(^|\/)supabase\/migrations\/.+\.sql$/.test(lower)) {
+      result.backend.detected = true;
+      result.backend.rawMigrationFiles += 1;
+      result.backend.tables.push(...parseSupabaseMigration(text));
+      markUsed("supabase migration");
     }
     if (/app\/models\/.+\.php$/.test(lower)) {
       const mm = parseModel(text, entry.name);
@@ -235,12 +285,29 @@ export async function analyzeZip(
     // ── .env keys ──
     if (lower.endsWith(".env") || lower.endsWith(".env.example")) {
       const kv = Array.from(text.matchAll(/^([A-Z0-9_]+)=(.*)$/gm));
-      const keys = kv.map((x) => x[1]);
-      if (entry.name.includes("frontend") || entry.name.startsWith("client")) {
-        result.frontend.envKeys.push(...keys);
-      } else {
-        result.backend.envKeys.push(...keys);
-        for (const m of kv) result.backend.envExample[m[1]] = m[2].trim();
+      const pathHint = entry.name.toLowerCase();
+      const backendHinted =
+        pathHint.includes("backend") ||
+        pathHint.includes("server") ||
+        pathHint.includes("laravel") ||
+        pathHint.includes("api/");
+      for (const m of kv) {
+        const key = m[1];
+        const isFrontendKey = /^(VITE_|NEXT_PUBLIC_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_)/.test(key);
+        // Per-key routing: VITE_/NEXT_PUBLIC_/… always frontend, even from
+        // a root .env; otherwise fall back to the file-path hint.
+        if (isFrontendKey && !backendHinted) {
+          result.frontend.envKeys.push(key);
+        } else if (
+          pathHint.includes("frontend") ||
+          pathHint.startsWith("client") ||
+          (isFrontendKey && !backendHinted)
+        ) {
+          result.frontend.envKeys.push(key);
+        } else {
+          result.backend.envKeys.push(key);
+          result.backend.envExample[key] = m[2].trim();
+        }
       }
       markUsed("env keys");
     }
