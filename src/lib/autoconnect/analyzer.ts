@@ -285,12 +285,29 @@ export async function analyzeZip(
     // ── .env keys ──
     if (lower.endsWith(".env") || lower.endsWith(".env.example")) {
       const kv = Array.from(text.matchAll(/^([A-Z0-9_]+)=(.*)$/gm));
-      const keys = kv.map((x) => x[1]);
-      if (entry.name.includes("frontend") || entry.name.startsWith("client")) {
-        result.frontend.envKeys.push(...keys);
-      } else {
-        result.backend.envKeys.push(...keys);
-        for (const m of kv) result.backend.envExample[m[1]] = m[2].trim();
+      const pathHint = entry.name.toLowerCase();
+      const backendHinted =
+        pathHint.includes("backend") ||
+        pathHint.includes("server") ||
+        pathHint.includes("laravel") ||
+        pathHint.includes("api/");
+      for (const m of kv) {
+        const key = m[1];
+        const isFrontendKey = /^(VITE_|NEXT_PUBLIC_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_)/.test(key);
+        // Per-key routing: VITE_/NEXT_PUBLIC_/… always frontend, even from
+        // a root .env; otherwise fall back to the file-path hint.
+        if (isFrontendKey && !backendHinted) {
+          result.frontend.envKeys.push(key);
+        } else if (
+          pathHint.includes("frontend") ||
+          pathHint.startsWith("client") ||
+          (isFrontendKey && !backendHinted)
+        ) {
+          result.frontend.envKeys.push(key);
+        } else {
+          result.backend.envKeys.push(key);
+          result.backend.envExample[key] = m[2].trim();
+        }
       }
       markUsed("env keys");
     }
