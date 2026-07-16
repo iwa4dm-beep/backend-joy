@@ -556,6 +556,9 @@ fi
 ok "Build complete (${NITRO_PRESET})"
 
 # ---------- 3.1 Install runtime config ----------
+if [ "$RESET_APP_DOMAIN" = "1" ]; then
+  reset_app_domain_nginx_tls
+fi
 write_systemd_unit
 write_nginx_site
 
