@@ -126,7 +126,7 @@ export async function verifyServiceJwt(token: string): Promise<Record<string, un
     const ok = await globalThis.crypto.subtle.verify(
       "HMAC",
       key,
-      b64urlToBytes(s),
+      b64urlToBytes(s).buffer as ArrayBuffer,
       new TextEncoder().encode(`${h}.${p}`),
     );
     if (!ok) return null;
