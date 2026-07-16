@@ -78,8 +78,9 @@ describe("provisionWorkspace (Auto-Connect Studio)", () => {
 
   it("surfaces backend failures without leaking service key requirement", async () => {
     stubFetch({ error: "email already registered" }, 409);
-    const result = await provisionWorkspace(
-      data: { projectName: "e2e-dup", adminEmail: "dup@test.dev" },
+    const result = await provisionWorkspace({
+      projectName: "e2e-dup",
+      adminEmail: "dup@test.dev",
     });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected failure");
