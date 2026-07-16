@@ -20,6 +20,7 @@
 # Env:
 #   ACME_EMAIL   — contact email for Let's Encrypt (defaults to admin@<zone>)
 #   CF_INI       — path to Cloudflare API creds for DNS-01 (default /etc/letsencrypt/cloudflare.ini)
+#   SKIP_DNS=1   — do not attempt Cloudflare wildcard A-record repair
 #
 # Safe to re-run — it detects existing markers and replaces in place.
 
@@ -155,11 +156,26 @@ PY
 
 # --- Optional: wildcard vhost + TLS --------------------------------------
 if [ -n "$WILDCARD_APEX" ]; then
+  if [ "${SKIP_DNS:-0}" != "1" ] && [ -f "$here/ensure-wildcard-dns.sh" ]; then
+    echo "▶ Ensuring DNS for ${WILDCARD_APEX} and *.${WILDCARD_APEX}"
+    WILDCARD="$WILDCARD_APEX" CF_INI="${CF_INI:-/etc/letsencrypt/cloudflare.ini}" \
+      $SUDO bash "$here/ensure-wildcard-dns.sh" "$WILDCARD_APEX" || true
+  fi
+
   echo "▶ Installing wildcard vhost for *.${WILDCARD_APEX}"
   TPL="$here/nginx/wildcard-app.conf.template"
   DST="/etc/nginx/sites-available/pluto-wildcard-${WILDCARD_APEX}.conf"
   LINK="/etc/nginx/sites-enabled/pluto-wildcard-${WILDCARD_APEX}.conf"
   $SUDO mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+  # Remove older one-off wildcard files that declare the same server_name and
+  # can shadow the managed proxy vhost depending on nginx include order.
+  for old in \
+    "/etc/nginx/sites-enabled/wildcard-${WILDCARD_APEX}.conf" \
+    "/etc/nginx/sites-enabled/wildcard-app.timescard.cloud.conf" \
+    "/etc/nginx/sites-enabled/${WILDCARD_APEX}.conf"; do
+    [ "$old" = "$LINK" ] && continue
+    [ -e "$old" ] && { echo "  removing stale wildcard vhost link: $old"; $SUDO rm -f "$old"; }
+  done
   APEX_RE="${WILDCARD_APEX//./\\\\.}"
   $SUDO sed \
     -e "s/__APEX_RE__/${APEX_RE}/g" \

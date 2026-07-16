@@ -59,7 +59,13 @@ else
     echo "     Fix now: sudo bash deploy/refresh-worker.sh && bash deploy/verify-deploy.sh ${SLUG}"
   elif [ "$code" = "404" ]; then
     echo "     404 here means the worker is healthy but cannot resolve this slug."
-    echo "     Recover now: sudo SLUG='${SLUG}' bash deploy/repair-sandbox-worker-and-site.sh"
+    echo "     Recover now: sudo bash deploy/seed-slug.sh '${SLUG}' && bash deploy/verify-deploy.sh '${SLUG}'"
+    if [ "$(id -u)" = "0" ] && [ -f "$here/seed-slug.sh" ]; then
+      echo "     Auto-seeding placeholder for '${SLUG}' now…"
+      bash "$here/seed-slug.sh" "$SLUG" >/tmp/_seed_slug.log 2>&1 || cat /tmp/_seed_slug.log
+      code="$(curl -s -o /tmp/_site_status.json -w '%{http_code}' --max-time 8 "https://${API}/site-status/${SLUG}" || echo 000)"
+      [ "$code" = "200" ] && { ok "site-status recovered after seed"; cat /tmp/_site_status.json | python3 -m json.tool 2>/dev/null || cat /tmp/_site_status.json; echo; }
+    fi
   fi
 fi
 
