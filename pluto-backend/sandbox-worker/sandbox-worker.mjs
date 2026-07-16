@@ -174,11 +174,29 @@ async function unpack({ workspaceId, slug, bucket, key, env }) {
   // Slug → workspace symlink so nginx wildcard can resolve <slug>.app.<apex>.
   const slugLink = normalizedSlug ? await ensureSlugSymlink(wsRoot, normalizedSlug) : null;
 
+  // Inject runtime env into the release BEFORE the atomic flip. Doing it
+  // pre-flip guarantees old bundle never sees new env, and vice versa.
+  let envInjected = false;
+  if (env && typeof env === "object") {
+    await fsp.writeFile(path.join(webRoot, "env.js"), serializeEnvJs(env));
+    envInjected = true;
+  }
+
+  // Atomic symlink flip: current -> releaseDir (relative)
+  const currentLink = path.join(wsRoot, "current");
+  const tmpLink = path.join(wsRoot, `.current-${randomUUID().slice(0, 6)}`);
+  await fsp.symlink(path.relative(wsRoot, webRoot), tmpLink);
+  await fsp.rename(tmpLink, currentLink);
+
+  // Slug → workspace symlink so nginx wildcard can resolve <slug>.app.<apex>.
+  const slugLink = normalizedSlug ? await ensureSlugSymlink(wsRoot, normalizedSlug) : null;
+
   // Write manifest
   const manifest = {
     workspaceId: ws,
     slug: normalizedSlug || null,
     slugLink,
+    envInjected,
     bucket,
     key,
     releaseDir,
