@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
-import { Copy, FolderKanban, KeyRound, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Copy, ExternalLink, FolderKanban, KeyRound, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { HelpPanel } from "@/components/help/HelpPanel";
 import { dashboardProjectsHelp } from "@/content/help/dashboard.projects";
 import { ErrorBanner } from "@/components/pluto/ErrorBanner";
+import { checkSlug, coerceSlug, previewSubdomainUrl, slugReasonMessage } from "@/lib/pluto/reserved-slugs";
 import { isLive, live, type Workspace, type WorkspaceKey } from "@/lib/pluto/live";
 
 export const Route = createFileRoute("/dashboard/projects")({
