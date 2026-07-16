@@ -541,8 +541,11 @@ export const deployAll = createServerFn({ method: "POST" })
     //           If unset, we log a "skipped" attempt and keep going — this makes
     //           the pipeline safe to run on hosts where the worker isn't installed.
     const bundleKey = `${data.bucket}/${cleanPath}`;
-    const sandboxUrl = (process.env.PLUTO_SANDBOX_URL ?? "").replace(/\/+$/, "");
-    const sandboxSecret = process.env.PLUTO_SANDBOX_SECRET ?? "";
+    const sandboxUrl = (process.env.PLUTO_SANDBOX_URL ?? `${base}/sandbox`).replace(/\/+$/, "");
+    const sandboxSecret = process.env.PLUTO_SANDBOX_SECRET
+      ?? process.env.PLUTO_SANDBOX_WORKER_SECRET
+      ?? process.env.SANDBOX_SHARED_SECRET
+      ?? "";
     const servedSiteFromWorker: { url?: string } = {};
     const deploySlug = (filename.replace(/\.zip$/i, "") || data.workspaceId).replace(/[^a-zA-Z0-9._-]/g, "-").toLowerCase();
     const unpackStep = await withRetry("unpack-serve", "Unpack bundle + serve (sandbox worker)", data.maxRetries, async () => {
@@ -609,6 +612,7 @@ export const deployAll = createServerFn({ method: "POST" })
 
       let parsed: { webRoot?: string; releaseDir?: string; servedAt?: string; sizeBytes?: number; durationMs?: number } = {};
       try { parsed = JSON.parse(r.text); } catch { /* ignore */ }
+      servedSiteFromWorker.url = `${base}/sites/${deploySlug}`;
       return {
         ok: true,
         detail: `unpacked ${parsed.sizeBytes ?? "?"} bytes in ${parsed.durationMs ?? "?"}ms → ${parsed.webRoot ?? "(root)"}`,
@@ -689,6 +693,8 @@ export const deployAll = createServerFn({ method: "POST" })
     const expandTemplate = (tpl: string) => tpl.replace(/\{slug\}/g, deploySlug).replace(/\/+$/, "");
     const autoDerivedCandidates: string[] = [];
     if (template) autoDerivedCandidates.push(expandTemplate(template));
+    autoDerivedCandidates.push(`https://${deploySlug}.app.timescard.cloud`);
+    autoDerivedCandidates.push(`https://${deploySlug}-dev.app.timescard.cloud`);
     if (sandboxBase) autoDerivedCandidates.push(`${sandboxBase}/sites/${deploySlug}`);
     autoDerivedCandidates.push(`${base}/sites/${deploySlug}`);
     autoDerivedCandidates.push(`${base}/sandbox/sites/${deploySlug}`);
