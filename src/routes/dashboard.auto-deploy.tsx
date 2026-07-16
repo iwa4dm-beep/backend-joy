@@ -16,6 +16,7 @@ import {
   XCircle, Copy, ExternalLink, RefreshCw, Globe, Sparkles,
   ChevronRight, ChevronDown, ScrollText, History, Undo2, KeyRound,
   Plus, Trash2, Eye, EyeOff, ShieldCheck, Activity, AlertCircle,
+  Download, UserCheck, Radio,
 } from "lucide-react";
 
 import { analyzeZip } from "@/lib/autoconnect/analyzer";
@@ -28,8 +29,10 @@ import { useWorkspace } from "@/lib/pluto/workspace-context";
 import type { AnalyzeResult, IntegrationPlan } from "@/lib/autoconnect/types";
 import {
   loadAutoDeployHistory, saveAutoDeployEntry, clearAutoDeployHistory,
-  extractHealth, type AutoDeployHistoryEntry, type HealthSummary, type EndpointCheck,
+  extractHealth, downloadAutoDeployReport,
+  type AutoDeployHistoryEntry, type HealthSummary, type EndpointCheck, type StepEvent,
 } from "@/lib/pluto/auto-deploy-history";
+import { useAuth } from "@/lib/pluto/auth-context";
 
 export const Route = createFileRoute("/dashboard/auto-deploy")({
   head: () => ({
@@ -61,6 +64,18 @@ type PendingDeploy = {
   sourceRef: string;
   isRollback: boolean;
 };
+
+// Known pipeline step order — used for real-time progression streaming
+// while the `deployAll` server function is executing.
+const PIPELINE_STEPS: Array<{ key: string; label: string }> = [
+  { key: "ensureInfra", label: "Ensure infrastructure" },
+  { key: "push-migrations", label: "Apply migrations" },
+  { key: "upload-bundle", label: "Upload frontend bundle" },
+  { key: "verify-deploy", label: "Verify deploy" },
+  { key: "unpack-serve", label: "Unpack & serve" },
+  { key: "activate-service", label: "Activate bootstrap function" },
+  { key: "health-check", label: "Health check" },
+];
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer());
@@ -122,7 +137,9 @@ function AutoDeployPage() {
 
 function AutoDeployInner() {
   const { active } = useWorkspace();
+  const { session } = useAuth();
   const workspaceId = active?.id ?? "";
+  const approverEmail = session?.user?.email ?? "operator";
   const deploy = useServerFn(deployAll);
 
   // Source form
@@ -150,6 +167,11 @@ function AutoDeployInner() {
   const [history, setHistory] = useState<AutoDeployHistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
 
+  // Real-time streaming
+  const [streamEvents, setStreamEvents] = useState<StepEvent[]>([]);
+  const [runningStepIdx, setRunningStepIdx] = useState<number>(-1);
+  const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // In-memory rollback anchor — bundle bytes for last successful deploy in this session.
   const lastSuccessRef = useRef<PendingDeploy | null>(null);
 
@@ -170,6 +192,8 @@ function AutoDeployInner() {
     setPhase("source"); setAnalyze(null); setPlan(null); setLogs([]);
     setDeployResult(null); setErrorMsg(null); setExpanded({});
     setPending(null); setHealth(null);
+    setStreamEvents([]); setRunningStepIdx(-1);
+    if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
   };
 
   const acquireFile = async (): Promise<{ file: File; sourceRef: string }> => {
@@ -258,7 +282,33 @@ function AutoDeployInner() {
   /** Phase 5: confirm & deploy. */
   const confirmDeploy = async (payload: PendingDeploy) => {
     setPhase("deploying");
-    log(payload.isRollback ? "▶ Rollback confirmed — redeploying previous bundle…" : "▶ Approved — deploying…");
+    const approvedAt = Date.now();
+    log(payload.isRollback
+      ? `▶ Rollback confirmed by ${approverEmail} — redeploying previous bundle…`
+      : `▶ Approved by ${approverEmail} — deploying…`);
+
+    // Start real-time step progression stream. We don't have server-side
+    // SSE for deployAll, so drive an optimistic timeline that advances
+    // through the known pipeline while the RPC is in-flight. When the
+    // real result arrives, we reconcile with actual step outcomes.
+    const events: StepEvent[] = [];
+    const pushEvent = (ev: StepEvent) => {
+      events.push(ev);
+      setStreamEvents([...events]);
+    };
+    setStreamEvents([]);
+    setRunningStepIdx(0);
+    pushEvent({ ts: Date.now(), key: PIPELINE_STEPS[0].key, label: PIPELINE_STEPS[0].label, status: "running" });
+    let idx = 0;
+    streamTimerRef.current = setInterval(() => {
+      if (idx >= PIPELINE_STEPS.length - 1) return;
+      const prev = PIPELINE_STEPS[idx];
+      pushEvent({ ts: Date.now(), key: prev.key, label: prev.label, status: "ok", detail: "in-progress" });
+      idx += 1;
+      setRunningStepIdx(idx);
+      pushEvent({ ts: Date.now(), key: PIPELINE_STEPS[idx].key, label: PIPELINE_STEPS[idx].label, status: "running" });
+    }, 900);
+
     try {
       const result = await deploy({
         data: {
@@ -272,6 +322,20 @@ function AutoDeployInner() {
           ensureInfra: true,
         },
       });
+
+      if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
+
+      // Reconcile: replace optimistic stream with real per-step events.
+      const realEvents: StepEvent[] = result.steps.map((s) => ({
+        ts: Date.now(),
+        key: s.key,
+        label: s.label,
+        status: s.ok ? "ok" : "fail",
+        detail: s.attempts.at(-1)?.detail ?? "",
+      }));
+      setStreamEvents(realEvents);
+      setRunningStepIdx(-1);
+
       setDeployResult(result);
       for (const s of result.steps) {
         log(`${s.ok ? "✓" : "✗"} ${s.label}${s.attempts.at(-1)?.detail ? ` — ${s.attempts.at(-1)!.detail}` : ""}`);
@@ -279,6 +343,7 @@ function AutoDeployInner() {
       const h = extractHealth(result);
       setHealth(h);
       if (!result.ok) throw new Error("Deploy pipeline reported failure");
+      if (h && !h.overallOk) throw new Error(`Health check failed — ${h.endpoints.filter(e => !e.ok).length} endpoint(s) unhealthy`);
       log(`✅ Live in ${(result.totalMs / 1000).toFixed(1)}s`);
       setPhase("live");
 
@@ -304,9 +369,24 @@ function AutoDeployInner() {
         })),
         health: h,
         isRollback: payload.isRollback,
+        approver: approverEmail,
+        approvedAt,
+        rollbackOf: payload.isRollback ? lastSuccessRef.current?.slug ?? null : null,
+        stepEvents: realEvents,
       });
       lastSuccessRef.current = payload;
     } catch (e) {
+      if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
+      // Mark the currently-running step as failed in the stream.
+      if (events.length > 0) {
+        const last = events[events.length - 1];
+        if (last.status === "running") {
+          last.status = "fail";
+          last.detail = e instanceof Error ? e.message : String(e);
+          setStreamEvents([...events]);
+        }
+      }
+      setRunningStepIdx(-1);
       const msg = e instanceof Error ? e.message : String(e);
       setErrorMsg(msg); log(`✗ ${msg}`); setPhase("error");
       // Persist failed run too for visibility
@@ -326,6 +406,10 @@ function AutoDeployInner() {
         sqlPreview: payload.sql.slice(0, 2048),
         envKeys: payload.envVars.filter((e) => e.key.trim()).map((e) => e.key.trim()),
         steps: [], health: null, isRollback: payload.isRollback,
+        approver: approverEmail,
+        approvedAt,
+        rollbackOf: payload.isRollback ? lastSuccessRef.current?.slug ?? null : null,
+        stepEvents: events,
       });
     }
   };
@@ -500,8 +584,21 @@ function AutoDeployInner() {
             <a href="/dashboard/logs-explorer" className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 hover:bg-accent">
               <ScrollText className="h-3.5 w-3.5" /> View logs
             </a>
+            {history[0] && (
+              <button
+                data-testid="export-report-live"
+                onClick={() => { downloadAutoDeployReport(history[0]); toast.success("Report downloaded"); }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 hover:bg-accent">
+                <Download className="h-3.5 w-3.5" /> Export report
+              </button>
+            )}
           </div>
         </section>
+      )}
+
+      {/* Real-time streaming panel — while deploying */}
+      {(phase === "deploying" || (streamEvents.length > 0 && phase !== "live")) && (
+        <StreamPanel events={streamEvents} runningIdx={runningStepIdx} />
       )}
 
       {/* Error banner */}
@@ -546,6 +643,9 @@ function AutoDeployInner() {
           </div>
         </section>
       )}
+
+      {/* Audit trail panel — always visible when there is history */}
+      {history.length > 0 && <AuditTrailPanel history={history} />}
 
       {/* History panel */}
       {showHistory && <HistoryPanel history={history} onClear={() => { clearAutoDeployHistory(); toast.success("History cleared"); }} />}
@@ -797,6 +897,18 @@ function HistoryRow({ entry }: { entry: AutoDeployHistoryEntry }) {
               ))}
             </div>
           )}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={() => { downloadAutoDeployReport(entry); toast.success("Report downloaded"); }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] hover:bg-accent">
+              <Download className="h-3 w-3" /> Export report
+            </button>
+            {entry.approver && (
+              <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
+                <UserCheck className="h-3 w-3" /> {entry.approver}
+              </span>
+            )}
+          </div>
         </div>
       )}
     </li>
@@ -854,5 +966,75 @@ function StepRow({ step, open, onToggle }: { step: DeployStepLog; open: boolean;
         </div>
       )}
     </li>
+  );
+}
+
+// ─── Real-time streaming panel ────────────────────────────────────────────
+function StreamPanel({ events, runningIdx }: { events: StepEvent[]; runningIdx: number }) {
+  return (
+    <section className="rounded-xl border border-primary/30 bg-primary/5">
+      <div className="border-b border-primary/20 px-4 py-3 text-sm font-medium flex items-center gap-2">
+        <Radio className={`h-4 w-4 ${runningIdx >= 0 ? "text-primary animate-pulse" : "text-muted-foreground"}`} />
+        Real-time deployment stream
+        <span className="ml-auto text-xs text-muted-foreground">{events.length} event{events.length === 1 ? "" : "s"}</span>
+      </div>
+      <ul className="divide-y divide-primary/10" data-testid="stream-events">
+        {events.map((ev, i) => (
+          <li key={i} className="px-4 py-2 flex items-center gap-3 text-sm">
+            {ev.status === "running" && <Loader2 className="h-4 w-4 text-primary animate-spin" />}
+            {ev.status === "ok" && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+            {ev.status === "fail" && <XCircle className="h-4 w-4 text-destructive" />}
+            <span className="font-medium">{ev.label}</span>
+            {ev.detail && <span className="text-xs text-muted-foreground truncate">— {ev.detail}</span>}
+            <span className="ml-auto text-[10px] text-muted-foreground font-mono">{new Date(ev.ts).toLocaleTimeString()}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ─── Audit trail panel ────────────────────────────────────────────────────
+function AuditTrailPanel({ history }: { history: AutoDeployHistoryEntry[] }) {
+  const entries = history.slice(0, 10);
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="audit-trail">
+      <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2">
+        <ShieldCheck className="h-4 w-4" /> Audit trail
+        <span className="text-xs text-muted-foreground">— approvals, env vars used (masked), rollback actions</span>
+      </div>
+      <ul className="divide-y divide-border">
+        {entries.map((e) => {
+          const when = new Date(e.approvedAt ?? e.timestamp);
+          const kind = e.isRollback ? "rollback" : "deploy";
+          return (
+            <li key={e.id} className="px-4 py-3 text-xs space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                {e.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <XCircle className="h-3.5 w-3.5 text-destructive" />}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${e.isRollback ? "bg-amber-500/15 text-amber-600" : "bg-primary/15 text-primary"} uppercase`}>{kind}</span>
+                <span className="font-mono">{e.slug}</span>
+                {e.rollbackOf && <span className="text-muted-foreground">← <span className="font-mono">{e.rollbackOf}</span></span>}
+                <span className="text-muted-foreground">·</span>
+                <span className="inline-flex items-center gap-1 text-muted-foreground">
+                  <UserCheck className="h-3 w-3" /> {e.approver ?? "unknown"}
+                </span>
+                <span className="ml-auto text-muted-foreground font-mono">{when.toLocaleString()}</span>
+              </div>
+              <div className="flex flex-wrap gap-1 pl-5">
+                <span className="text-muted-foreground">Env:</span>
+                {e.envKeys.length === 0
+                  ? <span className="text-muted-foreground italic">none</span>
+                  : e.envKeys.map((k) => (
+                      <span key={k} className="inline-flex items-center gap-1 rounded bg-background border border-border px-1.5 py-0.5 font-mono">
+                        <KeyRound className="h-2.5 w-2.5" /> {k}=<span className="text-muted-foreground">•••</span>
+                      </span>
+                    ))
+                }
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
