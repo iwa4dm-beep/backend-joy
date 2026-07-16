@@ -93,14 +93,13 @@ describe("plutoApi — JWT rotation self-healing (database-import scenario)", ()
 
   it("subsequent calls after self-heal go straight to the fresh session token", async () => {
     const fetchMock = vi
-      .fn<[RequestInfo | URL, RequestInit?], Promise<Response>>()
+      .fn(async (): Promise<Response> => jsonResponse(200, { ok: true }))
       .mockImplementationOnce(async () =>
         jsonResponse(401, {
           code: "FST_JWT_AUTHORIZATION_TOKEN_INVALID",
           message: "invalid signature",
         }),
-      )
-      .mockImplementation(async () => jsonResponse(200, { ok: true }));
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await plutoApi("/dbio/whoami"); // triggers heal
