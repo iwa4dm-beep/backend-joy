@@ -29,8 +29,10 @@ import { useWorkspace } from "@/lib/pluto/workspace-context";
 import type { AnalyzeResult, IntegrationPlan } from "@/lib/autoconnect/types";
 import {
   loadAutoDeployHistory, saveAutoDeployEntry, clearAutoDeployHistory,
-  extractHealth, type AutoDeployHistoryEntry, type HealthSummary, type EndpointCheck,
+  extractHealth, downloadAutoDeployReport,
+  type AutoDeployHistoryEntry, type HealthSummary, type EndpointCheck, type StepEvent,
 } from "@/lib/pluto/auto-deploy-history";
+import { useAuth } from "@/lib/pluto/auth-context";
 
 export const Route = createFileRoute("/dashboard/auto-deploy")({
   head: () => ({
