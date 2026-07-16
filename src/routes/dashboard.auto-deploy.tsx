@@ -42,6 +42,7 @@ import {
   PAYLOAD_SCHEMAS, buildSchemaBundle,
 } from "@/lib/pluto/auto-deploy-webhook-schemas";
 import { useAuth } from "@/lib/pluto/auth-context";
+import { pingUpstream, type UpstreamPreflight } from "@/lib/pluto/upstream-preflight.functions";
 
 // Self-healing: max auto-retry attempts on transient deploy failure
 const MAX_AUTO_RETRIES = 1;
@@ -188,6 +189,9 @@ function AutoDeployInner() {
   const [health, setHealth] = useState<HealthSummary | null>(null);
   const [history, setHistory] = useState<AutoDeployHistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [preflight, setPreflight] = useState<UpstreamPreflight | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  const pingUpstreamFn = useServerFn(pingUpstream);
 
   // Real-time streaming
   const [streamEvents, setStreamEvents] = useState<StepEvent[]>([]);
@@ -205,6 +209,19 @@ function AutoDeployInner() {
     window.addEventListener("pluto:auto-deploy-history:changed", on);
     return () => window.removeEventListener("pluto:auto-deploy-history:changed", on);
   }, []);
+
+  const runPreflight = useCallback(async () => {
+    setPreflightBusy(true);
+    try {
+      const r = await pingUpstreamFn();
+      setPreflight(r);
+    } catch (e) {
+      setPreflight({ ok: false, baseUrl: "", tokenSource: "none", checks: [], hint: (e as Error).message });
+    } finally { setPreflightBusy(false); }
+  }, [pingUpstreamFn]);
+
+  // Auto-run preflight on mount so misconfig surfaces before the user tries to deploy.
+  useEffect(() => { runPreflight(); }, [runPreflight]);
 
   // Prevent stream interval leak on unmount
   useEffect(() => {
@@ -593,8 +610,51 @@ function AutoDeployInner() {
         })}
       </div>
 
+      {/* Upstream preflight banner — surfaces auth / reachability issues before deploy */}
+      {preflight && !preflight.ok && (
+        <section className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+                  Upstream Pluto backend not ready — deploys will fail
+                </div>
+                <p className="text-xs text-amber-700/90 dark:text-amber-200/90 mt-1">
+                  {preflight.hint ?? "Preflight probe reported an error."}
+                </p>
+                <div className="mt-2 text-[11px] font-mono text-amber-800/80 dark:text-amber-200/80 space-y-0.5">
+                  <div>base: {preflight.baseUrl || "(unset)"}</div>
+                  <div>token: {preflight.tokenSource}</div>
+                  {preflight.checks.map((c) => (
+                    <div key={c.label}>
+                      {c.ok ? "✓" : "✗"} {c.label} — HTTP {c.status || "ERR"} ({c.latencyMs}ms)
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <button onClick={runPreflight} disabled={preflightBusy}
+              className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs hover:bg-amber-500/20 disabled:opacity-50">
+              {preflightBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Re-check
+            </button>
+          </div>
+        </section>
+      )}
+      {preflight && preflight.ok && (
+        <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          Upstream reachable & authorized ({preflight.tokenSource}) — ready to deploy.
+          <button onClick={runPreflight} disabled={preflightBusy} className="text-muted-foreground hover:text-foreground underline underline-offset-2">
+            re-check
+          </button>
+        </div>
+      )}
+
       {/* Source picker */}
       <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+
         <div className="flex gap-2">
           {([
             { k: "github", label: "GitHub", icon: Github },
