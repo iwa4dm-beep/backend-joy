@@ -394,7 +394,7 @@ export const deployAll = createServerFn({ method: "POST" })
     const uplStep = await withRetry("upload-bundle", "Upload bundle to storage", data.maxRetries, async () => {
       const form = new FormData();
       form.append("file", new Blob([bytes], { type: "application/zip" }), filename);
-      const uplHeaders = serviceHeaders({ "x-workspace-id": data.workspaceId, "x-upsert": "true" });
+      const uplHeaders = serviceHeaders({ "x-workspace-id": data.workspaceId, "x-upsert": "true" }, data.operatorToken);
       if ("error" in uplHeaders) return { ok: false, detail: uplHeaders.error, debug: null, result: null };
       const url = `${base}/storage/v1/object/${encodeURIComponent(data.bucket)}/${cleanPath}`;
       const preview = `(multipart upload ${bytes.length} bytes)`;
