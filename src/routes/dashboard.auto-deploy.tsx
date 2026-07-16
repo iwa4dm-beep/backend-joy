@@ -370,6 +370,7 @@ function AutoDeployInner() {
     }, 900);
 
     try {
+      const operatorToken = getUpstream().token || undefined;
       const result = await deploy({
         data: {
           workspaceId,
@@ -380,8 +381,10 @@ function AutoDeployInner() {
           label: `${payload.isRollback ? "rollback" : "auto-deploy"}-${payload.slug}${attempt > 1 ? `-retry${attempt - 1}` : ""}`,
           maxRetries: 2,
           ensureInfra: true,
+          operatorToken,
         },
       });
+
 
       if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
 
