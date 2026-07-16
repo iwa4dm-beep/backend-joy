@@ -564,5 +564,21 @@ export function createClient(url: string, apiKey: string, opts?: PlutoClientOpti
   return new PlutoClient(url, apiKey, opts);
 }
 
+/**
+ * Auto-config variant — reads `window.__PLUTO_ENV__` first (injected by the
+ * Pluto sandbox-worker at deploy time via `/env.js`), then falls back to the
+ * provided defaults. Use this in browser bundles that ship to many projects.
+ *
+ *   import { createClientAuto } from "@pluto/js";
+ *   export const pluto = createClientAuto();  // no keys hardcoded in bundle
+ */
+export function createClientAuto(fallback?: { url?: string; apiKey?: string; opts?: PlutoClientOptions }) {
+  const runtime = (typeof window !== "undefined" && (window as unknown as { __PLUTO_ENV__?: { url?: string; anonKey?: string } }).__PLUTO_ENV__) || {};
+  const url = runtime.url || fallback?.url || "";
+  const key = runtime.anonKey || fallback?.apiKey || "";
+  if (!url || !key) throw new Error("createClientAuto: no runtime __PLUTO_ENV__ and no fallback url/apiKey");
+  return new PlutoClient(url, key, fallback?.opts);
+}
+
 export default createClient;
 

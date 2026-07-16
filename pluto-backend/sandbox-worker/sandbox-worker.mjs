@@ -123,7 +123,24 @@ async function ensureSlugSymlink(wsDir, slug) {
   return slugPath;
 }
 
-async function unpack({ workspaceId, slug, bucket, key }) {
+// Phase C — write /env.js so window.__PLUTO_ENV__ = {...} is available to the
+// deployed bundle before its main script runs. Keys are validated against the
+// same shape enforced by admin.project_env (uppercase alnum + underscore).
+const ENV_KEY_RE = /^[A-Z][A-Z0-9_]{0,62}$/;
+function serializeEnvJs(envObj) {
+  const clean = {};
+  for (const [k, v] of Object.entries(envObj || {})) {
+    // Accept the reserved lowercase runtime keys (url/anonKey/serviceKey/browserUrl)
+    // AND admin.project_env-style UPPER_SNAKE keys.
+    if (/^(url|anonKey|serviceKey|browserUrl)$/.test(k) || ENV_KEY_RE.test(k)) {
+      clean[k] = String(v ?? "");
+    }
+  }
+  // JSON.stringify escaping is sufficient — no </script> risk in JSON.
+  return `window.__PLUTO_ENV__ = ${JSON.stringify(clean)};\n`;
+}
+
+async function unpack({ workspaceId, slug, bucket, key, env }) {
   const ws = safeSlug(workspaceId);
   if (!ws) throw new Error("invalid workspaceId");
   if (!bucket || !key) throw new Error("bucket and key are required");
@@ -148,6 +165,15 @@ async function unpack({ workspaceId, slug, bucket, key }) {
   const promoted = await pickWebRoot(releaseDir);
   const webRoot = await findServable(promoted);
 
+
+  // Inject runtime env into the release BEFORE the atomic flip. Doing it
+  // pre-flip guarantees old bundle never sees new env, and vice versa.
+  let envInjected = false;
+  if (env && typeof env === "object") {
+    await fsp.writeFile(path.join(webRoot, "env.js"), serializeEnvJs(env));
+    envInjected = true;
+  }
+
   // Atomic symlink flip: current -> releaseDir (relative)
   const currentLink = path.join(wsRoot, "current");
   const tmpLink = path.join(wsRoot, `.current-${randomUUID().slice(0, 6)}`);
@@ -162,6 +188,7 @@ async function unpack({ workspaceId, slug, bucket, key }) {
     workspaceId: ws,
     slug: normalizedSlug || null,
     slugLink,
+    envInjected,
     bucket,
     key,
     releaseDir,
@@ -201,6 +228,37 @@ async function resolveSlug(slug) {
   }
 }
 
+// Hot env rotation — rewrite env.js in the live `current/` dir without a redeploy.
+async function rotateEnv({ workspaceId, slug, env, merge }) {
+  let wsDir;
+  if (slug) {
+    const r = await resolveSlug(slug);
+    if (!r.ok) throw new Error(r.error);
+    wsDir = path.join(SITES_ROOT, r.workspaceId);
+  } else if (workspaceId) {
+    wsDir = path.join(SITES_ROOT, safeSlug(workspaceId));
+  } else {
+    throw new Error("slug or workspaceId is required");
+  }
+  const currentLink = path.join(wsDir, "current");
+  const currentReal = await fsp.realpath(currentLink).catch(() => null);
+  if (!currentReal) throw new Error("no current release to update");
+
+  const envPath = path.join(currentReal, "env.js");
+  let next = env && typeof env === "object" ? { ...env } : {};
+  if (merge) {
+    // Best-effort merge — parse existing env.js by evaluating in a sandbox-safe way:
+    // we only support the exact shape we write, so a regex extraction is enough.
+    try {
+      const existing = await fsp.readFile(envPath, "utf-8");
+      const m = existing.match(/window\.__PLUTO_ENV__\s*=\s*(\{[\s\S]*?\});?/);
+      if (m) next = { ...JSON.parse(m[1]), ...next };
+    } catch { /* no prior env.js — treat as empty */ }
+  }
+  await fsp.writeFile(envPath, serializeEnvJs(next));
+  return { ok: true, envPath, keys: Object.keys(next).sort() };
+}
+
 async function status(workspaceId) {
   const wsRoot = path.join(SITES_ROOT, safeSlug(workspaceId));
   try {
@@ -232,6 +290,11 @@ const server = http.createServer(async (req, res) => {
     if (resolveMatch) {
       const s = decodeURIComponent(req.url.slice("/resolve/".length));
       return json(res, 200, await resolveSlug(s));
+    }
+    if (req.method === "POST" && req.url === "/env") {
+      const body = await readJson(req);
+      const r = await rotateEnv(body);
+      return json(res, 200, r);
     }
     return json(res, 404, { error: "not_found" });
   } catch (e) {
