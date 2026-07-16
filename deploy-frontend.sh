@@ -36,6 +36,8 @@ PUBLIC_BASE="${PUBLIC_URL%/}"
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE}.service"
 NGINX_AVAILABLE="/etc/nginx/sites-available/${DOMAIN}"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${DOMAIN}"
+NGINX_CONF_D="/etc/nginx/conf.d/${DOMAIN}.conf"
+NGINX_SITE=""
 SUDO=""
 [ "$(id -u)" = "0" ] || SUDO="sudo"
 
@@ -52,9 +54,113 @@ tls_cert_matches_domain() {
   openssl x509 -in "$cert" -noout -checkhost "$DOMAIN" 2>/dev/null | grep -qi 'does match'
 }
 
+nginx_dump() {
+  $SUDO nginx -T 2>&1 || true
+}
+
+select_nginx_site_path() {
+  local dump
+  dump="$(nginx_dump)"
+
+  if printf '%s\n' "$dump" | grep -qE '(/etc/nginx/sites-enabled/|include[[:space:]]+/etc/nginx/sites-enabled/)'; then
+    NGINX_SITE="$NGINX_AVAILABLE"
+    ok "nginx includes sites-enabled; using ${NGINX_SITE}"
+  else
+    NGINX_SITE="$NGINX_CONF_D"
+    warn "nginx does not appear to load sites-enabled; using loaded conf.d path ${NGINX_SITE}"
+  fi
+}
+
+same_nginx_file() {
+  local left="$1" right="$2"
+  [ "$left" = "$right" ] && return 0
+  [ -e "$left" ] && [ -e "$right" ] || return 1
+  [ "$(readlink -f "$left")" = "$(readlink -f "$right")" ]
+}
+
+install_nginx_site_link() {
+  [ -n "$NGINX_SITE" ] || select_nginx_site_path
+
+  if [ "$NGINX_SITE" = "$NGINX_AVAILABLE" ]; then
+    $SUDO ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+    $SUDO rm -f "$NGINX_CONF_D"
+  else
+    $SUDO rm -f "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+  fi
+}
+
+remove_conflicting_nginx_configs() {
+  [ -n "$NGINX_SITE" ] || select_nginx_site_path
+
+  # Remove duplicate server blocks for this exact hostname. A stale block can
+  # win SNI matching or keep nginx from loading our managed per-domain 443
+  # block, which makes nginx serve another domain's certificate.
+  local files f
+  files="$($SUDO grep -RlF "$DOMAIN" /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d 2>/dev/null | sort -u || true)"
+  if [ -n "$files" ]; then
+    for f in $files; do
+      $SUDO grep -qE 'server_name[[:space:]]' "$f" 2>/dev/null || continue
+      $SUDO grep -qF "$DOMAIN" "$f" 2>/dev/null || continue
+      same_nginx_file "$f" "$NGINX_SITE" && continue
+      [ "$NGINX_SITE" = "$NGINX_AVAILABLE" ] && same_nginx_file "$f" "$NGINX_ENABLED" && continue
+      warn "Removing duplicate nginx server_name for ${DOMAIN}: $f"
+      $SUDO rm -f "$f"
+    done
+  fi
+
+  # Certbot can leave domain-specific -le-ssl files behind; keep the active
+  # managed file as the single source of truth for this hostname.
+  $SUDO rm -f "/etc/nginx/sites-enabled/${DOMAIN}-le-ssl.conf" \
+    "/etc/nginx/sites-available/${DOMAIN}-le-ssl.conf" \
+    "/etc/nginx/conf.d/${DOMAIN}-le-ssl.conf"
+}
+
+show_tls_diagnostics() {
+  warn "TLS certificate served for ${DOMAIN} does not match; showing nginx diagnostics"
+  echo "--- nginx files mentioning ${DOMAIN} ---"
+  $SUDO grep -RlnF "$DOMAIN" /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d 2>/dev/null || true
+  echo "--- active nginx 443/server_name/ssl_certificate lines ---"
+  nginx_dump | grep -nE 'listen .*443|server_name|ssl_certificate' | tail -240 || true
+  echo "--- nginx logs ---"
+  $SUDO journalctl -u nginx -n 80 --no-pager 2>/dev/null || true
+}
+
+verify_served_tls_san() {
+  is_https_public_url || return 0
+  command -v openssl >/dev/null 2>&1 || {
+    warn "openssl missing; cannot verify served TLS SAN for ${DOMAIN}"
+    return 0
+  }
+
+  log "Verifying served TLS certificate SAN for ${DOMAIN}"
+  local served_cert cert_info check_output openssl_log
+  openssl_log="/tmp/${DOMAIN}.openssl-s_client.log"
+  served_cert="$(printf '' | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" -showcerts 2>"$openssl_log" | openssl x509 -outform PEM 2>>"$openssl_log" || true)"
+
+  if [ -z "$served_cert" ]; then
+    cat "$openssl_log" 2>/dev/null || true
+    show_tls_diagnostics
+    fail "Could not read served TLS certificate for ${DOMAIN}."
+  fi
+
+  cert_info="$(printf '%s\n' "$served_cert" | openssl x509 -noout -subject -issuer -ext subjectAltName 2>&1 || true)"
+  printf '%s\n' "$cert_info"
+
+  check_output="$(printf '%s\n' "$served_cert" | openssl x509 -noout -checkhost "$DOMAIN" 2>&1 || true)"
+  printf '%s\n' "$check_output"
+  if ! printf '%s\n' "$check_output" | grep -qi 'does match'; then
+    cat "$openssl_log" 2>/dev/null || true
+    show_tls_diagnostics
+    fail "Served TLS certificate SAN does not match ${DOMAIN}. Fix duplicate/default 443 nginx blocks above, then re-run."
+  fi
+
+  ok "served TLS certificate SAN matches ${DOMAIN}"
+}
+
 write_nginx_http_site() {
+  [ -n "$NGINX_SITE" ] || select_nginx_site_path
   $SUDO mkdir -p /var/www/certbot
-  $SUDO tee "$NGINX_AVAILABLE" >/dev/null <<EOF
+  $SUDO tee "$NGINX_SITE" >/dev/null <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -84,6 +190,7 @@ server {
     }
 }
 EOF
+  install_nginx_site_link
 }
 
 ensure_tls_certificate() {
@@ -144,33 +251,19 @@ write_nginx_site() {
   local cert="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
   local key="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
 
+  select_nginx_site_path
+
   # Remove duplicate .conf variants; duplicate server blocks were serving stale static roots.
   $SUDO rm -f \
     "/etc/nginx/sites-enabled/${DOMAIN}.conf" \
-    "/etc/nginx/sites-available/${DOMAIN}.conf" \
-    "/etc/nginx/conf.d/${DOMAIN}.conf"
+    "/etc/nginx/sites-available/${DOMAIN}.conf"
 
-  # Scan the entire nginx tree for ANY other files that also declare
-  # `server_name <domain>`. A stale/duplicate server block wins the match
-  # and proxies /assets/*.css to the Node app, which returns JSON 404
-  # (breaking CSS/JS in the browser). Remove them, keeping only the file
-  # we are about to write.
-  local conflicts
-  conflicts="$($SUDO grep -RlE "server_name[[:space:]]+[^;]*(^|[[:space:]])${DOMAIN}([[:space:]]|;)" \
-      /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d 2>/dev/null | sort -u || true)"
-  if [ -n "$conflicts" ]; then
-    for f in $conflicts; do
-      [ "$f" = "$NGINX_AVAILABLE" ] && continue
-      [ "$f" = "$NGINX_ENABLED" ] && continue
-      warn "Removing conflicting nginx config for ${DOMAIN}: $f"
-      $SUDO rm -f "$f"
-    done
-  fi
+  remove_conflicting_nginx_configs
 
   if is_https_public_url; then
     ensure_tls_certificate
 
-    $SUDO tee "$NGINX_AVAILABLE" >/dev/null <<EOF
+    $SUDO tee "$NGINX_SITE" >/dev/null <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -235,7 +328,7 @@ EOF
     write_nginx_http_site
   fi
 
-  $SUDO ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+  install_nginx_site_link
   ok "nginx site installed"
 }
 
