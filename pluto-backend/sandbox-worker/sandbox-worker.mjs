@@ -545,7 +545,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url && req.url.startsWith("/preview/")) {
       return handleStatic(req, res, "/preview/", "preview");
     }
-    if (!checkSecret(req)) return json(res, 401, { error: "invalid or missing x-sandbox-secret" });
+    // Public readiness endpoint — no secret required.
+    if (req.method === "GET" && req.url && req.url.startsWith("/site-status/")) {
+      const s = decodeURIComponent(req.url.slice("/site-status/".length).split("?")[0]);
+      const r = await siteStatus(s);
+      return json(res, r.ok ? 200 : 404, r);
+    }
 
     if (req.method === "POST" && req.url === "/unpack") {
       const body = await readJson(req);
