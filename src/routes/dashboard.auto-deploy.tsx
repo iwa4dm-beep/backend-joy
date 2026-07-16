@@ -1160,22 +1160,29 @@ function AuditTrailPanel({ history }: { history: AutoDeployHistoryEntry[] }) {
 function WebhooksSection() {
   const [hooks, setHooks] = useState<WebhookConfig[]>([]);
   const [log, setLog] = useState<WebhookLogEntry[]>([]);
+  const [status, setStatus] = useState<Record<string, EndpointStatus>>({});
   const [showLog, setShowLog] = useState(false);
+  const [showSchemas, setShowSchemas] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
   const [draftLabel, setDraftLabel] = useState("");
+  const [draftSecret, setDraftSecret] = useState("");
   const [draftFormat, setDraftFormat] = useState<"json" | "slack" | "discord">("json");
   const [draftEvents, setDraftEvents] = useState<WebhookEvent[]>([...ALL_EVENTS]);
 
   useEffect(() => {
     setHooks(loadWebhooks());
     setLog(loadWebhookLog());
+    setStatus(loadEndpointStatus());
     const on1 = () => setHooks(loadWebhooks());
     const on2 = () => setLog(loadWebhookLog());
+    const on3 = () => setStatus(loadEndpointStatus());
     window.addEventListener("pluto:auto-deploy-webhooks:changed", on1);
     window.addEventListener("pluto:auto-deploy-webhook-log:changed", on2);
+    window.addEventListener("pluto:auto-deploy-webhook-status:changed", on3);
     return () => {
       window.removeEventListener("pluto:auto-deploy-webhooks:changed", on1);
       window.removeEventListener("pluto:auto-deploy-webhook-log:changed", on2);
+      window.removeEventListener("pluto:auto-deploy-webhook-status:changed", on3);
     };
   }, []);
 
@@ -1188,13 +1195,15 @@ function WebhooksSection() {
       id: newWebhookId(),
       label: draftLabel.trim() || new URL(draftUrl).host,
       url: draftUrl.trim(),
+      secret: draftSecret.trim() || undefined,
       events: [...draftEvents],
       enabled: true,
       format: draftFormat,
       createdAt: Date.now(),
     };
     persist([cfg, ...hooks]);
-    setDraftUrl(""); setDraftLabel(""); setDraftFormat("json"); setDraftEvents([...ALL_EVENTS]);
+    setDraftUrl(""); setDraftLabel(""); setDraftSecret("");
+    setDraftFormat("json"); setDraftEvents([...ALL_EVENTS]);
     toast.success("Webhook added");
   };
 
@@ -1210,6 +1219,7 @@ function WebhooksSection() {
     setTimeout(() => saveWebhooks(saved), 100);
     toast.success(`Test event sent to ${cfg.label}`);
   };
+
 
   const toggleEvent = (ev: WebhookEvent) => {
     setDraftEvents((cur) => cur.includes(ev) ? cur.filter((x) => x !== ev) : [...cur, ev]);
