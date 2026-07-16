@@ -9,7 +9,7 @@ import { getVpsBaseUrl, getServiceRoleKey } from "./vps-client";
 export type UpstreamPreflight = {
   ok: boolean;
   baseUrl: string;
-  tokenSource: "stored-jwt" | "minted-from-jwt-secret" | "stored-opaque" | "none";
+  tokenSource: "operator-token" | "stored-jwt" | "minted-from-jwt-secret" | "stored-opaque" | "none";
   checks: Array<{
     label: string;
     url: string;
@@ -20,6 +20,7 @@ export type UpstreamPreflight = {
   }>;
   hint: string | null;
 };
+
 
 async function probe(url: string, headers: Record<string, string>, label: string, method: "GET" | "POST" = "GET") {
   const t0 = Date.now();
