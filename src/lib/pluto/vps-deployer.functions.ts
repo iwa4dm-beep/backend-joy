@@ -57,11 +57,12 @@ async function rawFetch(
   }
 }
 
-function serviceHeaders(extra: Record<string, string> = {}): Record<string, string> | { error: string } {
-  const key = getServiceRoleKey();
+function serviceHeaders(extra: Record<string, string> = {}, override?: string): Record<string, string> | { error: string } {
+  const key = (override && override.trim()) || getServiceRoleKey();
   if (!key) return { error: "PLUTO_SERVICE_ROLE_KEY not configured" };
   return { apikey: key, authorization: `Bearer ${key}`, accept: "application/json", ...extra };
 }
+
 
 // ---------- Step 1: push migrations ----------
 const MigrationInput = z.object({
@@ -257,7 +258,7 @@ async function sqlExec(sql: string, headers: Record<string, string>): Promise<{ 
 }
 
 // ---------- ensureDeployInfra: idempotently create service user + deployments bucket ----------
-const EnsureInfraInput = z.object({ bucket: z.string().min(1).max(64).default("deployments") });
+const EnsureInfraInput = z.object({ bucket: z.string().min(1).max(64).default("deployments"), operatorToken: z.string().optional() });
 
 export type EnsureInfraStep = { key: string; label: string; ok: boolean; detail: string; debug: StepDebug | null };
 export type EnsureInfraResult = { ok: boolean; steps: EnsureInfraStep[] };
@@ -265,8 +266,9 @@ export type EnsureInfraResult = { ok: boolean; steps: EnsureInfraStep[] };
 export const ensureDeployInfra = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => EnsureInfraInput.parse(d))
   .handler(async ({ data }): Promise<EnsureInfraResult> => {
-    const headers = serviceHeaders();
+    const headers = serviceHeaders({}, data.operatorToken);
     if ("error" in headers) return { ok: false, steps: [{ key: "auth", label: "Auth", ok: false, detail: headers.error, debug: null }] };
+
     const base = getVpsBaseUrl();
     const steps: EnsureInfraStep[] = [];
 
@@ -307,7 +309,9 @@ const DeployAllInput = z.object({
   label: z.string().max(120).optional(),
   maxRetries: z.number().int().min(0).max(5).default(2),
   ensureInfra: z.boolean().default(true),
+  operatorToken: z.string().optional(),
 });
+
 
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
@@ -347,17 +351,18 @@ export const deployAll = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => DeployAllInput.parse(d))
   .handler(async ({ data }): Promise<DeployAllResult> => {
     const t0 = Date.now();
-    const headers = serviceHeaders({ "content-type": "application/json" });
+    const headers = serviceHeaders({ "content-type": "application/json" }, data.operatorToken);
     if ("error" in headers) {
       return { ok: false, workspaceId: data.workspaceId, totalMs: 0, steps: [{ key: "ensure-infra", label: "Auth", ok: false, attempts: [{ attempt: 1, ok: false, detail: headers.error, debug: null, startedAt: nowIso(), latencyMs: 0 }], result: null }] };
     }
+
     const base = getVpsBaseUrl();
     const steps: DeployStepLog[] = [];
 
     // Step 0: infra
     if (data.ensureInfra) {
       const infra = await withRetry("ensure-infra", "Ensure infra (service user + bucket)", data.maxRetries, async () => {
-        const r = await ensureDeployInfra({ data: { bucket: data.bucket } });
+        const r = await ensureDeployInfra({ data: { bucket: data.bucket, operatorToken: data.operatorToken } });
         return { ok: r.ok, detail: r.steps.map(s => `${s.ok ? "✓" : "✗"} ${s.label}: ${s.detail}`).join(" | "), debug: null, result: r };
       });
       steps.push(infra);
@@ -389,7 +394,7 @@ export const deployAll = createServerFn({ method: "POST" })
     const uplStep = await withRetry("upload-bundle", "Upload bundle to storage", data.maxRetries, async () => {
       const form = new FormData();
       form.append("file", new Blob([bytes], { type: "application/zip" }), filename);
-      const uplHeaders = serviceHeaders({ "x-workspace-id": data.workspaceId, "x-upsert": "true" });
+      const uplHeaders = serviceHeaders({ "x-workspace-id": data.workspaceId, "x-upsert": "true" }, data.operatorToken);
       if ("error" in uplHeaders) return { ok: false, detail: uplHeaders.error, debug: null, result: null };
       const url = `${base}/storage/v1/object/${encodeURIComponent(data.bucket)}/${cleanPath}`;
       const preview = `(multipart upload ${bytes.length} bytes)`;
