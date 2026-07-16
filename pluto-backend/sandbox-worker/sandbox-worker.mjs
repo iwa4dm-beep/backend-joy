@@ -26,7 +26,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual, createHash } from "node:crypto";
 
 const PORT = Number(process.env.PORT ?? process.env.SANDBOX_WORKER_PORT ?? 8787);
 const SECRET = process.env.SANDBOX_SHARED_SECRET ?? "";
@@ -356,7 +356,23 @@ const MIME = {
   ".wasm": "application/wasm",
 };
 
-async function serveStatic(res, wsDir, linkName, relPath) {
+// Detect fingerprinted assets (Vite emits /assets/*-<hash>.js). These are
+// safe to cache forever with `immutable`.
+const HASHED_ASSET_RE = /-[a-f0-9]{8,}\.(?:js|mjs|css|woff2?|png|jpg|jpeg|webp|gif|svg|ico|map|wasm)$/i;
+function cacheControlFor(ext, filePath) {
+  if (ext === ".html" || ext === ".htm") return "no-cache";
+  if (HASHED_ASSET_RE.test(filePath)) return "public, max-age=31536000, immutable";
+  return "public, max-age=3600, must-revalidate";
+}
+function weakEtag(stat) {
+  // Cheap ETag: size + mtime. Weak (W/) because it is not a byte hash.
+  return `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+}
+function strongEtagFromBuffer(buf) {
+  return `"${createHash("sha1").update(buf).digest("base64").slice(0, 22)}"`;
+}
+
+async function serveStatic(req, res, wsDir, linkName, relPath) {
   // Resolve wsDir/<linkName> → real release dir, then join relPath safely.
   let baseDir;
   try { baseDir = await fsp.realpath(path.join(wsDir, linkName)); }
@@ -373,20 +389,42 @@ async function serveStatic(res, wsDir, linkName, relPath) {
   } catch { /* fall through — SPA fallback below */ }
 
   try {
-    const data = await fsp.readFile(filePath);
+    const st = await fsp.stat(filePath);
     const ext = path.extname(filePath).toLowerCase();
     const type = MIME[ext] ?? "application/octet-stream";
+    const etag = weakEtag(st);
+    const inm = req.headers["if-none-match"];
+    if (typeof inm === "string" && inm === etag) {
+      res.writeHead(304, { etag, "cache-control": cacheControlFor(ext, filePath) });
+      return res.end();
+    }
+    const data = await fsp.readFile(filePath);
     res.writeHead(200, {
       "content-type": type,
       "content-length": data.length,
-      "cache-control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+      "cache-control": cacheControlFor(ext, filePath),
+      "last-modified": new Date(st.mtimeMs).toUTCString(),
+      etag,
+      vary: "Accept-Encoding",
     });
     return res.end(data);
   } catch {
     // SPA fallback → index.html at the release root.
     try {
       const idx = await fsp.readFile(path.join(baseDir, "index.html"));
-      res.writeHead(200, { "content-type": MIME[".html"], "content-length": idx.length, "cache-control": "no-cache" });
+      const etag = strongEtagFromBuffer(idx);
+      const inm = req.headers["if-none-match"];
+      if (typeof inm === "string" && inm === etag) {
+        res.writeHead(304, { etag, "cache-control": "no-cache" });
+        return res.end();
+      }
+      res.writeHead(200, {
+        "content-type": MIME[".html"],
+        "content-length": idx.length,
+        "cache-control": "no-cache",
+        etag,
+        vary: "Accept-Encoding",
+      });
       return res.end(idx);
     } catch {
       return json(res, 404, { error: "not_found" });
