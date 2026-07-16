@@ -126,6 +126,10 @@ async function ensureSlugSymlink(wsDir, slug) {
       const abs = path.isAbsolute(target) ? target : path.join(SITES_ROOT, target);
       if (path.resolve(abs) === path.resolve(wsDir)) return slugPath; // already correct
       await fsp.unlink(slugPath);
+    } else if (st.isDirectory() && path.resolve(slugPath) === path.resolve(wsDir)) {
+      // workspaceId and public slug are identical. Older workers treated this
+      // as "not linked" because no symlink could be created over the directory.
+      return slugPath;
     } else {
       // A concrete directory / file at this slug — refuse to clobber.
       return null;
@@ -287,9 +291,16 @@ async function resolveSlug(slug) {
   const slugPath = path.join(SITES_ROOT, s);
   try {
     const st = await fsp.lstat(slugPath);
-    if (!st.isSymbolicLink()) return { ok: false, error: "slug not linked" };
-    const target = await fsp.readlink(slugPath);
-    const wsDir = path.isAbsolute(target) ? target : path.join(SITES_ROOT, target);
+    let wsDir;
+    if (st.isSymbolicLink()) {
+      const target = await fsp.readlink(slugPath);
+      wsDir = path.isAbsolute(target) ? target : path.join(SITES_ROOT, target);
+    } else if (st.isDirectory()) {
+      // Accept /var/lib/pluto/sites/<slug>/ when workspaceId === slug.
+      wsDir = slugPath;
+    } else {
+      return { ok: false, error: "slug not linked" };
+    }
     const workspaceId = path.basename(wsDir);
     let manifest = null;
     try { manifest = JSON.parse(await fsp.readFile(path.join(wsDir, "current.json"), "utf-8")); } catch { /* no bundle yet */ }
@@ -466,12 +477,16 @@ async function siteStatus(slug) {
   let workspaceId = null;
   try {
     const st = await fsp.lstat(slugPath);
-    if (!st.isSymbolicLink()) {
+    let wsDir;
+    if (st.isSymbolicLink()) {
+      const target = await fsp.readlink(slugPath);
+      wsDir = path.isAbsolute(target) ? target : path.join(SITES_ROOT, target);
+    } else if (st.isDirectory()) {
+      wsDir = slugPath;
+    } else {
       return { ok: false, slug: s, error: "slug_not_linked",
                bundleUploaded: false, migrationsApplied: null, staticServing: false };
     }
-    const target = await fsp.readlink(slugPath);
-    const wsDir = path.isAbsolute(target) ? target : path.join(SITES_ROOT, target);
     workspaceId = path.basename(wsDir);
     const readManifest = async (name) => {
       try { return JSON.parse(await fsp.readFile(path.join(wsDir, name), "utf-8")); }
