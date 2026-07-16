@@ -215,7 +215,9 @@ function AutoDeployInner() {
   const runPreflight = useCallback(async () => {
     setPreflightBusy(true);
     try {
-      const r = await pingUpstreamFn();
+      const operatorToken = getUpstream().token || undefined;
+      const r = await pingUpstreamFn({ data: { operatorToken } });
+
       setPreflight(r);
     } catch (e) {
       setPreflight({ ok: false, baseUrl: "", tokenSource: "none", checks: [], hint: (e as Error).message });
