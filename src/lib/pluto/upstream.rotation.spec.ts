@@ -1,4 +1,6 @@
-// @vitest-environment jsdom
+// Node vitest env — stub a minimal localStorage on globalThis before
+// importing plutoApi (its `typeof window` gate accepts any defined global).
+import { afterAll, beforeAll } from "vitest";
 // E2E-style unit test for the JWT-rotation self-healing path in plutoApi.
 //
 // Scenario: operator rotated PLUTO_JWT_SECRET on the backend. The browser
