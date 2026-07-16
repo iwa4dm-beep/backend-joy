@@ -50,15 +50,15 @@ fi
 
 # 2) worker bootstrap
 log "reset sandbox worker port"
-if [ -x "$DEPLOY/reset-sandbox-worker-port.sh" ]; then
+if [ -f "$DEPLOY/reset-sandbox-worker-port.sh" ]; then
   bash "$DEPLOY/reset-sandbox-worker-port.sh" "${PORT:-8787}" || die "port reset failed"
 fi
 
 log "bootstrap pluto-sandbox-worker"
-if [ -x "$DEPLOY/bootstrap-sandbox-worker.sh" ]; then
+if [ -f "$DEPLOY/bootstrap-sandbox-worker.sh" ]; then
   if ! SECRET="$SECRET" SERVICE_KEY="${SERVICE_KEY:-}" UPSTREAM="${UPSTREAM:-}" bash "$DEPLOY/bootstrap-sandbox-worker.sh"; then
     log "bootstrap failed; running emergency worker repair"
-    [ -x "$DEPLOY/repair-sandbox-worker.sh" ] || die "worker bootstrap failed and repair script is missing"
+    [ -f "$DEPLOY/repair-sandbox-worker.sh" ] || die "worker bootstrap failed and repair script is missing"
     SECRET="$SECRET" SERVICE_KEY="${SERVICE_KEY:-}" UPSTREAM="${UPSTREAM:-}" bash "$DEPLOY/repair-sandbox-worker.sh" || die "worker repair failed"
   fi
 else
@@ -70,7 +70,7 @@ else
 fi
 
 log "force-refresh running worker code"
-if [ -x "$DEPLOY/refresh-worker.sh" ]; then
+if [ -f "$DEPLOY/refresh-worker.sh" ]; then
   bash "$DEPLOY/refresh-worker.sh" || die "worker refresh failed"
 else
   die "missing $DEPLOY/refresh-worker.sh — git pull did not bring the current deploy scripts"

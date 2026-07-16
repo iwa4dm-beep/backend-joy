@@ -53,7 +53,7 @@ if systemctl list-unit-files pluto-sandbox.service >/dev/null 2>&1; then
 fi
 
 echo "▶ Resetting worker port"
-if [ -x "$HERE/reset-sandbox-worker-port.sh" ]; then
+if [ -f "$HERE/reset-sandbox-worker-port.sh" ]; then
   bash "$HERE/reset-sandbox-worker-port.sh" "$PORT"
 else
   systemctl stop "$UNIT" 2>/dev/null || true
