@@ -4,7 +4,8 @@
 #   1. worker /healthz on 127.0.0.1:8787
 #   2. nginx → /sandbox/healthz over HTTPS  (api.<APEX>)
 #   3. /site-status/<slug> readiness readout
-#   4. served-site probe (delegates to verify-served-site.sh)
+#   4. nginx → /sites/<slug>/ over HTTPS
+#   5. served-site probe (delegates to verify-served-site.sh)
 #
 # Usage:
 #   bash pluto-backend/deploy/verify-deploy.sh <slug>
@@ -23,14 +24,14 @@ ok()   { printf "  ✓ %s\n" "$*"; }
 bad()  { printf "  ✗ %s\n" "$*"; FAIL=1; }
 FAIL=0
 
-step "1/4  Worker /healthz on 127.0.0.1:8787"
+step "1/5  Worker /healthz on 127.0.0.1:8787"
 if OUT="$(curl -fsS --max-time 5 http://127.0.0.1:8787/healthz)"; then
   ok "worker responded"; echo "$OUT" | head -c 300; echo
 else
   bad "worker unreachable — check: sudo systemctl status pluto-sandbox-worker"
 fi
 
-step "2/4  Nginx → worker (/sandbox/healthz over HTTPS)"
+step "2/5  Nginx → worker (/sandbox/healthz over HTTPS)"
 code="$(curl -s -o /tmp/_sandbox_health.json -w '%{http_code}' --max-time 8 "https://${API}/sandbox/healthz" || echo 000)"
 if [ "$code" = "200" ]; then
   ok "https://${API}/sandbox/healthz → 200"
@@ -40,7 +41,7 @@ else
   echo "     nginx reload: sudo systemctl reload nginx"
 fi
 
-step "3/4  Site readiness — /site-status/${SLUG}"
+step "3/5  Site readiness — /site-status/${SLUG}"
 code="$(curl -s -o /tmp/_site_status.json -w '%{http_code}' --max-time 8 "https://${API}/site-status/${SLUG}" || echo 000)"
 if [ "$code" = "200" ]; then
   ok "readiness endpoint responded"
@@ -50,7 +51,16 @@ else
   bad "site-status → HTTP ${code}"
 fi
 
-step "4/4  Served site probe"
+step "4/5  Required HTTPS /sites/${SLUG}/ probe"
+code="$(curl -s -o /tmp/_api_sites_probe.html -w '%{http_code}' --max-time 8 -L "https://${API}/sites/${SLUG}/" || echo 000)"
+if [ "$code" = "200" ]; then
+  ok "https://${API}/sites/${SLUG}/ → 200"
+else
+  bad "https://${API}/sites/${SLUG}/ → HTTP ${code}"
+  echo "     If worker health is OK, check slug disk state: ls -la /var/lib/pluto/sites/${SLUG}"
+fi
+
+step "5/5  Served site probe"
 if bash "$here/verify-served-site.sh" "$SLUG"; then
   ok "served-site verifier passed"
 else
