@@ -186,9 +186,9 @@ assert_nginx_site_loaded() {
     fail "nginx is not loading the dashboard site. Expected one of: ${expected_paths}. Fix nginx include patterns, then re-run."
   fi
 
-  if ! printf '%s\n' "$dump" | grep -A80 -F "# configuration file: ${loaded_path}:" | grep -qE "server_name[[:space:]]+${DOMAIN}([[:space:];]|$)"; then
+  if ! nginx_dump_has_active_dashboard_block "$dump"; then
     show_tls_diagnostics
-    fail "nginx loaded ${loaded_path}, but no active server_name ${DOMAIN} was found."
+    fail "nginx loaded ${loaded_path}, but no active server_name ${DOMAIN} / cert / proxy_pass block was found."
   fi
   ok "nginx is loading the managed server block for ${DOMAIN}: ${loaded_path}"
 }
