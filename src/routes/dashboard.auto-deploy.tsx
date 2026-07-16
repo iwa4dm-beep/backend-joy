@@ -282,7 +282,33 @@ function AutoDeployInner() {
   /** Phase 5: confirm & deploy. */
   const confirmDeploy = async (payload: PendingDeploy) => {
     setPhase("deploying");
-    log(payload.isRollback ? "▶ Rollback confirmed — redeploying previous bundle…" : "▶ Approved — deploying…");
+    const approvedAt = Date.now();
+    log(payload.isRollback
+      ? `▶ Rollback confirmed by ${approverEmail} — redeploying previous bundle…`
+      : `▶ Approved by ${approverEmail} — deploying…`);
+
+    // Start real-time step progression stream. We don't have server-side
+    // SSE for deployAll, so drive an optimistic timeline that advances
+    // through the known pipeline while the RPC is in-flight. When the
+    // real result arrives, we reconcile with actual step outcomes.
+    const events: StepEvent[] = [];
+    const pushEvent = (ev: StepEvent) => {
+      events.push(ev);
+      setStreamEvents([...events]);
+    };
+    setStreamEvents([]);
+    setRunningStepIdx(0);
+    pushEvent({ ts: Date.now(), key: PIPELINE_STEPS[0].key, label: PIPELINE_STEPS[0].label, status: "running" });
+    let idx = 0;
+    streamTimerRef.current = setInterval(() => {
+      if (idx >= PIPELINE_STEPS.length - 1) return;
+      const prev = PIPELINE_STEPS[idx];
+      pushEvent({ ts: Date.now(), key: prev.key, label: prev.label, status: "ok", detail: "in-progress" });
+      idx += 1;
+      setRunningStepIdx(idx);
+      pushEvent({ ts: Date.now(), key: PIPELINE_STEPS[idx].key, label: PIPELINE_STEPS[idx].label, status: "running" });
+    }, 900);
+
     try {
       const result = await deploy({
         data: {
@@ -296,6 +322,20 @@ function AutoDeployInner() {
           ensureInfra: true,
         },
       });
+
+      if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
+
+      // Reconcile: replace optimistic stream with real per-step events.
+      const realEvents: StepEvent[] = result.steps.map((s) => ({
+        ts: Date.now(),
+        key: s.key,
+        label: s.label,
+        status: s.ok ? "ok" : "fail",
+        detail: s.attempts.at(-1)?.detail ?? "",
+      }));
+      setStreamEvents(realEvents);
+      setRunningStepIdx(-1);
+
       setDeployResult(result);
       for (const s of result.steps) {
         log(`${s.ok ? "✓" : "✗"} ${s.label}${s.attempts.at(-1)?.detail ? ` — ${s.attempts.at(-1)!.detail}` : ""}`);
@@ -303,6 +343,7 @@ function AutoDeployInner() {
       const h = extractHealth(result);
       setHealth(h);
       if (!result.ok) throw new Error("Deploy pipeline reported failure");
+      if (h && !h.overallOk) throw new Error(`Health check failed — ${h.endpoints.filter(e => !e.ok).length} endpoint(s) unhealthy`);
       log(`✅ Live in ${(result.totalMs / 1000).toFixed(1)}s`);
       setPhase("live");
 
@@ -328,9 +369,24 @@ function AutoDeployInner() {
         })),
         health: h,
         isRollback: payload.isRollback,
+        approver: approverEmail,
+        approvedAt,
+        rollbackOf: payload.isRollback ? lastSuccessRef.current?.slug ?? null : null,
+        stepEvents: realEvents,
       });
       lastSuccessRef.current = payload;
     } catch (e) {
+      if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
+      // Mark the currently-running step as failed in the stream.
+      if (events.length > 0) {
+        const last = events[events.length - 1];
+        if (last.status === "running") {
+          last.status = "fail";
+          last.detail = e instanceof Error ? e.message : String(e);
+          setStreamEvents([...events]);
+        }
+      }
+      setRunningStepIdx(-1);
       const msg = e instanceof Error ? e.message : String(e);
       setErrorMsg(msg); log(`✗ ${msg}`); setPhase("error");
       // Persist failed run too for visibility
@@ -350,6 +406,10 @@ function AutoDeployInner() {
         sqlPreview: payload.sql.slice(0, 2048),
         envKeys: payload.envVars.filter((e) => e.key.trim()).map((e) => e.key.trim()),
         steps: [], health: null, isRollback: payload.isRollback,
+        approver: approverEmail,
+        approvedAt,
+        rollbackOf: payload.isRollback ? lastSuccessRef.current?.slug ?? null : null,
+        stepEvents: events,
       });
     }
   };
