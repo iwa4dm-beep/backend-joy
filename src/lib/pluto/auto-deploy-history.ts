@@ -7,6 +7,14 @@ import type { DeployAllResult } from "@/lib/pluto/vps-deployer.functions";
 const KEY = "pluto:auto-deploy-history";
 const MAX = 25;
 
+export type StepEvent = {
+  ts: number;
+  key: string;
+  label: string;
+  status: "running" | "ok" | "fail";
+  detail?: string;
+};
+
 export type AutoDeployHistoryEntry = {
   id: string;
   timestamp: number;
@@ -25,6 +33,11 @@ export type AutoDeployHistoryEntry = {
   steps: Array<{ key: string; label: string; ok: boolean; attempts: number; detail: string }>;
   health: HealthSummary | null;
   isRollback?: boolean;
+  // Audit trail
+  approver?: string | null;          // email/id of who confirmed the deploy
+  approvedAt?: number | null;        // ms epoch when approval was confirmed
+  rollbackOf?: string | null;        // if rollback: slug of the earlier deployment restored
+  stepEvents?: StepEvent[];          // per-step real-time progression timeline
 };
 
 export type EndpointCheck = {
