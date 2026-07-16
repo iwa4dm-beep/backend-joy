@@ -1256,6 +1256,14 @@ function WebhooksSection() {
             <option value="discord">Discord</option>
           </select>
         </div>
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+          <input value={draftSecret} onChange={(e) => setDraftSecret(e.target.value)}
+            placeholder="Signing secret (HMAC-SHA256, optional)" className="rounded-md border border-input bg-background px-2.5 py-1.5 text-sm font-mono"
+            type="password" autoComplete="off"/>
+          <span className="text-[10px] text-muted-foreground self-center px-1">
+            Sent as <code className="font-mono">x-pluto-signature: sha256=&lt;hex&gt;</code>
+          </span>
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {ALL_EVENTS.map((ev) => (
             <button key={ev} onClick={() => toggleEvent(ev)}
