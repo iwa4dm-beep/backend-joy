@@ -1151,3 +1151,159 @@ function AuditTrailPanel({ history }: { history: AutoDeployHistoryEntry[] }) {
     </section>
   );
 }
+
+// ─── Configurable webhooks ────────────────────────────────────────────────
+function WebhooksSection() {
+  const [hooks, setHooks] = useState<WebhookConfig[]>([]);
+  const [log, setLog] = useState<WebhookLogEntry[]>([]);
+  const [showLog, setShowLog] = useState(false);
+  const [draftUrl, setDraftUrl] = useState("");
+  const [draftLabel, setDraftLabel] = useState("");
+  const [draftFormat, setDraftFormat] = useState<"json" | "slack" | "discord">("json");
+  const [draftEvents, setDraftEvents] = useState<WebhookEvent[]>([...ALL_EVENTS]);
+
+  useEffect(() => {
+    setHooks(loadWebhooks());
+    setLog(loadWebhookLog());
+    const on1 = () => setHooks(loadWebhooks());
+    const on2 = () => setLog(loadWebhookLog());
+    window.addEventListener("pluto:auto-deploy-webhooks:changed", on1);
+    window.addEventListener("pluto:auto-deploy-webhook-log:changed", on2);
+    return () => {
+      window.removeEventListener("pluto:auto-deploy-webhooks:changed", on1);
+      window.removeEventListener("pluto:auto-deploy-webhook-log:changed", on2);
+    };
+  }, []);
+
+  const persist = (list: WebhookConfig[]) => { saveWebhooks(list); setHooks(list); };
+
+  const addHook = () => {
+    if (!draftUrl.trim() || !/^https?:\/\//.test(draftUrl)) { toast.error("Valid https URL দিন"); return; }
+    if (draftEvents.length === 0) { toast.error("অন্তত একটি event select করুন"); return; }
+    const cfg: WebhookConfig = {
+      id: newWebhookId(),
+      label: draftLabel.trim() || new URL(draftUrl).host,
+      url: draftUrl.trim(),
+      events: [...draftEvents],
+      enabled: true,
+      format: draftFormat,
+      createdAt: Date.now(),
+    };
+    persist([cfg, ...hooks]);
+    setDraftUrl(""); setDraftLabel(""); setDraftFormat("json"); setDraftEvents([...ALL_EVENTS]);
+    toast.success("Webhook added");
+  };
+
+  const testHook = (cfg: WebhookConfig) => {
+    // Force-dispatch a synthetic event on this hook only
+    const saved = loadWebhooks();
+    saveWebhooks([{ ...cfg, events: ["deploy.published"], enabled: true }, ...saved.filter(h => h.id !== cfg.id).map(h => ({ ...h, enabled: false }))]);
+    dispatchWebhookEvent("deploy.published", {
+      slug: "test-slug", liveUrl: "https://example.test", totalMs: 0,
+      message: "Test webhook from Auto-Deploy Studio", approver: "operator",
+    });
+    // Restore full config
+    setTimeout(() => saveWebhooks(saved), 100);
+    toast.success(`Test event sent to ${cfg.label}`);
+  };
+
+  const toggleEvent = (ev: WebhookEvent) => {
+    setDraftEvents((cur) => cur.includes(ev) ? cur.filter((x) => x !== ev) : [...cur, ev]);
+  };
+
+  return (
+    <section className="rounded-xl border border-border bg-card">
+      <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2">
+        <Webhook className="h-4 w-4" /> Realtime notification webhooks
+        <span className="text-xs text-muted-foreground">({hooks.length} configured)</span>
+        <button
+          onClick={() => setShowLog((v) => !v)}
+          className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <Bell className="h-3.5 w-3.5" /> Delivery log ({log.length})
+        </button>
+      </div>
+
+      {/* Add form */}
+      <div className="p-4 space-y-3 border-b border-border">
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2">
+          <input value={draftLabel} onChange={(e) => setDraftLabel(e.target.value)}
+            placeholder="Label (e.g. #deploys)" className="rounded-md border border-input bg-background px-2.5 py-1.5 text-sm"/>
+          <input value={draftUrl} onChange={(e) => setDraftUrl(e.target.value)}
+            placeholder="https://hooks.slack.com/... or custom endpoint" className="rounded-md border border-input bg-background px-2.5 py-1.5 text-sm font-mono"/>
+          <select value={draftFormat} onChange={(e) => setDraftFormat(e.target.value as "json" | "slack" | "discord")}
+            className="rounded-md border border-input bg-background px-2.5 py-1.5 text-sm">
+            <option value="json">JSON</option>
+            <option value="slack">Slack</option>
+            <option value="discord">Discord</option>
+          </select>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {ALL_EVENTS.map((ev) => (
+            <button key={ev} onClick={() => toggleEvent(ev)}
+              className={`text-[10px] font-mono px-2 py-0.5 rounded border ${draftEvents.includes(ev) ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}>
+              {ev}
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end">
+          <button onClick={addHook} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90">
+            <Plus className="h-3.5 w-3.5" /> Add webhook
+          </button>
+        </div>
+      </div>
+
+      {/* Existing hooks */}
+      {hooks.length === 0 ? (
+        <div className="p-4 text-xs text-muted-foreground italic">এখনো কোনো webhook যোগ করা হয়নি।</div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {hooks.map((h) => (
+            <li key={h.id} className="px-4 py-3 text-xs space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <input type="checkbox" checked={h.enabled}
+                  onChange={(e) => persist(hooks.map((x) => x.id === h.id ? { ...x, enabled: e.target.checked } : x))}/>
+                <span className="font-medium">{h.label}</span>
+                <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-muted">{h.format}</span>
+                <span className="text-muted-foreground font-mono truncate flex-1 min-w-0">{h.url}</span>
+                <button onClick={() => testHook(h)}
+                  className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-accent">Test</button>
+                <button onClick={() => persist(hooks.filter((x) => x.id !== h.id))}
+                  className="rounded-md border border-border p-1 hover:bg-destructive/10 hover:text-destructive">
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1 pl-6">
+                {h.events.map((ev) => (
+                  <span key={ev} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background border border-border text-muted-foreground">{ev}</span>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Delivery log */}
+      {showLog && (
+        <div className="border-t border-border">
+          <div className="px-4 py-2 text-[11px] font-medium text-muted-foreground">Recent deliveries</div>
+          {log.length === 0 ? (
+            <div className="px-4 pb-3 text-xs text-muted-foreground italic">No deliveries yet.</div>
+          ) : (
+            <ul className="divide-y divide-border max-h-64 overflow-auto">
+              {log.map((e, i) => (
+                <li key={i} className="px-4 py-1.5 text-[11px] flex items-center gap-2 font-mono">
+                  {e.ok ? <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" /> : <XCircle className="h-3 w-3 text-destructive shrink-0" />}
+                  <span className="text-muted-foreground">{new Date(e.ts).toLocaleTimeString()}</span>
+                  <span className="font-semibold">{e.event}</span>
+                  <span className="text-muted-foreground truncate">→ {e.webhookLabel}</span>
+                  <span className="ml-auto text-muted-foreground">{e.status || "—"} · {e.latencyMs}ms</span>
+                  {e.error && <span className="text-destructive truncate">{e.error}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
