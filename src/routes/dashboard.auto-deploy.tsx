@@ -471,9 +471,16 @@ function AutoDeployInner() {
     }
 
     if (result && !lastError) {
-      log(`✅ Live in ${(result.totalMs / 1000).toFixed(1)}s${attempt > 1 ? ` (after ${attempt - 1} auto-retry)` : ""}`);
+      log(`✅ Pipeline complete in ${(result.totalMs / 1000).toFixed(1)}s${attempt > 1 ? ` (after ${attempt - 1} auto-retry)` : ""}`);
       setPhase("live");
-      const liveUrl = `https://${payload.slug}.apps.timescard.cloud`;
+      // Prefer the URL the backend actually resolved + probed. Fall back to the
+      // legacy fabricated slug host only for display continuity, and mark it
+      // clearly as "not-served-yet" when the backend confirms it isn't reachable.
+      const resolvedLiveUrl =
+        result.liveUrls?.resolvedSite ||
+        result.liveUrls?.servedSite ||
+        `https://${payload.slug}.apps.timescard.cloud`;
+      const liveUrl = resolvedLiveUrl;
       const realEvents: StepEvent[] = result.steps.map((s) => ({
         ts: Date.now(), key: s.key, label: s.label,
         status: s.ok ? "ok" : "fail",
