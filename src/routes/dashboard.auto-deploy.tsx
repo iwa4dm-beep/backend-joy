@@ -567,7 +567,38 @@ function AutoDeployInner() {
 
 
 
-  const liveUrl = useMemo(() => slug ? `https://${slug}.apps.timescard.cloud` : null, [slug]);
+  // The URL displayed after "Live". Prefer the backend-resolved served-site URL
+  // (from PLUTO_SERVED_SITE_URL or the sandbox worker's unpack webRoot) — only
+  // fall back to the slug-based hostname (which has no DNS/nginx wiring today).
+  const liveUrl = useMemo(() => {
+    const fromResult = deployResult?.liveUrls?.resolvedSite || deployResult?.liveUrls?.servedSite;
+    if (fromResult) return fromResult;
+    return slug ? `https://${slug}.apps.timescard.cloud` : null;
+  }, [slug, deployResult]);
+  const bootstrapInvokeUrl = deployResult?.liveUrls?.bootstrapInvoke ?? null;
+  // Backend probe outcome (populated during deployAll). Client re-probes on demand.
+  const initialProbe = deployResult?.liveUrls?.servedSiteProbe ?? null;
+  const [liveProbe, setLiveProbe] = useState<LiveUrlProbe | null>(initialProbe);
+  const [probing, setProbing] = useState(false);
+  useEffect(() => { setLiveProbe(deployResult?.liveUrls?.servedSiteProbe ?? null); }, [deployResult]);
+  const probeLiveUrlFn = useServerFn(probeLiveUrl);
+  const runProbe = useCallback(async () => {
+    if (!liveUrl) return;
+    setProbing(true);
+    try {
+      const r = await probeLiveUrlFn({ data: { url: liveUrl } });
+      setLiveProbe(r);
+      if (r.reachable) toast.success(`Live URL reachable — HTTP ${r.status}`);
+      else toast.error(`Live URL unreachable — HTTP ${r.status || "network error"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Probe failed");
+    } finally {
+      setProbing(false);
+    }
+  }, [liveUrl, probeLiveUrlFn]);
+  const servedHint = deployResult?.liveUrls?.servedHint ?? null;
+  const backendSaysServed = deployResult?.liveUrls?.served === true;
+  const isReachable = liveProbe ? liveProbe.reachable : backendSaysServed;
   const busy = phase === "analyzing" || phase === "planning" || phase === "bundling" || phase === "deploying";
   const canRun = !busy && phase !== "awaiting-approval";
 
