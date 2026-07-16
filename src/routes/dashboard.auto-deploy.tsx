@@ -1435,7 +1435,6 @@ function PayloadSchemasPanel() {
                 className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-accent inline-flex items-center gap-1">
                 <Download className="h-2.5 w-2.5"/> .json
               </button>
-            </li>
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground">{current.description}</p>
