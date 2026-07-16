@@ -16,7 +16,7 @@ import {
   XCircle, Copy, ExternalLink, RefreshCw, Globe, Sparkles,
   ChevronRight, ChevronDown, ScrollText, History, Undo2, KeyRound,
   Plus, Trash2, Eye, EyeOff, ShieldCheck, Activity, AlertCircle,
-  Download, UserCheck, Radio, Bell, Webhook,
+  Download, UserCheck, Radio, Bell, Webhook, FileJson,
 } from "lucide-react";
 
 import { analyzeZip } from "@/lib/autoconnect/analyzer";
@@ -34,9 +34,13 @@ import {
 } from "@/lib/pluto/auto-deploy-history";
 import {
   ALL_EVENTS, dispatchWebhookEvent, loadWebhooks, saveWebhooks,
-  loadWebhookLog, newWebhookId,
+  loadWebhookLog, loadEndpointStatus, newWebhookId,
   type WebhookConfig, type WebhookEvent, type WebhookLogEntry,
+  type EndpointStatus,
 } from "@/lib/pluto/auto-deploy-webhooks";
+import {
+  PAYLOAD_SCHEMAS, buildSchemaBundle,
+} from "@/lib/pluto/auto-deploy-webhook-schemas";
 import { useAuth } from "@/lib/pluto/auth-context";
 
 // Self-healing: max auto-retry attempts on transient deploy failure
@@ -1156,22 +1160,29 @@ function AuditTrailPanel({ history }: { history: AutoDeployHistoryEntry[] }) {
 function WebhooksSection() {
   const [hooks, setHooks] = useState<WebhookConfig[]>([]);
   const [log, setLog] = useState<WebhookLogEntry[]>([]);
+  const [status, setStatus] = useState<Record<string, EndpointStatus>>({});
   const [showLog, setShowLog] = useState(false);
+  const [showSchemas, setShowSchemas] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
   const [draftLabel, setDraftLabel] = useState("");
+  const [draftSecret, setDraftSecret] = useState("");
   const [draftFormat, setDraftFormat] = useState<"json" | "slack" | "discord">("json");
   const [draftEvents, setDraftEvents] = useState<WebhookEvent[]>([...ALL_EVENTS]);
 
   useEffect(() => {
     setHooks(loadWebhooks());
     setLog(loadWebhookLog());
+    setStatus(loadEndpointStatus());
     const on1 = () => setHooks(loadWebhooks());
     const on2 = () => setLog(loadWebhookLog());
+    const on3 = () => setStatus(loadEndpointStatus());
     window.addEventListener("pluto:auto-deploy-webhooks:changed", on1);
     window.addEventListener("pluto:auto-deploy-webhook-log:changed", on2);
+    window.addEventListener("pluto:auto-deploy-webhook-status:changed", on3);
     return () => {
       window.removeEventListener("pluto:auto-deploy-webhooks:changed", on1);
       window.removeEventListener("pluto:auto-deploy-webhook-log:changed", on2);
+      window.removeEventListener("pluto:auto-deploy-webhook-status:changed", on3);
     };
   }, []);
 
@@ -1184,13 +1195,15 @@ function WebhooksSection() {
       id: newWebhookId(),
       label: draftLabel.trim() || new URL(draftUrl).host,
       url: draftUrl.trim(),
+      secret: draftSecret.trim() || undefined,
       events: [...draftEvents],
       enabled: true,
       format: draftFormat,
       createdAt: Date.now(),
     };
     persist([cfg, ...hooks]);
-    setDraftUrl(""); setDraftLabel(""); setDraftFormat("json"); setDraftEvents([...ALL_EVENTS]);
+    setDraftUrl(""); setDraftLabel(""); setDraftSecret("");
+    setDraftFormat("json"); setDraftEvents([...ALL_EVENTS]);
     toast.success("Webhook added");
   };
 
@@ -1207,18 +1220,24 @@ function WebhooksSection() {
     toast.success(`Test event sent to ${cfg.label}`);
   };
 
+
   const toggleEvent = (ev: WebhookEvent) => {
     setDraftEvents((cur) => cur.includes(ev) ? cur.filter((x) => x !== ev) : [...cur, ev]);
   };
 
   return (
     <section className="rounded-xl border border-border bg-card">
-      <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2">
+      <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2 flex-wrap">
         <Webhook className="h-4 w-4" /> Realtime notification webhooks
         <span className="text-xs text-muted-foreground">({hooks.length} configured)</span>
         <button
-          onClick={() => setShowLog((v) => !v)}
+          onClick={() => setShowSchemas((v) => !v)}
           className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <FileJson className="h-3.5 w-3.5" /> Payload schemas
+        </button>
+        <button
+          onClick={() => setShowLog((v) => !v)}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <Bell className="h-3.5 w-3.5" /> Delivery log ({log.length})
         </button>
       </div>
@@ -1236,6 +1255,14 @@ function WebhooksSection() {
             <option value="slack">Slack</option>
             <option value="discord">Discord</option>
           </select>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+          <input value={draftSecret} onChange={(e) => setDraftSecret(e.target.value)}
+            placeholder="Signing secret (HMAC-SHA256, optional)" className="rounded-md border border-input bg-background px-2.5 py-1.5 text-sm font-mono"
+            type="password" autoComplete="off"/>
+          <span className="text-[10px] text-muted-foreground self-center px-1">
+            Sent as <code className="font-mono">x-pluto-signature: sha256=&lt;hex&gt;</code>
+          </span>
         </div>
         <div className="flex flex-wrap gap-1.5">
           {ALL_EVENTS.map((ev) => (
@@ -1264,6 +1291,23 @@ function WebhooksSection() {
                   onChange={(e) => persist(hooks.map((x) => x.id === h.id ? { ...x, enabled: e.target.checked } : x))}/>
                 <span className="font-medium">{h.label}</span>
                 <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-muted">{h.format}</span>
+                {h.secret && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-500/10 text-emerald-500 flex items-center gap-1">
+                    <ShieldCheck className="h-2.5 w-2.5"/> signed
+                  </span>
+                )}
+                {status[h.id] && (
+                  <span
+                    data-testid={`endpoint-status-${h.id}`}
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                      status[h.id].finalStatus === "delivered" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
+                      : status[h.id].finalStatus === "retrying" ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
+                      : "border-destructive/40 bg-destructive/10 text-destructive"
+                    }`}
+                    title={`Last: ${status[h.id].lastEvent} · attempt ${status[h.id].lastAttempt} · ${status[h.id].lastError ?? "ok"}`}>
+                    {status[h.id].finalStatus} · try {status[h.id].lastAttempt}/4
+                  </span>
+                )}
                 <span className="text-muted-foreground font-mono truncate flex-1 min-w-0">{h.url}</span>
                 <button onClick={() => testHook(h)}
                   className="rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-accent">Test</button>
@@ -1282,6 +1326,9 @@ function WebhooksSection() {
         </ul>
       )}
 
+      {/* Payload schemas */}
+      {showSchemas && <PayloadSchemasPanel />}
+
       {/* Delivery log */}
       {showLog && (
         <div className="border-t border-border">
@@ -1296,6 +1343,12 @@ function WebhooksSection() {
                   <span className="text-muted-foreground">{new Date(e.ts).toLocaleTimeString()}</span>
                   <span className="font-semibold">{e.event}</span>
                   <span className="text-muted-foreground truncate">→ {e.webhookLabel}</span>
+                  <span className="text-[10px] px-1 rounded bg-muted">try {e.attempt}/{e.maxAttempts}</span>
+                  <span className={`text-[10px] px-1 rounded ${
+                    e.finalStatus === "delivered" ? "bg-emerald-500/10 text-emerald-500"
+                    : e.finalStatus === "retrying" ? "bg-amber-500/10 text-amber-500"
+                    : "bg-destructive/10 text-destructive"
+                  }`}>{e.finalStatus}</span>
                   <span className="ml-auto text-muted-foreground">{e.status || "—"} · {e.latencyMs}ms</span>
                   {e.error && <span className="text-destructive truncate">{e.error}</span>}
                 </li>
@@ -1307,3 +1360,90 @@ function WebhooksSection() {
     </section>
   );
 }
+
+// ─── Payload schemas panel ─────────────────────────────────────────────────
+function PayloadSchemasPanel() {
+  const events = Object.values(PAYLOAD_SCHEMAS);
+  const [selected, setSelected] = useState(events[0].event);
+  const [view, setView] = useState<"schema" | "example">("example");
+  const current = PAYLOAD_SCHEMAS[selected];
+
+  const downloadBundle = () => {
+    const bundle = buildSchemaBundle();
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "pluto-auto-deploy-webhook-schemas.json";
+    a.click(); URL.revokeObjectURL(url);
+    toast.success("Schema bundle downloaded");
+  };
+  const downloadOne = () => {
+    const payload = view === "schema" ? current.schema : current.example;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${current.event}.${view}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+  const copyOne = async () => {
+    const payload = view === "schema" ? current.schema : current.example;
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    toast.success("Copied to clipboard");
+  };
+
+  return (
+    <div className="border-t border-border" data-testid="payload-schemas">
+      <div className="px-4 py-2 flex items-center gap-2 flex-wrap">
+        <span className="text-[11px] font-medium text-muted-foreground">
+          Payload schemas ({events.length} events)
+        </span>
+        <button onClick={downloadBundle}
+          className="ml-auto inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] hover:bg-accent">
+          <Download className="h-3 w-3"/> Download all
+        </button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-0 border-t border-border">
+        <ul className="border-r border-border max-h-80 overflow-auto">
+          {events.map((s) => (
+            <li key={s.event}>
+              <button onClick={() => setSelected(s.event)}
+                className={`w-full text-left px-3 py-1.5 text-[11px] font-mono border-l-2 ${
+                  selected === s.event ? "border-primary bg-primary/5 text-primary" : "border-transparent text-muted-foreground hover:bg-accent"
+                }`}>
+                {s.event}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="p-3 space-y-2 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium">{current.title}</span>
+            <div className="ml-auto flex gap-1">
+              <button onClick={() => setView("example")}
+                className={`text-[10px] px-2 py-0.5 rounded border ${view === "example" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}>
+                Example
+              </button>
+              <button onClick={() => setView("schema")}
+                className={`text-[10px] px-2 py-0.5 rounded border ${view === "schema" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-accent"}`}>
+                Schema
+              </button>
+              <button onClick={copyOne}
+                className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-accent inline-flex items-center gap-1">
+                <Copy className="h-2.5 w-2.5"/> Copy
+              </button>
+              <button onClick={downloadOne}
+                className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-accent inline-flex items-center gap-1">
+                <Download className="h-2.5 w-2.5"/> .json
+              </button>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{current.description}</p>
+          <pre className="max-h-64 overflow-auto rounded-md bg-muted/40 border border-border p-2 text-[10.5px] font-mono leading-relaxed">
+            {JSON.stringify(view === "schema" ? current.schema : current.example, null, 2)}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
