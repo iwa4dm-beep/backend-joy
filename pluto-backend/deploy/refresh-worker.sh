@@ -33,6 +33,11 @@ PORT="$(grep -E '^(SANDBOX_WORKER_)?PORT=' /etc/pluto/sandbox-worker.env 2>/dev/
 PORT="${PORT:-8787}"
 
 stop_worker_units_and_free_port() {
+  if [ -f "$(pwd)/deploy/reset-sandbox-worker-port.sh" ]; then
+    bash "$(pwd)/deploy/reset-sandbox-worker-port.sh" "$PORT"
+    return
+  fi
+
   echo "▶ Stopping duplicate sandbox worker units and freeing 127.0.0.1:${PORT}"
   for u in pluto-sandbox-worker pluto-sandbox; do
     if systemctl list-unit-files "${u}.service" >/dev/null 2>&1; then
@@ -89,7 +94,18 @@ fi
 
 # 6. Restart + probe.
 systemctl start "$UNIT" || { echo "✗ start failed"; systemctl status "$UNIT" --no-pager -l; exit 1; }
-sleep 2
+for i in 1 2 3 4 5; do
+  sleep 1
+  STATE="$(systemctl is-active "$UNIT" 2>/dev/null || echo unknown)"
+  [ "$STATE" = "activating" ] || break
+done
+STATE="$(systemctl is-active "$UNIT" 2>/dev/null || echo unknown)"
+if [ "$STATE" != "active" ]; then
+  echo "✗ $UNIT state=$STATE"
+  systemctl status "$UNIT" --no-pager -l || true
+  journalctl -u "$UNIT" --no-pager -n 60 || true
+  exit 1
+fi
 BODY="$(curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/healthz" || echo '')"
 echo "  /healthz: $BODY"
 if echo "$BODY" | grep -q 'v1-static-serve'; then
