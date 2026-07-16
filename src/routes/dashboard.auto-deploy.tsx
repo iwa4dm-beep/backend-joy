@@ -1227,12 +1227,17 @@ function WebhooksSection() {
 
   return (
     <section className="rounded-xl border border-border bg-card">
-      <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2">
+      <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2 flex-wrap">
         <Webhook className="h-4 w-4" /> Realtime notification webhooks
         <span className="text-xs text-muted-foreground">({hooks.length} configured)</span>
         <button
-          onClick={() => setShowLog((v) => !v)}
+          onClick={() => setShowSchemas((v) => !v)}
           className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <FileJson className="h-3.5 w-3.5" /> Payload schemas
+        </button>
+        <button
+          onClick={() => setShowLog((v) => !v)}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <Bell className="h-3.5 w-3.5" /> Delivery log ({log.length})
         </button>
       </div>
