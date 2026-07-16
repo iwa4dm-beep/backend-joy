@@ -11,7 +11,7 @@
 #   2. Removes any stale /etc/pluto-sandbox/ config from earlier attempts
 #   3. Runs install.sh non-interactively (uses env vars or auto-generates the secret)
 #   4. Writes /etc/pluto/sandbox-worker.env with the correct variable names
-#   5. Enables + starts pluto-sandbox.service
+#   5. Enables + starts pluto-sandbox-worker.service
 #   6. Verifies http://127.0.0.1:8787/healthz responds 200
 #
 # Non-interactive overrides (optional — export before running):
@@ -90,9 +90,9 @@ echo "▶ [5/6] installing worker + systemd unit"
 bash "$WORKER_DIR/install.sh"
 
 echo "▶ [6/6] verifying"
-systemctl enable --now pluto-sandbox.service
+systemctl enable --now pluto-sandbox-worker.service
 sleep 2
-systemctl --no-pager status pluto-sandbox.service | head -n 10 || true
+systemctl --no-pager status pluto-sandbox-worker.service | head -n 10 || true
 
 set +e
 CODE=$(curl -s -o /tmp/pluto-healthz.out -w '%{http_code}' http://127.0.0.1:8787/healthz)
@@ -101,13 +101,13 @@ echo
 if [ "$CODE" = "200" ]; then
   echo "✅ pluto-sandbox is live on http://127.0.0.1:8787"
 else
-  echo "⚠  /healthz returned HTTP $CODE — check: journalctl -u pluto-sandbox -n 50"
+  echo "⚠  /healthz returned HTTP $CODE — check: journalctl -u pluto-sandbox-worker -n 50"
 fi
 cat /tmp/pluto-healthz.out 2>/dev/null; echo
 
 echo
 echo "═══════════════════════════════════════════════════════════════"
 echo " COPY THESE INTO LOVABLE (Cloud → Secrets):"
-echo "   PLUTO_SANDBOX_URL     = https://app.timescard.cloud"
-echo "   PLUTO_SANDBOX_SECRET  = $SANDBOX_SHARED_SECRET"
+echo "   PLUTO_SANDBOX_URL           = https://api.timescard.cloud/sandbox"
+echo "   PLUTO_SANDBOX_WORKER_SECRET = $SANDBOX_SHARED_SECRET"
 echo "═══════════════════════════════════════════════════════════════"

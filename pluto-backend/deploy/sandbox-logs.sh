@@ -3,8 +3,8 @@
 #
 # Subcommands:
 #   tail            follow all pluto services (default)
-#   worker          follow only pluto-sandbox-worker
-#   api             follow only pluto-api
+#   worker          follow only the detected sandbox worker unit
+#   api             follow only the detected Pluto API unit
 #   errors          show last hour of errors from all pluto services
 #   since <spec>    e.g. `since "10 min ago"` or `since 2026-07-16`
 #   grep <pattern>  filter recent logs by regex
@@ -21,7 +21,18 @@
 set -uo pipefail
 SUDO=""; [ "$(id -u)" != "0" ] && SUDO="sudo"
 
-UNITS=(pluto-sandbox-worker pluto-api)
+unit_exists() { $SUDO systemctl list-unit-files "$1.service" >/dev/null 2>&1 || $SUDO systemctl status "$1.service" >/dev/null 2>&1; }
+
+WORKER_UNIT="pluto-sandbox-worker"
+unit_exists "$WORKER_UNIT" || WORKER_UNIT="pluto-sandbox"
+
+API_UNIT="pluto-api"
+unit_exists "$API_UNIT" || API_UNIT="pluto-backend"
+
+UNITS=()
+unit_exists "$WORKER_UNIT" && UNITS+=("$WORKER_UNIT")
+unit_exists "$API_UNIT" && UNITS+=("$API_UNIT")
+[ ${#UNITS[@]} -eq 0 ] && UNITS=(pluto-sandbox-worker pluto-api)
 UNIT_ARGS=(); for u in "${UNITS[@]}"; do UNIT_ARGS+=(-u "$u"); done
 
 cmd="${1:-tail}"; shift || true
@@ -31,10 +42,10 @@ case "$cmd" in
     $SUDO journalctl "${UNIT_ARGS[@]}" -f -n 200 --output=short-iso
     ;;
   worker)
-    $SUDO journalctl -u pluto-sandbox-worker -f -n 200 --output=short-iso
+    $SUDO journalctl -u "$WORKER_UNIT" -f -n 200 --output=short-iso
     ;;
   api)
-    $SUDO journalctl -u pluto-api -f -n 200 --output=short-iso
+    $SUDO journalctl -u "$API_UNIT" -f -n 200 --output=short-iso
     ;;
   errors)
     $SUDO journalctl "${UNIT_ARGS[@]}" --since "1 hour ago" -p err --no-pager

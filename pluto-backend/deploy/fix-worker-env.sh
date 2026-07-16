@@ -10,7 +10,7 @@
 #
 # Optional env:
 #   ENV_FILE   default /etc/pluto/sandbox-worker.env
-#   UNIT       default pluto-sandbox-worker
+#   UNIT       default auto-detects pluto-sandbox-worker, then pluto-sandbox
 #   PORT       default 8787
 #   SITES_ROOT default /var/lib/pluto/sites
 #   UPSTREAM   default http://127.0.0.1:8000
@@ -20,7 +20,7 @@ set -uo pipefail
 SUDO=""; [ "$(id -u)" != "0" ] && SUDO="sudo"
 
 ENV_FILE="${ENV_FILE:-/etc/pluto/sandbox-worker.env}"
-UNIT="${UNIT:-pluto-sandbox-worker}"
+UNIT="${UNIT:-}"
 PORT="${PORT:-8787}"
 SITES_ROOT="${SITES_ROOT:-/var/lib/pluto/sites}"
 UPSTREAM="${UPSTREAM:-http://127.0.0.1:8000}"
@@ -35,13 +35,25 @@ if [ -z "$SECRET" ]; then
   exit 2
 fi
 
+if [ -z "$UNIT" ]; then
+  if $SUDO systemctl list-unit-files pluto-sandbox-worker.service >/dev/null 2>&1; then
+    UNIT="pluto-sandbox-worker"
+  elif $SUDO systemctl list-unit-files pluto-sandbox.service >/dev/null 2>&1; then
+    UNIT="pluto-sandbox"
+  else
+    UNIT="pluto-sandbox-worker"
+  fi
+fi
+
 $SUDO mkdir -p "$(dirname "$ENV_FILE")"
 TMP="$(mktemp)"
 cat > "$TMP" <<EOF
 # Managed by deploy/fix-worker-env.sh — edit inline vars, not this comment.
 SANDBOX_SHARED_SECRET=${SECRET}
 PORT=${PORT}
+SANDBOX_WORKER_PORT=${PORT}
 SITES_ROOT=${SITES_ROOT}
+SANDBOX_SITES_ROOT=${SITES_ROOT}
 PLUTO_UPSTREAM_URL=${UPSTREAM}
 EOF
 if [ -n "$SERVICE_KEY" ]; then

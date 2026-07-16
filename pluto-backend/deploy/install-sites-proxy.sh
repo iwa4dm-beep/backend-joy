@@ -3,7 +3,8 @@
 #
 # What it does:
 #   1. Idempotently injects /sites/ + /preview/ proxy blocks into the existing
-#      api.timescard.cloud HTTPS server block (delimited by AUTO markers).
+#      api.timescard.cloud HTTPS server block (delimited by AUTO markers). It
+#      also removes older hand-added duplicate Pluto locations first.
 #   2. Optionally installs the wildcard *.app.<APEX> vhost that routes
 #      <slug>.app.<APEX>       → worker /sites/<slug>/
 #      <slug>-dev.app.<APEX>   → worker /preview/<slug>/
@@ -62,7 +63,7 @@ SNIPPET="$here/nginx/sites-proxy.snippet.conf"
 $SUDO cp -a "$API_CONF" "${API_CONF}.bak.$(date +%s)"
 
 python3 - "$API_CONF" "$SNIPPET" <<'PY'
-import re, sys, io, os, tempfile
+import re, sys, os, tempfile
 conf_path, snippet_path = sys.argv[1], sys.argv[2]
 with open(conf_path, "r", encoding="utf-8") as f: conf = f.read()
 with open(snippet_path, "r", encoding="utf-8") as f: snippet = f.read().strip()
@@ -89,6 +90,43 @@ def find_block_end(text, open_idx):
         i += 1
     return -1
 
+PLUTO_LOCATION_RE = re.compile(
+    r"\n?[ \t]*location\s+(?:=\s+|\^~\s+|~\*?\s+)?(?:/sites/|/preview/|/site-status/|/sandbox/)\s*\{",
+    re.M,
+)
+
+def remove_legacy_pluto_locations(server_body):
+    """Remove old Pluto proxy locations that were added before AUTO markers.
+
+    Nginx rejects duplicate `location /sandbox/` (and siblings) in the same
+    server block. Operators may have a mix of hand-added blocks and older
+    generated snippets, so remove all Pluto-owned locations before inserting
+    the canonical snippet.
+    """
+    out = []
+    pos = 0
+    removed = 0
+    while True:
+        m = PLUTO_LOCATION_RE.search(server_body, pos)
+        if not m:
+            out.append(server_body[pos:])
+            break
+        brace = server_body.find("{", m.start(), m.end())
+        end = find_block_end(server_body, brace)
+        if end < 0:
+            out.append(server_body[pos:])
+            break
+        out.append(server_body[pos:m.start()])
+        pos = end + 1
+        # Eat one trailing blank line so repeated runs stay tidy.
+        while pos < len(server_body) and server_body[pos] in " \t\r\n":
+            if server_body[pos] == "\n":
+                pos += 1
+                break
+            pos += 1
+        removed += 1
+    return "".join(out), removed
+
 target_end = -1; target_start = -1
 for m in matches:
     open_brace = m.end() - 1
@@ -104,12 +142,15 @@ if target_end < 0:
 
 indent = "    "
 inserted = "\n" + "\n".join(indent + line if line.strip() else line for line in snippet.splitlines()) + "\n"
-new = conf[:target_end] + inserted + conf[target_end:]
+body = conf[target_start + 1:target_end]
+body, removed = remove_legacy_pluto_locations(body)
+new = conf[:target_start + 1] + body.rstrip() + inserted + conf[target_end:]
 
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(conf_path))
 with os.fdopen(fd, "w", encoding="utf-8") as f: f.write(new)
 os.replace(tmp, conf_path)
-print("✓ injected /sites/ + /preview/ blocks into HTTPS server{}")
+extra = f" (removed {removed} legacy duplicate location block(s))" if removed else ""
+print(f"✓ injected /sites/ + /preview/ blocks into HTTPS server{{}}{extra}")
 PY
 
 # --- Optional: wildcard vhost + TLS --------------------------------------
