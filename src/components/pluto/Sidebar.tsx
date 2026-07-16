@@ -19,6 +19,7 @@ const groups: Group[] = [
     items: [
       { to: "/dashboard/connect-project", label: "Connect your project", icon: Plug },
       { to: "/dashboard/auto-connect", label: "Auto-Connect Studio", icon: Zap },
+      { to: "/dashboard/auto-deploy", label: "Auto-Deploy Studio", icon: Sparkles },
     ],
   },
   {
