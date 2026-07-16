@@ -301,35 +301,44 @@ function AutoDeployInner() {
       });
       setPhase("awaiting-approval");
       log("⏸ Awaiting approval — review and confirm to deploy.");
+      dispatchWebhookEvent("approval.awaiting", {
+        slug: finalSlug, source, sourceRef,
+        tables: a.backend.tables.length, routes: a.backend.routes.length,
+        envKeys: envVars.filter((e) => e.key.trim()).map((e) => e.key.trim()),
+        message: "Deploy is awaiting operator approval",
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setErrorMsg(msg); log(`✗ ${msg}`); setPhase("error");
+      dispatchWebhookEvent("deploy.failed", { message: msg, phase: "prepare" });
     }
   };
 
-  /** Phase 5: confirm & deploy. */
-  const confirmDeploy = async (payload: PendingDeploy) => {
-    setPhase("deploying");
-    const approvedAt = Date.now();
-    log(payload.isRollback
-      ? `▶ Rollback confirmed by ${approverEmail} — redeploying previous bundle…`
-      : `▶ Approved by ${approverEmail} — deploying…`);
-
-    // Start real-time step progression stream. We don't have server-side
-    // SSE for deployAll, so drive an optimistic timeline that advances
-    // through the known pipeline while the RPC is in-flight. When the
-    // real result arrives, we reconcile with actual step outcomes.
+  /** One attempt of the deploy pipeline (used both for initial run and self-healing retry). */
+  const runDeployAttempt = async (payload: PendingDeploy, attempt: number): Promise<DeployAllResult> => {
+    // Start real-time step progression stream. `deployAll` is a single RPC,
+    // so we drive an optimistic timeline that advances through the known
+    // pipeline while it's in-flight, and reconcile with real results below.
     const events: StepEvent[] = [];
     const pushEvent = (ev: StepEvent) => {
       events.push(ev);
       setStreamEvents([...events]);
+      if (ev.status === "running") {
+        dispatchWebhookEvent("step.running", { slug: payload.slug, step: ev.key, label: ev.label, attempt });
+      }
     };
     setStreamEvents([]);
     setRunningStepIdx(0);
     pushEvent({ ts: Date.now(), key: PIPELINE_STEPS[0].key, label: PIPELINE_STEPS[0].label, status: "running" });
     let idx = 0;
+    // Clear any dangling timer before starting a fresh interval
+    if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
     streamTimerRef.current = setInterval(() => {
-      if (idx >= PIPELINE_STEPS.length - 1) return;
+      if (idx >= PIPELINE_STEPS.length - 1) {
+        // Reached the last step — stop the interval so it doesn't leak
+        if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
+        return;
+      }
       const prev = PIPELINE_STEPS[idx];
       pushEvent({ ts: Date.now(), key: prev.key, label: prev.label, status: "ok", detail: "in-progress" });
       idx += 1;
@@ -345,7 +354,7 @@ function AutoDeployInner() {
           bundlePath: payload.bundlePath,
           contentBase64: payload.contentBase64,
           bucket: "deployments",
-          label: `${payload.isRollback ? "rollback" : "auto-deploy"}-${payload.slug}`,
+          label: `${payload.isRollback ? "rollback" : "auto-deploy"}-${payload.slug}${attempt > 1 ? `-retry${attempt - 1}` : ""}`,
           maxRetries: 2,
           ensureInfra: true,
         },
@@ -363,19 +372,85 @@ function AutoDeployInner() {
       }));
       setStreamEvents(realEvents);
       setRunningStepIdx(-1);
-
-      setDeployResult(result);
       for (const s of result.steps) {
-        log(`${s.ok ? "✓" : "✗"} ${s.label}${s.attempts.at(-1)?.detail ? ` — ${s.attempts.at(-1)!.detail}` : ""}`);
+        dispatchWebhookEvent(s.ok ? "step.ok" : "step.fail", {
+          slug: payload.slug, step: s.key, label: s.label, attempt,
+          detail: s.attempts.at(-1)?.detail ?? "",
+        });
       }
-      const h = extractHealth(result);
-      setHealth(h);
-      if (!result.ok) throw new Error("Deploy pipeline reported failure");
-      if (h && !h.overallOk) throw new Error(`Health check failed — ${h.endpoints.filter(e => !e.ok).length} endpoint(s) unhealthy`);
-      log(`✅ Live in ${(result.totalMs / 1000).toFixed(1)}s`);
-      setPhase("live");
+      return result;
+    } catch (e) {
+      if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
+      // Mark the currently-running step as failed in the stream.
+      if (events.length > 0) {
+        const last = events[events.length - 1];
+        if (last.status === "running") {
+          last.status = "fail";
+          last.detail = e instanceof Error ? e.message : String(e);
+          setStreamEvents([...events]);
+          dispatchWebhookEvent("step.fail", {
+            slug: payload.slug, step: last.key, label: last.label, attempt,
+            detail: last.detail,
+          });
+        }
+      }
+      setRunningStepIdx(-1);
+      throw e;
+    }
+  };
 
+  /** Phase 5: confirm & deploy — with self-healing retry on transient errors. */
+  const confirmDeploy = async (payload: PendingDeploy) => {
+    setPhase("deploying");
+    const approvedAt = Date.now();
+    log(payload.isRollback
+      ? `▶ Rollback confirmed by ${approverEmail} — redeploying previous bundle…`
+      : `▶ Approved by ${approverEmail} — deploying…`);
+    dispatchWebhookEvent(payload.isRollback ? "rollback.started" : "approval.confirmed", {
+      slug: payload.slug, approver: approverEmail, source: payload.source, sourceRef: payload.sourceRef,
+    });
+
+    let attempt = 0;
+    let result: DeployAllResult | null = null;
+    let h: HealthSummary | null = null;
+    let lastError: Error | null = null;
+
+    while (attempt <= MAX_AUTO_RETRIES) {
+      attempt += 1;
+      try {
+        if (attempt > 1) {
+          log(`↻ Self-healing retry #${attempt - 1}…`);
+          dispatchWebhookEvent("deploy.retry", { slug: payload.slug, attempt, reason: lastError?.message });
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
+        result = await runDeployAttempt(payload, attempt);
+        setDeployResult(result);
+        for (const s of result.steps) {
+          log(`${s.ok ? "✓" : "✗"} ${s.label}${s.attempts.at(-1)?.detail ? ` — ${s.attempts.at(-1)!.detail}` : ""}`);
+        }
+        h = extractHealth(result);
+        setHealth(h);
+        if (!result.ok) throw new Error("Deploy pipeline reported failure");
+        if (h && !h.overallOk) throw new Error(`Health check failed — ${h.endpoints.filter(e => !e.ok).length} endpoint(s) unhealthy`);
+        lastError = null;
+        break; // success
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+        const canRetry = attempt <= MAX_AUTO_RETRIES && isTransientDeployError(lastError.message);
+        if (!canRetry) break;
+        log(`⚠ Attempt ${attempt} failed (${lastError.message}) — auto-retrying…`);
+      }
+    }
+
+    if (result && !lastError) {
+      log(`✅ Live in ${(result.totalMs / 1000).toFixed(1)}s${attempt > 1 ? ` (after ${attempt - 1} auto-retry)` : ""}`);
+      setPhase("live");
       const liveUrl = `https://${payload.slug}.apps.timescard.cloud`;
+      const realEvents: StepEvent[] = result.steps.map((s) => ({
+        ts: Date.now(), key: s.key, label: s.label,
+        status: s.ok ? "ok" : "fail",
+        detail: s.attempts.at(-1)?.detail ?? "",
+      }));
       saveAutoDeployEntry({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         timestamp: Date.now(),
@@ -403,21 +478,17 @@ function AutoDeployInner() {
         stepEvents: realEvents,
       });
       lastSuccessRef.current = payload;
-    } catch (e) {
-      if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
-      // Mark the currently-running step as failed in the stream.
-      if (events.length > 0) {
-        const last = events[events.length - 1];
-        if (last.status === "running") {
-          last.status = "fail";
-          last.detail = e instanceof Error ? e.message : String(e);
-          setStreamEvents([...events]);
-        }
-      }
-      setRunningStepIdx(-1);
-      const msg = e instanceof Error ? e.message : String(e);
+      dispatchWebhookEvent(payload.isRollback ? "rollback.completed" : "deploy.published", {
+        slug: payload.slug, liveUrl, totalMs: result.totalMs, attempts: attempt,
+        approver: approverEmail,
+      });
+    } else {
+      const msg = lastError?.message ?? "Deploy failed";
       setErrorMsg(msg); log(`✗ ${msg}`); setPhase("error");
-      // Persist failed run too for visibility
+      dispatchWebhookEvent("deploy.failed", {
+        slug: payload.slug, message: msg, attempts: attempt,
+        isRollback: payload.isRollback,
+      });
       saveAutoDeployEntry({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         timestamp: Date.now(),
@@ -433,11 +504,15 @@ function AutoDeployInner() {
         bundlePath: payload.bundlePath,
         sqlPreview: payload.sql.slice(0, 2048),
         envKeys: payload.envVars.filter((e) => e.key.trim()).map((e) => e.key.trim()),
-        steps: [], health: null, isRollback: payload.isRollback,
+        steps: result?.steps.map((s) => ({
+          key: s.key, label: s.label, ok: s.ok, attempts: s.attempts.length,
+          detail: s.attempts.at(-1)?.detail ?? "",
+        })) ?? [],
+        health: h, isRollback: payload.isRollback,
         approver: approverEmail,
         approvedAt,
         rollbackOf: payload.isRollback ? lastSuccessRef.current?.slug ?? null : null,
-        stepEvents: events,
+        stepEvents: [],
       });
     }
   };
@@ -445,13 +520,17 @@ function AutoDeployInner() {
   const rollback = () => {
     const prev = lastSuccessRef.current;
     if (!prev) { toast.error("এই session-এ আগের সফল deploy নেই"); return; }
-    // Confirm + redeploy the same bundle
     setPending({ ...prev, isRollback: true });
     setPhase("awaiting-approval");
     setSlug(prev.slug);
     setAnalyze(prev.analyze); setPlan(prev.plan);
     log(`↶ Rollback prepared → ${prev.slug}`);
+    dispatchWebhookEvent("approval.awaiting", {
+      slug: prev.slug, message: "Rollback awaiting approval", isRollback: true,
+    });
   };
+
+
 
   const liveUrl = useMemo(() => slug ? `https://${slug}.apps.timescard.cloud` : null, [slug]);
   const busy = phase === "analyzing" || phase === "planning" || phase === "bundling" || phase === "deploying";
