@@ -309,7 +309,9 @@ const DeployAllInput = z.object({
   label: z.string().max(120).optional(),
   maxRetries: z.number().int().min(0).max(5).default(2),
   ensureInfra: z.boolean().default(true),
+  operatorToken: z.string().optional(),
 });
+
 
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
