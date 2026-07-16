@@ -742,7 +742,7 @@ export const deployAll = createServerFn({ method: "POST" })
         servedHint = `Bundle uploaded, but ${probeUrl} returned HTTP ${p.status}. The hostname is not yet wired to nginx / a vhost, or the sandbox worker did not unpack the release. Configure PLUTO_SERVED_SITE_URL or install a sandbox worker with a working /unpack endpoint that serves /sites/<slug>/.`;
       }
     } else {
-      servedHint = `Auto-detect could not find a reachable served site. Tried: ${autoDerivedCandidates.join(", ")}. To fix permanently: (1) install pluto-backend/sandbox-worker on the VPS with an nginx location that serves /sandbox/sites/<slug>/ from the unpacked bundle, OR (2) set PLUTO_SERVED_SITE_URL to the public origin that serves the release.`;
+      servedHint = `Auto-detect could not find a reachable served site. Tried: ${autoDerivedCandidates.join(", ")}. To fix permanently, choose one: (a) set PLUTO_SERVED_SITE_URL_TEMPLATE (e.g. "https://{slug}.app.timescard.cloud" or "https://api.timescard.cloud/sites/{slug}/") so the URL is auto-computed per deploy; (b) set PLUTO_SERVED_SITE_URL to a static origin; or (c) install pluto-backend/sandbox-worker on the VPS — it now exposes GET /sites/<slug>/* which nginx can proxy at /sites/ or /sandbox/sites/.`;
     }
 
     const liveUrls = {
