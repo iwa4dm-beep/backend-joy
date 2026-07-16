@@ -1,0 +1,79 @@
+# Wildcard vhost: *.app.timescard.cloud → pluto-sandbox-worker /sites/<slug>/
+# For <slug>-dev.app.timescard.cloud → /preview/<slug>/  (preview channel)
+#
+# Requires a wildcard TLS cert for *.app.timescard.cloud + app.timescard.cloud
+# (issue via: sudo bash deploy/install-wildcard-tls.sh app.timescard.cloud)
+#
+# Rendered/installed by: deploy/install-sites-proxy.sh --wildcard
+# Placeholders: __APEX__  (e.g. app.timescard.cloud)
+
+# --- HTTP → HTTPS (also serves ACME HTTP-01 if you use it) ---
+server {
+    listen 80;
+    listen [::]:80;
+    server_name *.__APEX__ __APEX__;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+# --- HTTPS: preview channel (<slug>-dev.__APEX__) ---
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    # Match <slug>-dev.__APEX__ specifically (captured into $slug).
+    server_name ~^(?<slug>[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)-dev\.__APEX__$;
+
+    ssl_certificate     /etc/letsencrypt/live/__APEX__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__APEX__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    client_max_body_size 25M;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8787/preview/$slug$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+}
+
+# --- HTTPS: production channel (<slug>.__APEX__) ---
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    # Match <slug>.__APEX__ (but NOT <slug>-dev.__APEX__ — handled above).
+    # nginx picks the first matching server_name regex, and the -dev block
+    # is declared first, so it wins for -dev hosts.
+    server_name ~^(?<slug>[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)\.__APEX__$;
+
+    ssl_certificate     /etc/letsencrypt/live/__APEX__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__APEX__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    client_max_body_size 25M;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8787/sites/$slug$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+}
