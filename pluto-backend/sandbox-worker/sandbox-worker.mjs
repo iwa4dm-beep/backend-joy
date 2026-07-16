@@ -26,7 +26,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual, createHash } from "node:crypto";
 
 const PORT = Number(process.env.PORT ?? process.env.SANDBOX_WORKER_PORT ?? 8787);
 const SECRET = process.env.SANDBOX_SHARED_SECRET ?? "";
@@ -356,7 +356,23 @@ const MIME = {
   ".wasm": "application/wasm",
 };
 
-async function serveStatic(res, wsDir, linkName, relPath) {
+// Detect fingerprinted assets (Vite emits /assets/*-<hash>.js). These are
+// safe to cache forever with `immutable`.
+const HASHED_ASSET_RE = /-[a-f0-9]{8,}\.(?:js|mjs|css|woff2?|png|jpg|jpeg|webp|gif|svg|ico|map|wasm)$/i;
+function cacheControlFor(ext, filePath) {
+  if (ext === ".html" || ext === ".htm") return "no-cache";
+  if (HASHED_ASSET_RE.test(filePath)) return "public, max-age=31536000, immutable";
+  return "public, max-age=3600, must-revalidate";
+}
+function weakEtag(stat) {
+  // Cheap ETag: size + mtime. Weak (W/) because it is not a byte hash.
+  return `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+}
+function strongEtagFromBuffer(buf) {
+  return `"${createHash("sha1").update(buf).digest("base64").slice(0, 22)}"`;
+}
+
+async function serveStatic(req, res, wsDir, linkName, relPath) {
   // Resolve wsDir/<linkName> → real release dir, then join relPath safely.
   let baseDir;
   try { baseDir = await fsp.realpath(path.join(wsDir, linkName)); }
@@ -373,20 +389,42 @@ async function serveStatic(res, wsDir, linkName, relPath) {
   } catch { /* fall through — SPA fallback below */ }
 
   try {
-    const data = await fsp.readFile(filePath);
+    const st = await fsp.stat(filePath);
     const ext = path.extname(filePath).toLowerCase();
     const type = MIME[ext] ?? "application/octet-stream";
+    const etag = weakEtag(st);
+    const inm = req.headers["if-none-match"];
+    if (typeof inm === "string" && inm === etag) {
+      res.writeHead(304, { etag, "cache-control": cacheControlFor(ext, filePath) });
+      return res.end();
+    }
+    const data = await fsp.readFile(filePath);
     res.writeHead(200, {
       "content-type": type,
       "content-length": data.length,
-      "cache-control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+      "cache-control": cacheControlFor(ext, filePath),
+      "last-modified": new Date(st.mtimeMs).toUTCString(),
+      etag,
+      vary: "Accept-Encoding",
     });
     return res.end(data);
   } catch {
     // SPA fallback → index.html at the release root.
     try {
       const idx = await fsp.readFile(path.join(baseDir, "index.html"));
-      res.writeHead(200, { "content-type": MIME[".html"], "content-length": idx.length, "cache-control": "no-cache" });
+      const etag = strongEtagFromBuffer(idx);
+      const inm = req.headers["if-none-match"];
+      if (typeof inm === "string" && inm === etag) {
+        res.writeHead(304, { etag, "cache-control": "no-cache" });
+        return res.end();
+      }
+      res.writeHead(200, {
+        "content-type": MIME[".html"],
+        "content-length": idx.length,
+        "cache-control": "no-cache",
+        etag,
+        vary: "Accept-Encoding",
+      });
       return res.end(idx);
     } catch {
       return json(res, 404, { error: "not_found" });
@@ -404,7 +442,65 @@ async function handleStatic(req, res, prefix, linkName) {
   const r = await resolveSlug(slug);
   if (!r.ok) return json(res, 404, { error: r.error });
   const wsDir = path.join(SITES_ROOT, r.workspaceId);
-  return serveStatic(res, wsDir, linkName, m[2] || "");
+  return serveStatic(req, res, wsDir, linkName, m[2] || "");
+}
+
+// Public readiness endpoint — no shared secret. Answers "is <slug> ready to serve?"
+// Reports: bundle upload (zip fetched + unpacked), migration status (best-effort
+// from manifest.migrations if the deployer wrote it), and static serving state.
+async function siteStatus(slug) {
+  const s = String(slug || "").trim().toLowerCase();
+  if (!s || !SLUG_RE.test(s)) return { ok: false, error: "invalid_slug" };
+  const slugPath = path.join(SITES_ROOT, s);
+  let workspaceId = null;
+  try {
+    const st = await fsp.lstat(slugPath);
+    if (!st.isSymbolicLink()) {
+      return { ok: false, slug: s, error: "slug_not_linked",
+               bundleUploaded: false, migrationsApplied: null, staticServing: false };
+    }
+    const target = await fsp.readlink(slugPath);
+    const wsDir = path.isAbsolute(target) ? target : path.join(SITES_ROOT, target);
+    workspaceId = path.basename(wsDir);
+    const readManifest = async (name) => {
+      try { return JSON.parse(await fsp.readFile(path.join(wsDir, name), "utf-8")); }
+      catch { return null; }
+    };
+    const current = await readManifest("current.json");
+    const preview = await readManifest("preview.json");
+    const anyManifest = current || preview;
+    // Confirm the current symlink resolves to a real directory with index.html.
+    let staticServing = false;
+    try {
+      const real = await fsp.realpath(path.join(wsDir, "current"));
+      const idx = await fsp.stat(path.join(real, "index.html"));
+      staticServing = idx.isFile();
+    } catch { /* not deployed to production channel yet */ }
+    let previewServing = false;
+    try {
+      const real = await fsp.realpath(path.join(wsDir, "preview"));
+      const idx = await fsp.stat(path.join(real, "index.html"));
+      previewServing = idx.isFile();
+    } catch { /* no preview */ }
+    return {
+      ok: true,
+      slug: s,
+      workspaceId,
+      bundleUploaded: Boolean(anyManifest),
+      migrationsApplied: anyManifest?.migrations ?? null, // filled by deployer if wired
+      staticServing,
+      previewServing,
+      channel: staticServing ? "production" : (previewServing ? "preview" : "none"),
+      servedAt: current?.servedAt ?? preview?.servedAt ?? null,
+      sizeBytes: current?.sizeBytes ?? preview?.sizeBytes ?? null,
+      envInjected: Boolean(anyManifest?.envInjected),
+      ready: Boolean(staticServing),
+      ts: new Date().toISOString(),
+    };
+  } catch {
+    return { ok: false, slug: s, error: "slug_not_found",
+             bundleUploaded: false, migrationsApplied: null, staticServing: false };
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -449,7 +545,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url && req.url.startsWith("/preview/")) {
       return handleStatic(req, res, "/preview/", "preview");
     }
+    // Public readiness endpoint — no secret required.
+    if (req.method === "GET" && req.url && req.url.startsWith("/site-status/")) {
+      const s = decodeURIComponent(req.url.slice("/site-status/".length).split("?")[0]);
+      const r = await siteStatus(s);
+      return json(res, r.ok ? 200 : 404, r);
+    }
+
     if (!checkSecret(req)) return json(res, 401, { error: "invalid or missing x-sandbox-secret" });
+
+
 
     if (req.method === "POST" && req.url === "/unpack") {
       const body = await readJson(req);
