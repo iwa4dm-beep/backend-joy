@@ -1002,6 +1002,10 @@ function AutoDeployInner() {
       {/* Summary + Checks */}
       {deployResult && <DeploySummaryChecksPanel result={deployResult} />}
 
+      {/* Build logs — Phase 2 */}
+      {deployResult && <BuildLogsPanel result={deployResult} />}
+
+
       {/* Per-step deploy result */}
       {deployResult && (
         <section className="rounded-xl border border-border bg-card">
