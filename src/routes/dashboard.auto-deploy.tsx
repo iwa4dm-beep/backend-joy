@@ -833,7 +833,7 @@ function AutoDeployInner() {
             <input className="sm:col-span-2 rounded-md border border-input bg-background px-3 py-2 text-sm"
               placeholder="owner/repo" value={ghRepo} onChange={(e) => setGhRepo(e.target.value)} disabled={!canRun}/>
             <input className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              placeholder="branch / tag / sha (optional)" value={ghRef} onChange={(e) => setGhRef(e.target.value)} disabled={!canRun}/>
+              placeholder={`branch / tag / sha (default: ${defaultBranch})`} value={ghRef} onChange={(e) => setGhRef(e.target.value)} disabled={!canRun}/>
           </div>
         )}
         {source === "giturl" && (
