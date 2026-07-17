@@ -607,9 +607,28 @@ export const deployAll = createServerFn({ method: "POST" })
             result: { skipped: true, reason: "no-unpack-endpoint", tried: triedList },
           };
         }
+        // 401 = secret mismatch between Lovable Cloud PLUTO_SANDBOX_SECRET and
+        // the VPS worker's SANDBOX_SHARED_SECRET (in /etc/pluto/sandbox-worker.env).
+        // Give the exact one-liner to copy the VPS value into the app.
+        const status = r?.status ?? 0;
+        const bodyText = (r?.text ?? "").slice(0, 240);
+        if (status === 401 || /invalid or missing x-sandbox-secret/i.test(bodyText)) {
+          return {
+            ok: false,
+            detail:
+              `unpack HTTP 401: sandbox secret mismatch. The VPS worker rejected our x-sandbox-secret.\n` +
+              `Fix: on the VPS run  →  sudo grep SANDBOX_SHARED_SECRET /etc/pluto/sandbox-worker.env\n` +
+              `Then set that exact value as the Lovable Cloud secret PLUTO_SANDBOX_SECRET (Cloud → Secrets).\n` +
+              `If /etc/pluto/sandbox-worker.env has no SANDBOX_SHARED_SECRET, generate one:\n` +
+              `  sudo bash -c "echo SANDBOX_SHARED_SECRET=$(openssl rand -hex 32) >> /etc/pluto/sandbox-worker.env && systemctl restart pluto-sandbox-worker"\n` +
+              `then copy that same value into PLUTO_SANDBOX_SECRET and re-run deploy.`,
+            debug: r?.debug ?? null,
+            result: { reason: "sandbox-secret-mismatch", tried: triedList },
+          };
+        }
         return {
           ok: false,
-          detail: `unpack HTTP ${r?.status ?? 0}: ${(r?.text ?? "").slice(0, 240)} (tried: ${triedList}).`,
+          detail: `unpack HTTP ${status}: ${bodyText} (tried: ${triedList}).`,
           debug: r?.debug ?? null,
           result: null,
         };
