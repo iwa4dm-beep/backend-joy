@@ -845,7 +845,7 @@ export const deployAll = createServerFn({ method: "POST" })
         `bootstrap invoke: ${invokeOk ? `✓ HTTP ${inv.status}` : `✗ HTTP ${inv.status}`} (${inv.text.slice(0, 160)})`,
         siteLine,
       ].join(" | ");
-      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult, autoSource, autoDerivedCandidates } };
+      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult, autoSource, autoDerivedCandidates, siteExplicitlyConfigured, strictServedSite: data.strictServedSite } };
     });
     steps.push(healthStep);
 
