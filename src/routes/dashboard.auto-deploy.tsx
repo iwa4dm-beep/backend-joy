@@ -24,6 +24,7 @@ import { verifyZip } from "@/lib/autoconnect/zip-verify";
 import { buildBundle } from "@/lib/autoconnect/bundler";
 import { loadRepoAsFile } from "@/lib/autoconnect/github-loader";
 import { deployAll, diagnoseServedSite, probeLiveUrl, type DeployAllResult, type DeployStepLog, type LiveUrlProbe, type ServedSiteDiagnostics } from "@/lib/pluto/vps-deployer.functions";
+import { DeploySummaryChecksPanel } from "@/components/auto-deploy/DeploySummaryChecks";
 import { getUpstream } from "@/lib/pluto/upstream";
 
 import { RequireWorkspace } from "@/components/pluto/RequireWorkspace";
@@ -996,6 +997,9 @@ function AutoDeployInner() {
           onRunDiagnostics={runServedDiagnostics}
         />
       )}
+
+      {/* Summary + Checks */}
+      {deployResult && <DeploySummaryChecksPanel result={deployResult} />}
 
       {/* Per-step deploy result */}
       {deployResult && (

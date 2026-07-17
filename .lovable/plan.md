@@ -1,91 +1,62 @@
+# Auto-Deploy Studio — 6 new panels
 
-# Observability & Logs System — ধাপে ধাপে Plan
+Delivered as tabs on `/dashboard/auto-deploy` so the current pipeline UI stays intact. Each phase ships end-to-end (data + UI + tests) before the next.
 
-চারটি scope-ই আপনি select করেছেন এবং data source হবে **VPS worker + nginx access logs**। আমি এটাকে ৫টি ধাপে ভাগ করছি যাতে প্রতি ধাপ শেষে একটা কার্যকরী feature live হয় — পরের ধাপ শুরু করার আগে আপনি verify করতে পারবেন।
+## Phase 1 — Deployment Summary & Deployment Checks
+Read-only surfaces over the existing deploy report; no new server work.
 
-## Data model (একবার তৈরি হবে, সব ধাপে reuse হবে)
+- **Summary tab**: last deploy status, total ms, step count (ok/warn/fail), served-site URL, SSL cert issuer + days-to-expiry, resolved bundle sha, workspace/slug — sourced from `auto-deploy-history` + `liveUrls`.
+- **Checks tab**: enumerated rule list (SSL valid, SSL >30d, served-site 2xx, health probe ok, migrations applied, worker version marker, DNS resolves). Each check derived from the last deploy result; badge = pass/warn/fail with a "why" tooltip and a "re-run" button that re-hits the relevant server fn.
 
-Lovable Cloud-এ ২টা table:
+## Phase 2 — Build Logs
+Structured, filterable log viewer for the current deploy.
 
-**`request_logs`** — worker + nginx থেকে আসা প্রতিটা HTTP request-এর row:
-- `id`, `ts`, `deployment_id` (nullable), `workspace_id`, `slug`
-- `environment` (`production` / `preview` / `sandbox`)
-- `host`, `route` (matched pattern), `request_path`, `request_method`
-- `status_code`, `request_type` (`html`/`api`/`asset`/`webhook`)
-- `service` (`worker` / `nginx` / `edge`), `resource` (`sites`/`sandbox`/`api`/...)
-- `cache` (`HIT`/`MISS`/`BYPASS`/null), `duration_ms`, `bytes`
-- `console_level` (nullable — `error`/`warn`/`info`/`debug`), `message`
-- `branch` (nullable), `workflow_run_id`, `workflow_step` (nullable)
+- Reuse the existing `steps[].attempts[].debug` stream and surface it as a virtualized log list with per-step collapsers, level filter (info/warn/error), copy-to-clipboard, and a "download .log" export.
+- Add `stepStartedAt`/`stepEndedAt` to each row so timing is visible.
+- Live tail via existing polling of `getDeployStatus`.
 
-**`workflow_runs`** — Auto-Deploy pipeline runs (existing history table extend):
-- `id`, `slug`, `branch`, `commit_sha`, `started_at`, `finished_at`, `status`
-- `deployment_id`, `steps` (jsonb — array of {name, status, duration, log_url})
+## Phase 3 — Deployment Settings
+Per-workspace persisted settings (new `deployment_settings` table).
 
-RLS: workspace-scoped read via `has_role` + workspace membership; service-role write only.
+Fields:
+- `auto_deploy_on_push` (bool)
+- `strict_served_site` (bool — flips warning→fatal)
+- `strict_ssl` (bool)
+- `served_site_url_override` (text, nullable)
+- `notify_email` (text, nullable)
+- `default_branch` (text, default `main`)
 
-## ধাপ ১ — Ingestion pipeline (backend foundation)
+Server fns: `getDeploymentSettings` + `updateDeploymentSettings` (both `requireSupabaseAuth`, RLS scoped to workspace admins). UI: settings form with dirty-check + save.
 
-1. **Worker patch** (`sandbox-worker.mjs`): প্রতিটা request-এর জন্য একটা structured JSON line stdout-এ log করবে (fields উপরের model অনুযায়ী)। ইতিমধ্যে filesystem write ছাড়াই journald ধরবে।
-2. **nginx**: `log_format json_combined` যোগ করে `access.log`-এ JSON format-এ লিখবে।
-3. **Log shipper** (`pluto-backend/deploy/install-log-shipper.sh`): একটা ছোট Node daemon (`pluto-log-shipper`) যেটা
-   - journald + nginx access log tail করে
-   - JSON parse করে
-   - batch (500 rows / 2s) করে TanStack public server route `POST /api/public/ingest/logs` -এ পাঠায় HMAC signature সহ
-4. **Ingestion endpoint** (`src/routes/api/public/ingest/logs.ts`): signature verify → Zod validate → `request_logs` bulk insert (`supabaseAdmin`)।
-5. **Systemd unit** + secret (`PLUTO_LOG_INGEST_SECRET`) auto-generated।
+## Phase 4 — Recommendations
+Deterministic advisor over the last deploy + settings.
 
-**Verify**: `curl` diagnostic দেখাবে `select count(*) from request_logs where ts > now() - interval '1 minute'` > 0.
+Rules (each returns severity + suggested action + one-click apply where safe):
+- SSL cert expiring <30 days → run `fix-wildcard-ssl.sh` hint.
+- Served-site 404 → open Diagnostics panel.
+- `strict_served_site=false` but 5+ consecutive warnings → prompt to enable.
+- No `notify_email` set → prompt to add.
+- Worker version marker older than repo → prompt to run `refresh-worker.sh`.
+- Migrations drift detected → link to migration console.
 
-## ধাপ ২ — Unified Logs Explorer (`/dashboard/logs`)
+Rendered as dismissible cards; dismissals stored per-workspace.
 
-নতুন route + query surface। Server function `queryLogs` (RLS-scoped) সব ১৫টা dimension-এ filter নেয়। URL search params (validated via `zodValidator + fallback`) — bookmarkable/shareable।
+## Phase 5 — Assigning Custom Domains
+Manage `<slug>.app.timescard.cloud` overrides and user-supplied apex domains.
 
-UI (single page, keyboard-first):
-- **Left rail — Facets**: প্রতিটা dimension-এর জন্য top-N counts (Environment, Status Code, Route, Request Type, Service, Cache, Host, Console Level, Branch, Workflow Step, Deployment ID, Resource, Request Method)। ক্লিক = filter toggle।
-- **Top bar**: full-text `Contains` box (matches `message` + `request_path`), time range picker, refresh interval।
-- **Center**: virtualized table (ts, level/status, method, path, duration, deployment) — row expand করলে full JSON।
-- **Right drawer**: selected row-এর deployment + workflow_run cross-link।
+- New table `custom_domains` (workspace_id, slug, hostname, status, verify_token, cert_status, last_checked_at).
+- Server fns: `listCustomDomains`, `addCustomDomain`, `removeCustomDomain`, `verifyCustomDomain` (checks A record → 185.158.133.1 pattern via DNS-over-HTTPS, then triggers wildcard cert issuance via existing `fix-wildcard-ssl.sh` on the VPS through the sandbox worker).
+- UI: table with hostname input, status pill (Pending DNS → Verifying → Active → Failed), copy-DNS-record helper, remove action.
+- Wire nginx installer to include per-hostname server block when domain is Active.
 
-Empty/error/loading states + CSV export।
+## Technical notes
 
-## ধাপ ৩ — Auto-Deploy Studio-তে filter integration
+- All new tables include `GRANT` + RLS policies scoped via `has_role(auth.uid(), 'admin')` where writes are admin-only; reads scoped to workspace members via existing `workspace_members` join.
+- All new server fns use `requireSupabaseAuth` and never load `supabaseAdmin` at module scope.
+- UI added as new tabs in `dashboard.auto-deploy.tsx` under an existing `<Tabs>` structure; each tab is a separate component file under `src/components/auto-deploy/` to keep the route file small.
+- E2E tests per phase: history-seeded render tests for Summary/Checks/Logs, form-round-trip test for Settings, rule-fires test for Recommendations, add-remove-verify flow for Custom Domains.
 
-বর্তমান `dashboard.auto-deploy.tsx`-এ:
-- History list-এর উপরে একটা compact filter bar (Environment, Status Code, Deployment ID, Route, Branch)।
-- প্রতিটা deploy row-এ **"View logs"** button → Logs Explorer-এ pre-filtered navigate (`?deployment_id=...&ts>=started_at`)।
-- Health check panel-এ prod-live 4xx/5xx rate mini-chart (last 15 min from `request_logs`)।
+## Execution order
+Phase 1 → 2 → 3 → 4 → 5, one phase per turn. Confirm after each phase before continuing.
 
-## ধাপ ৪ — Served-site diagnostics extension (live tail)
-
-`ServedSiteDiagnosticsPanel`-এ নতুন tab **"Live requests"**:
-- `queryLogs({ slug, since: now-5m })` polling প্রতি 3s
-- Path, Status, Method, Cache, duration মিনি table
-- **"Tail in Explorer"** button → `/dashboard/logs?slug=...&auto_refresh=1`
-
-## ধাপ ৫ — Workflow/CI Runs viewer (`/dashboard/workflows`)
-
-- Auto-Deploy pipeline runs list — Branch × Workflow Run × Deployment ID cross-index
-- Detail view: steps timeline (each step name + status + duration) + step-level log filter shortcut → Logs Explorer scoped to that `workflow_run_id + workflow_step`
-- Retry / rerun button (existing auto-deploy trigger reused)
-
----
-
-## Technical highlights (for reference)
-
-- **Cost control**: retention policy — DELETE FROM request_logs WHERE ts < now() - interval '14 days' via `pg_cron`; asset requests (`request_type='asset'`) retained only 3 days.
-- **Indexes**: `(workspace_id, ts DESC)`, `(slug, ts DESC)`, `(deployment_id)`, GIN on `message` for `Contains` search.
-- **Security**: ingest endpoint under `/api/public/*` with HMAC (`PLUTO_LOG_INGEST_SECRET`); read via `requireSupabaseAuth` server fns; RLS enforces workspace scope; no PII in log lines (auth headers stripped worker-side).
-- **Performance**: virtualized table (`@tanstack/react-virtual`), facet counts computed via a single `queryLogs` call returning `{rows, facets}`; server pagination (keyset on `ts`).
-
----
-
-## Order of delivery
-
-আমি shipped-per-step model-এ কাজ করব:
-1. ধাপ ১ (schema + ingest endpoint + shipper script) — VPS-এ shipper install করার পর ধাপ ২ শুরু।
-2. ধাপ ২ (Explorer) — এটাই সবচেয়ে বড়; শেষ হলে সব বাকি ধাপ এর উপর build করে।
-3. ধাপ ৩, ৪, ৫ — একই query surface reuse, তাই দ্রুত।
-
-**Priority fields আপনি text answer-এ দেননি** — আমি ধরে নিচ্ছি সব ১৫টাই first-class (facet + filter), শুধু "Workflow Run/Step/Branch" ধাপ ৫-এ populate হবে (ধাপ ১-এ column present কিন্তু nullable)।
-
-Plan approve করলে ধাপ ১ থেকে শুরু করব।
+Shall I start with **Phase 1 (Summary + Checks)** now?
