@@ -5,16 +5,16 @@
 #   1. repo/script preflight
 #   2. clean-pull.sh          (git sync)
 #   3. DNS + HTTP-01 preflight
-#   3. full-deploy.sh <slug>  (worker + API nginx; wildcard skipped)
-#   4. issue-per-slug-cert.sh <slug> <base>   (HTTP-01 cert)
-#   5. verify-deploy.sh <slug>
+#   4. full-deploy.sh <slug>  (worker + API nginx; wildcard skipped)
+#   5. issue-per-slug-cert.sh <slug> <base>   (HTTP-01 cert)
+#   6. verify-deploy.sh <slug>
 #
 # Usage:
 #   sudo bash /path/to/go-live.sh <slug> [base]
 #     base defaults to app.timescard.cloud
 #
-# You can run this from ANYWHERE — even /root — the script finds the repo:
-#   sudo bash <(curl -fsS file:///root/backend-joy/pluto-backend/deploy/go-live.sh) <slug>
+# If you do not know the repo path, run rescue-go-live.sh first; it finds the
+# repo, syncs the latest scripts, then calls this file.
 #
 # Exit codes:
 #   0   success
@@ -58,13 +58,13 @@ find_repo() {
     done
   fi
   # c) common well-known locations
-  for cand in /root/backend-joy /root/pluto /opt/pluto/pluto-repo /opt/pluto /srv/pluto ~/pluto ~/backend-joy; do
-    [[ -d "$cand/pluto-backend/deploy" ]] && { echo "$cand"; return; }
+  for cand in /root/backend-joy /root/pluto /root/pluto-repo /root/backend /opt/pluto/pluto-repo /opt/pluto /srv/pluto /home/pluto/pluto-repo ~/pluto ~/backend-joy; do
+    [[ -d "$cand/.git" && -d "$cand/pluto-backend/deploy" ]] && { echo "$cand"; return; }
   done
   # d) filesystem sweep (bounded depth)
   local hit
-  hit="$(find /root /opt /srv /home -maxdepth 4 -type d -name pluto-backend 2>/dev/null | head -n1)"
-  [[ -n "$hit" ]] && echo "$(dirname "$hit")"
+  hit="$(find /root /opt /srv /home -maxdepth 7 -type d -name pluto-backend 2>/dev/null | head -n1)"
+  [[ -n "$hit" && -d "$(dirname "$hit")/.git" ]] && echo "$(dirname "$hit")"
 }
 
 REPO="$(find_repo || true)"
@@ -72,11 +72,14 @@ if [[ -z "$REPO" || ! -d "$REPO/pluto-backend/deploy" ]]; then
   red "✗ Could not locate the pluto repo."
   cat >&2 <<MSG
   Tried: \$PLUTO_REPO, script parent dirs, /root/backend-joy, /root/pluto,
-         /opt/pluto/pluto-repo, /opt/pluto, /srv/pluto, ~, then
-         'find /root /opt /srv /home -maxdepth 4 -type d -name pluto-backend'.
+         /root/pluto-repo, /root/backend, /opt/pluto/pluto-repo, /opt/pluto,
+         /srv/pluto, then a bounded find under /root /opt /srv /home.
 
-  If the repo is elsewhere, rerun with:
-      PLUTO_REPO=/absolute/path/to/repo sudo -E bash go-live.sh $SLUG
+  Find it:
+      sudo find /root /opt /srv /home -maxdepth 8 -type f -path '*/pluto-backend/deploy/full-deploy.sh' 2>/dev/null
+
+  Or use rescue mode after copying/pulling it:
+      sudo bash pluto-backend/deploy/rescue-go-live.sh $SLUG $BASE
 MSG
   exit 30
 fi
@@ -90,6 +93,7 @@ REQUIRED=(
   "pluto-backend/deploy/clean-pull.sh"
   "pluto-backend/deploy/full-deploy.sh"
   "pluto-backend/deploy/issue-per-slug-cert.sh"
+  "pluto-backend/deploy/verify-deploy.sh"
 )
 missing=()
 for f in "${REQUIRED[@]}"; do
