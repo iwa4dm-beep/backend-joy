@@ -430,6 +430,9 @@ export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle"
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
 export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
 export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number };
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
 export type ServedSiteDiagnostics = {
   ok: boolean;
   slug: string;
@@ -466,7 +469,7 @@ export type ServedSiteDiagnostics = {
     currentJsonMatchesWorkspace: boolean | null;
     errors: string[];
   };
-  siteStatus?: unknown;
+  siteStatus?: JsonValue;
   hint?: string;
 };
 export type DeployAllResult = {
@@ -992,7 +995,7 @@ export const diagnoseServedSite = createServerFn({ method: "POST" })
       last = await rawFetch(url, "GET", { "x-sandbox-secret": sandboxSecret, accept: "application/json" }, null, null, 15_000);
       if (last.ok) {
         try {
-          const parsed = JSON.parse(last.text) as Omit<ServedSiteDiagnostics, "sandbox" | "checkedAt">;
+          const parsed = JSON.parse(last.text) as Omit<ServedSiteDiagnostics, "sandbox"> & { checkedAt?: string };
           return {
             ...parsed,
             checkedAt: parsed.checkedAt ?? checkedAt,
