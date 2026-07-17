@@ -146,10 +146,17 @@ fi
 
 UNIT="$(detect_unit)"
 
-echo "▶ script dir : $SCRIPT_DIR"
-echo "▶ repo root  : $REPO_ROOT"
-echo "▶ env file   : $ENV_FILE"
-echo "▶ unit       : $UNIT"
+echo "───────────────── print-sandbox-secret.sh ─────────────────"
+echo "▶ script dir     : $SCRIPT_DIR"
+echo "▶ repo root      : $REPO_ROOT"
+echo "▶ env file       : $ENV_FILE"
+if [ -f "$ENV_FILE" ]; then
+  echo "▶ env file state : EXISTS ($(stat -c '%s bytes, mode=%a, owner=%U:%G' "$ENV_FILE" 2>/dev/null || echo 'stat unavailable'))"
+else
+  echo "▶ env file state : MISSING — will be created at $ENV_FILE"
+fi
+echo "▶ systemd unit   : $UNIT ($(unit_exists "$UNIT" && echo installed || echo 'NOT installed'))"
+echo "───────────────────────────────────────────────────────────"
 echo
 
 # Prefer the canonical worker variable, but also recover from older names that
@@ -167,34 +174,61 @@ fi
 
 GENERATED=0
 if [ -z "$SECRET" ]; then
+  echo "ℹ no SANDBOX_SHARED_SECRET / PLUTO_SANDBOX_SECRET / PLUTO_SANDBOX_WORKER_SECRET"
+  echo "  found in $ENV_FILE — generating a fresh 32-byte hex value."
   SECRET="$(generate_secret)"
   SOURCE_KEY="generated"
   GENERATED=1
+  echo "✓ generated new secret ($(printf %s "$SECRET" | wc -c) chars)"
+else
+  echo "✓ found existing $SOURCE_KEY in $ENV_FILE ($(printf %s "$SECRET" | wc -c) chars)"
 fi
+echo
 
 write_canonical_secret "$SECRET"
-echo "✓ SANDBOX_SHARED_SECRET is present in $ENV_FILE (${SOURCE_KEY})"
+echo "✓ wrote SANDBOX_SHARED_SECRET to $ENV_FILE (source: $SOURCE_KEY)"
+
+# Compute a short fingerprint so the user can verify it matches Lovable Cloud
+# without ever revealing the full value again.
+if command -v sha256sum >/dev/null 2>&1; then
+  FP="$(printf %s "$SECRET" | sha256sum | cut -c1-12)"
+elif command -v shasum >/dev/null 2>&1; then
+  FP="$(printf %s "$SECRET" | shasum -a 256 | cut -c1-12)"
+else
+  FP="unavailable"
+fi
+echo "▶ secret fingerprint (sha256[:12]) : $FP"
+
 restart_worker_if_present "$UNIT"
+if unit_exists "$UNIT"; then
+  STATE="$(systemctl is-active "$UNIT" 2>/dev/null || echo unknown)"
+  echo "▶ ${UNIT}.service is-active : $STATE"
+fi
 probe_health_if_possible "$SECRET"
 echo
 
 # --- print result -----------------------------------------------------------
-echo "==================== COPY THIS VALUE ===================="
-echo "$SECRET"
-echo "========================================================="
+echo
+echo "╔════════════════════ COPY THIS VALUE ═════════════════════╗"
+echo "║ PLUTO_SANDBOX_SECRET (paste into Lovable Cloud → Secrets) ║"
+echo "╠═══════════════════════════════════════════════════════════╣"
+printf  "║ %s ║\n" "$SECRET"
+echo "╚═══════════════════════════════════════════════════════════╝"
 echo
 echo "Lovable Cloud Secret entry:"
-echo "  Name : PLUTO_SANDBOX_SECRET"
-echo "  Value: $SECRET"
+echo "  Name  : PLUTO_SANDBOX_SECRET"
+echo "  Value : $SECRET"
+echo "  sha256: $FP  ← should match /sandbox/health.secret_fingerprint"
 echo
 echo "Copy-paste shell line:"
 printf "  export PLUTO_SANDBOX_SECRET=%q\n" "$SECRET"
 echo
 echo "Next steps:"
 echo "  1. Open Lovable Cloud → Secrets"
-echo "  2. Add/update PLUTO_SANDBOX_SECRET with the Value above"
+echo "  2. Add/update PLUTO_SANDBOX_SECRET with the value above"
 echo "  3. Save, then re-run Auto Deploy"
 if [ "$GENERATED" = "1" ]; then
   echo
-  echo "ℹ A new secret was generated on this VPS. Any older Lovable Cloud value is stale."
+  echo "ℹ A new secret was generated on this VPS. Any older Lovable Cloud value is now stale."
 fi
+
