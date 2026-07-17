@@ -16,14 +16,14 @@ import {
   XCircle, Copy, ExternalLink, RefreshCw, Globe, Sparkles,
   ChevronRight, ChevronDown, ScrollText, History, Undo2, KeyRound,
   Plus, Trash2, Eye, EyeOff, ShieldCheck, Activity, AlertCircle,
-  Download, UserCheck, Radio, Bell, Webhook, FileJson,
+  Download, UserCheck, Radio, Bell, Webhook, FileJson, FolderTree,
 } from "lucide-react";
 
 import { analyzeZip } from "@/lib/autoconnect/analyzer";
 import { verifyZip } from "@/lib/autoconnect/zip-verify";
 import { buildBundle } from "@/lib/autoconnect/bundler";
 import { loadRepoAsFile } from "@/lib/autoconnect/github-loader";
-import { deployAll, probeLiveUrl, type DeployAllResult, type DeployStepLog, type LiveUrlProbe } from "@/lib/pluto/vps-deployer.functions";
+import { deployAll, diagnoseServedSite, probeLiveUrl, type DeployAllResult, type DeployStepLog, type LiveUrlProbe, type ServedSiteDiagnostics } from "@/lib/pluto/vps-deployer.functions";
 import { getUpstream } from "@/lib/pluto/upstream";
 
 import { RequireWorkspace } from "@/components/pluto/RequireWorkspace";
