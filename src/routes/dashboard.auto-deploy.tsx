@@ -1453,6 +1453,9 @@ function StepRow({ step, open, onToggle }: { step: DeployStepLog; open: boolean;
                 <span className="text-muted-foreground">{a.startedAt}</span>
               </div>
               <div className="mt-1 text-muted-foreground break-words">{a.detail}</div>
+              {!a.ok && parseMigrationError(a.detail || "") && (
+                <div className="mt-2"><MigrationErrorCard raw={a.detail || ""} /></div>
+              )}
               {a.debug && (
                 <details className="mt-1">
                   <summary className="cursor-pointer text-muted-foreground">HTTP {a.debug.status} · {a.debug.method} {a.debug.url}</summary>
