@@ -465,10 +465,10 @@ const DeployAllInput = z.object({
   // Use `{slug}` in the template (e.g. "https://api.timescard.cloud/sites/{slug}").
   servedSiteUrl: z.string().url().optional(),
   servedSiteUrlTemplate: z.string().min(1).max(255).optional(),
-  // When true, a failing served-site probe fails the whole health check.
-  // When false (default), it is reported as a warning — bundle unpack still
+  // When true (default), a failing served-site probe fails the whole health check.
+  // When false, it is reported as a warning — bundle unpack still
   // succeeded, and the 404 is downstream nginx / DNS / slug-symlink config.
-  strictServedSite: z.boolean().default(false),
+  strictServedSite: z.boolean().default(true),
 });
 
 
@@ -476,7 +476,7 @@ const DeployAllInput = z.object({
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check" | "verify-ssl";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
 export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
-export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number };
+export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number; healNote?: string | null };
 export type SslProbe = {
   url: string;
   ok: boolean;
