@@ -240,7 +240,12 @@ export function CustomDomainsPanel({ workspaceId, currentSlug }: Props) {
   const copyDnsRecord = async (row: CustomDomain) => {
     const type = row.recordType;
     const name = type === "TXT" ? `_pluto-verify.${row.hostname}` : row.hostname;
-    const text = `Type: ${type}\nName: ${name}\nValue: ${row.expectedValue}\nTTL: 300`;
+    const values = parseExpectedValues(type, row.expectedValue);
+    const valueBlock =
+      type === "TXT" && values.length > 1
+        ? values.map((v, i) => `Value ${i + 1}: ${v}`).join("\n") + `\n(any one of the values matches)`
+        : `Value: ${values[0] ?? row.expectedValue}`;
+    const text = `Type: ${type}\nName: ${name}\n${valueBlock}\nTTL: 300`;
     try {
       await navigator.clipboard.writeText(text);
       toast.success("DNS record copied to clipboard");
