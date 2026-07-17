@@ -198,8 +198,9 @@ TimeoutStopSec=10s
 StandardOutput=journal
 StandardError=journal
 ReadWritePaths=${SITES_ROOT}
-NoNewPrivileges=true
-ProtectSystem=strict
+# NoNewPrivileges intentionally NOT set — the worker sudo-runs
+# /usr/local/sbin/pluto-repair (whitelisted, NOPASSWD) for one-click repair.
+ProtectSystem=full
 ProtectHome=true
 
 [Install]
