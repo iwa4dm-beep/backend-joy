@@ -413,7 +413,17 @@ const DeployAllInput = z.object({
   maxRetries: z.number().int().min(0).max(5).default(2),
   ensureInfra: z.boolean().default(true),
   operatorToken: z.string().optional(),
+  // Per-deploy overrides for the served-site probe. Take precedence over
+  // PLUTO_SERVED_SITE_URL / PLUTO_SERVED_SITE_URL_TEMPLATE env vars.
+  // Use `{slug}` in the template (e.g. "https://api.timescard.cloud/sites/{slug}").
+  servedSiteUrl: z.string().url().optional(),
+  servedSiteUrlTemplate: z.string().min(1).max(255).optional(),
+  // When true, a failing served-site probe fails the whole health check.
+  // When false (default), it is reported as a warning — bundle unpack still
+  // succeeded, and the 404 is downstream nginx / DNS / slug-symlink config.
+  strictServedSite: z.boolean().default(false),
 });
+
 
 
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check";
