@@ -23,6 +23,8 @@
 // Requires system `unzip` (apt install unzip). No npm dependencies.
 
 import http from "node:http";
+import https from "node:https";
+import tls from "node:tls";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +37,9 @@ const SITES_ROOT = process.env.SITES_ROOT ?? process.env.SANDBOX_SITES_ROOT ?? "
 const UPSTREAM = (process.env.PLUTO_UPSTREAM_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SERVICE_KEY = process.env.PLUTO_SERVICE_ROLE_KEY ?? "";
 const LAST_DEPLOY_FILE = path.join(SITES_ROOT, ".last-deploy.json");
+const DEFAULT_BASE_DOMAIN = process.env.PLUTO_WILDCARD_HOST || process.env.BASE_DOMAIN || "app.timescard.cloud";
+const NGINX_SITES_ENABLED = process.env.NGINX_SITES_ENABLED || "/etc/nginx/sites-enabled";
+const NGINX_SITES_AVAILABLE = process.env.NGINX_SITES_AVAILABLE || "/etc/nginx/sites-available";
 
 if (!SECRET) { console.error("SANDBOX_SHARED_SECRET is required"); process.exit(1); }
 if (!SERVICE_KEY) console.warn("PLUTO_SERVICE_ROLE_KEY is not set; POST /unpack will fail until it is configured");
@@ -72,6 +77,11 @@ async function readJson(req) {
 
 function safeSlug(s) {
   return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
+}
+
+function safeDomain(s) {
+  const out = String(s || "").trim().toLowerCase().replace(/^\*\./, "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  return /^[a-z0-9.-]{3,253}$/.test(out) && !out.includes("..") ? out : DEFAULT_BASE_DOMAIN;
 }
 
 function normalizeSlug(s) {
