@@ -250,12 +250,16 @@ async function sandboxHealth(filter = {}) {
   };
 }
 
-async function fetchBundle(bucket, key) {
-  if (!SERVICE_KEY) throw new Error("PLUTO_SERVICE_ROLE_KEY is required for POST /unpack");
+async function fetchBundle(bucket, key, opts = {}) {
+  const overrideKey = typeof opts.serviceKey === "string" && opts.serviceKey.trim() ? opts.serviceKey.trim() : "";
+  const effectiveKey = overrideKey || SERVICE_KEY;
+  if (!effectiveKey) throw new Error("PLUTO_SERVICE_ROLE_KEY is required for POST /unpack (and no serviceKey was supplied in the request body)");
   const url = `${UPSTREAM}/storage/v1/object/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  const headers = { apikey: effectiveKey, authorization: `Bearer ${effectiveKey}` };
+  if (opts.workspaceId) headers["x-workspace-id"] = String(opts.workspaceId);
   let res;
   try {
-    res = await fetch(url, { headers: { apikey: SERVICE_KEY, authorization: `Bearer ${SERVICE_KEY}` } });
+    res = await fetch(url, { headers });
   } catch (e) {
     // undici throws a generic TypeError('fetch failed') on ECONNREFUSED / DNS / TLS
     // errors. Surface the URL and root cause so operators can see the misconfig.
@@ -265,7 +269,14 @@ async function fetchBundle(bucket, key) {
       : "";
     throw new Error(`storage GET network error for ${url}: ${cause}${hint}`);
   }
-  if (!res.ok) throw new Error(`storage GET HTTP ${res.status} from ${url}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 200);
+    const source = overrideKey ? "request-body serviceKey" : "env PLUTO_SERVICE_ROLE_KEY";
+    const hint = res.status === 401 || res.status === 403
+      ? ` — the ${source} was rejected by ${UPSTREAM}. Ensure Lovable Cloud's PLUTO_SERVICE_ROLE_KEY matches the service-role key configured on the VPS storage backend, or that the caller passes a fresh serviceKey in the /unpack body.`
+      : "";
+    throw new Error(`storage GET HTTP ${res.status} from ${url}: ${body}${hint}`);
+  }
   const buf = Buffer.from(await res.arrayBuffer());
   return buf;
 }
