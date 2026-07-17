@@ -1029,6 +1029,9 @@ function AutoDeployInner() {
       {/* Custom domains — Phase 5 */}
       <CustomDomainsPanel workspaceId={workspaceId} currentSlug={slug} />
 
+      {/* One-click VPS repair — auto-heal preflight + remediation buttons */}
+      <OneClickFixPanel slug={slug} wildcard={deployResult?.liveUrls?.wildcardHost ?? undefined} />
+
 
       {/* Per-step deploy result */}
       {deployResult && (
