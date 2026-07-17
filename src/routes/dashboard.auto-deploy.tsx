@@ -26,6 +26,8 @@ import { loadRepoAsFile } from "@/lib/autoconnect/github-loader";
 import { deployAll, diagnoseServedSite, probeLiveUrl, type DeployAllResult, type DeployStepLog, type LiveUrlProbe, type ServedSiteDiagnostics } from "@/lib/pluto/vps-deployer.functions";
 import { DeploySummaryChecksPanel } from "@/components/auto-deploy/DeploySummaryChecks";
 import { BuildLogsPanel } from "@/components/auto-deploy/BuildLogsPanel";
+import { DeploymentSettingsPanel } from "@/components/auto-deploy/DeploymentSettingsPanel";
+import { loadDeploymentSettings } from "@/lib/pluto/deployment-settings";
 import { getUpstream } from "@/lib/pluto/upstream";
 
 import { RequireWorkspace } from "@/components/pluto/RequireWorkspace";
@@ -206,14 +208,22 @@ function AutoDeployInner() {
   const [servedSiteUrl, setServedSiteUrl] = useState<string>("");
   const [servedSiteUrlTemplate, setServedSiteUrlTemplate] = useState<string>("");
   const [strictServedSite, setStrictServedSite] = useState<boolean>(false);
-  useEffect(() => {
+  const [defaultBranch, setDefaultBranch] = useState<string>("main");
+  const refreshSettingsFromStore = useCallback(() => {
     if (typeof window === "undefined") return;
-    try {
-      setServedSiteUrl(window.localStorage.getItem("pluto:servedSiteUrl") ?? "");
-      setServedSiteUrlTemplate(window.localStorage.getItem("pluto:servedSiteUrlTemplate") ?? "");
-      setStrictServedSite(window.localStorage.getItem("pluto:strictServedSite") === "1");
-    } catch { /* ignore */ }
-  }, []);
+    const s = loadDeploymentSettings(workspaceId);
+    setServedSiteUrl(s.servedSiteUrl);
+    setServedSiteUrlTemplate(s.servedSiteUrlTemplate);
+    setStrictServedSite(s.strictServedSite);
+    setDefaultBranch(s.defaultBranch || "main");
+  }, [workspaceId]);
+  useEffect(() => {
+    refreshSettingsFromStore();
+    if (typeof window === "undefined") return;
+    const handler = () => refreshSettingsFromStore();
+    window.addEventListener("pluto:deployment-settings:changed", handler);
+    return () => window.removeEventListener("pluto:deployment-settings:changed", handler);
+  }, [refreshSettingsFromStore]);
   const saveServedSiteConfig = (next: { url?: string; template?: string; strict?: boolean }) => {
     if (typeof window === "undefined") return;
     try {
@@ -303,9 +313,10 @@ function AutoDeployInner() {
     }
     if (source === "github") {
       if (!ghRepo.trim()) throw new Error("GitHub repo দিন (owner/repo)");
-      log(`Fetching GitHub repo ${ghRepo}${ghRef ? ` @ ${ghRef}` : ""}…`);
-      const f = await loadRepoAsFile(ghRepo.trim(), ghRef.trim() || undefined);
-      return { file: f, sourceRef: `${ghRepo}${ghRef ? `@${ghRef}` : ""}` };
+      const effectiveRef = ghRef.trim() || defaultBranch.trim();
+      log(`Fetching GitHub repo ${ghRepo}${effectiveRef ? ` @ ${effectiveRef}` : ""}…`);
+      const f = await loadRepoAsFile(ghRepo.trim(), effectiveRef || undefined);
+      return { file: f, sourceRef: `${ghRepo}${effectiveRef ? `@${effectiveRef}` : ""}` };
     }
     if (!gitUrl.trim()) throw new Error("Git repo URL দিন");
     log(`Fetching git URL ${gitUrl}${gitRef ? ` @ ${gitRef}` : ""}…`);
@@ -822,7 +833,7 @@ function AutoDeployInner() {
             <input className="sm:col-span-2 rounded-md border border-input bg-background px-3 py-2 text-sm"
               placeholder="owner/repo" value={ghRepo} onChange={(e) => setGhRepo(e.target.value)} disabled={!canRun}/>
             <input className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              placeholder="branch / tag / sha (optional)" value={ghRef} onChange={(e) => setGhRef(e.target.value)} disabled={!canRun}/>
+              placeholder={`branch / tag / sha (default: ${defaultBranch})`} value={ghRef} onChange={(e) => setGhRef(e.target.value)} disabled={!canRun}/>
           </div>
         )}
         {source === "giturl" && (
@@ -998,6 +1009,9 @@ function AutoDeployInner() {
           onRunDiagnostics={runServedDiagnostics}
         />
       )}
+
+      {/* Deployment settings — Phase 3 */}
+      <DeploymentSettingsPanel workspaceId={workspaceId} />
 
       {/* Summary + Checks */}
       {deployResult && <DeploySummaryChecksPanel result={deployResult} />}
