@@ -33,7 +33,10 @@ die(){ printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 cd "$ROOT"
 
-log "1/7 Ensure wildcard DNS: ${APEX} and *.${APEX}"
+log "0/8 Pull latest deploy scripts (safe-pull, non-destructive)"
+if [ -x "$HERE/safe-pull.sh" ]; then bash "$HERE/safe-pull.sh" || echo "  (safe-pull skipped/failed — continuing with on-disk scripts)"; fi
+
+log "1/8 Ensure wildcard DNS: ${APEX} and *.${APEX}"
 bash "$HERE/ensure-wildcard-dns.sh" "$APEX" || true
 
 log "2/7 Install/repair sandbox worker"
