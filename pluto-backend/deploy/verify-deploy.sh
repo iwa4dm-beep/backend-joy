@@ -79,7 +79,7 @@ else
     echo "     404 here means the worker is healthy but cannot resolve this slug."
     # Try worker-native auto-seed first (no root required, no shell out).
     code2="$(curl -s -o /tmp/_site_status.json -w '%{http_code}' --max-time 8 \
-      -H 'x-pluto-auto-seed: 1' "https://${API}/site-status/${SLUG}?autoseed=1" || echo 000)"
+      -H 'x-pluto-auto-seed: 1' -H "x-sandbox-secret: ${SECRET}" "https://${API}/site-status/${SLUG}?autoseed=1" || echo 000)"
     if [ "$code2" = "200" ]; then
       ok "site-status recovered via worker auto-seed"
       cat /tmp/_site_status.json | python3 -m json.tool 2>/dev/null || cat /tmp/_site_status.json
