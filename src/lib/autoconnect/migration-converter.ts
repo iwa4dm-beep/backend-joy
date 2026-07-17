@@ -15,7 +15,11 @@ export function tableToSql(t: TableDef): string {
   for (const c of t.columns) {
     let line = `  ${q(c.name)} ${c.type}`;
     if (c.primary) line += " PRIMARY KEY";
-    if (c.default) line += ` DEFAULT ${wrapDefault(c.default, c.type)}`;
+    if (c.default) {
+      const d = wrapDefault(c.default, c.type);
+      if (d !== null) line += ` DEFAULT ${d}`;
+      else lines.push(`-- NOTE: dropped unsupported DEFAULT (${c.name}): ${c.default.replace(/\n/g, " ")}`);
+    }
     if (c.nullable === false || c.primary) line += " NOT NULL";
     else if (c.nullable !== true && !c.primary) line += " NOT NULL";
     if (c.unique) line += " UNIQUE";
