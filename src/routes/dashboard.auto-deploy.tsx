@@ -407,8 +407,12 @@ function AutoDeployInner() {
           maxRetries: 2,
           ensureInfra: true,
           operatorToken,
+          ...(servedSiteUrl.trim() ? { servedSiteUrl: servedSiteUrl.trim() } : {}),
+          ...(servedSiteUrlTemplate.trim() ? { servedSiteUrlTemplate: servedSiteUrlTemplate.trim() } : {}),
+          strictServedSite,
         },
       });
+
 
 
       if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
