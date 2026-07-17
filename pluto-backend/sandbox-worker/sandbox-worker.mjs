@@ -1128,7 +1128,7 @@ const server = http.createServer(async (req, res) => {
     }
     // Public static routes — no shared secret, safe to expose behind nginx.
     const wildcardRoute = req.method === "GET" ? routeFromWildcardHost(req) : null;
-    if (wildcardRoute) {
+    if (wildcardRoute && !p.startsWith("/sites/") && !p.startsWith("/preview/") && !p.startsWith("/site-status/") && !p.startsWith("/sandbox/")) {
       const r = await resolveSlug(wildcardRoute.slug);
       if (!r.ok) return json(res, 404, { error: r.error, slug: wildcardRoute.slug });
       return serveStatic(req, res, path.join(SITES_ROOT, r.workspaceId), wildcardRoute.linkName, p);
