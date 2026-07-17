@@ -238,9 +238,11 @@ MSG
 fi
 
 # 6) Ensure nginx serves the ACME challenge for this FQDN on :80.
-if ! nginx -T 2>/dev/null | grep -qE "server_name[[:space:]]+.*\\*\\.${BASE//./\\.}"; then
-  STUB="/etc/nginx/sites-available/pluto-slug-${SLUG}-acme.conf"
-  cat > "$STUB" <<CONF
+# Always install a fresh ACME-only stub before certbot. This avoids a subtle
+# failure where a default/wildcard vhost exists, local nginx -T looks "covered",
+# but Let's Encrypt reaches a redirect/default site instead of the webroot token.
+STUB="/etc/nginx/sites-available/pluto-slug-${SLUG}-acme.conf"
+cat > "$STUB" <<CONF
 server {
     listen 80;
     listen [::]:80;
@@ -249,10 +251,10 @@ server {
     location / { return 404; }
 }
 CONF
-  ln -sf "$STUB" "/etc/nginx/sites-enabled/pluto-slug-${SLUG}-acme.conf"
-  if ! nginx -t >/tmp/pluto-issue-nginx-${SLUG}.out 2>&1; then
-    cat /tmp/pluto-issue-nginx-${SLUG}.out >&2
-    cat >&2 <<MSG
+ln -sf "$STUB" "/etc/nginx/sites-enabled/pluto-slug-${SLUG}-acme.conf"
+if ! nginx -t >/tmp/pluto-issue-nginx-${SLUG}.out 2>&1; then
+  cat /tmp/pluto-issue-nginx-${SLUG}.out >&2
+  cat >&2 <<MSG
 ✗ nginx config is invalid before certbot can run.
 
   Diagnose:
@@ -262,10 +264,10 @@ CONF
     sudo grep -Rsl 'pluto_slug_json' /etc/nginx/sites-enabled/pluto-*.conf 2>/dev/null | sudo xargs -r rm -f
     sudo nginx -t && sudo systemctl reload nginx
 MSG
-    exit 12
-  fi
-  systemctl reload nginx
+  exit 12
 fi
+systemctl reload nginx
+echo "   ✓ temporary HTTP-01 nginx stub installed for ${FQDN}"
 
 # 6a) Self-probe the HTTP-01 path before letting certbot hit LE's rate limits.
 TOKEN="preflight-$(date +%s)-$RANDOM"
