@@ -4,7 +4,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getVpsBaseUrl } from "./vps-client";
 
-export type WorkerJson = { [k: string]: unknown };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type WorkerJson = { [k: string]: any };
 
 function envFirst(...keys: string[]): string {
   for (const k of keys) {
