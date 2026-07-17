@@ -49,12 +49,15 @@ export type EndpointCheck = {
   ok: boolean;
   bodySnippet: string;
   failReason?: string;
+  /** "error" (default) fails overallOk; "warning" is reported but does not fail the pipeline. */
+  severity?: "error" | "warning";
 };
 
 export type HealthSummary = {
   endpoints: EndpointCheck[];
   overallOk: boolean;
 };
+
 
 export function loadAutoDeployHistory(): AutoDeployHistoryEntry[] {
   if (typeof window === "undefined") return [];
@@ -87,6 +90,8 @@ export function extractHealth(result: DeployAllResult): HealthSummary | null {
     runtime?: { status: number; body: string };
     invoke?: { status: number; body: string };
     site?: { status: number; url: string; snippet: string } | null;
+    siteExplicitlyConfigured?: boolean;
+    strictServedSite?: boolean;
   } = {};
   try { parsed = JSON.parse(step.result); } catch { return null; }
 
@@ -123,6 +128,13 @@ export function extractHealth(result: DeployAllResult): HealthSummary | null {
   }
   if (parsed.site) {
     const ok = parsed.site.status >= 200 && parsed.site.status < 400;
+    // A failing served-site probe is downstream infra (nginx / DNS / slug
+    // symlink). When the operator did not explicitly configure the URL
+    // (or opted out of strict mode), treat it as a warning so the pipeline
+    // doesn't loop on retries when the bundle is already unpacked.
+    const strict = parsed.strictServedSite === true;
+    const explicit = parsed.siteExplicitlyConfigured === true;
+    const severity: "error" | "warning" = ok || (strict && explicit) ? "error" : "warning";
     endpoints.push({
       label: "Served site",
       url: parsed.site.url,
@@ -132,10 +144,16 @@ export function extractHealth(result: DeployAllResult): HealthSummary | null {
       ok,
       bodySnippet: parsed.site.snippet,
       failReason: ok ? undefined : deriveFailReason(parsed.site.status, parsed.site.snippet),
+      severity,
     });
   }
-  return { endpoints, overallOk: endpoints.every((e) => e.ok) };
+  // overallOk ignores warnings — only "error"-severity failures fail the check.
+  return {
+    endpoints,
+    overallOk: endpoints.every((e) => e.ok || e.severity === "warning"),
+  };
 }
+
 
 function deriveFailReason(status: number, body: string): string {
   if (status === 0) return "Network error / timeout — endpoint unreachable";

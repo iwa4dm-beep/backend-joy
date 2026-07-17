@@ -195,6 +195,29 @@ function AutoDeployInner() {
   const [preflightBusy, setPreflightBusy] = useState(false);
   const pingUpstreamFn = useServerFn(pingUpstream);
 
+  // Served-site probe config (persisted in localStorage). Overrides the
+  // PLUTO_SERVED_SITE_URL / PLUTO_SERVED_SITE_URL_TEMPLATE env values per-deploy.
+  const [servedSiteUrl, setServedSiteUrl] = useState<string>("");
+  const [servedSiteUrlTemplate, setServedSiteUrlTemplate] = useState<string>("");
+  const [strictServedSite, setStrictServedSite] = useState<boolean>(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      setServedSiteUrl(window.localStorage.getItem("pluto:servedSiteUrl") ?? "");
+      setServedSiteUrlTemplate(window.localStorage.getItem("pluto:servedSiteUrlTemplate") ?? "");
+      setStrictServedSite(window.localStorage.getItem("pluto:strictServedSite") === "1");
+    } catch { /* ignore */ }
+  }, []);
+  const saveServedSiteConfig = (next: { url?: string; template?: string; strict?: boolean }) => {
+    if (typeof window === "undefined") return;
+    try {
+      if (next.url !== undefined) { window.localStorage.setItem("pluto:servedSiteUrl", next.url); setServedSiteUrl(next.url); }
+      if (next.template !== undefined) { window.localStorage.setItem("pluto:servedSiteUrlTemplate", next.template); setServedSiteUrlTemplate(next.template); }
+      if (next.strict !== undefined) { window.localStorage.setItem("pluto:strictServedSite", next.strict ? "1" : "0"); setStrictServedSite(next.strict); }
+    } catch { /* ignore */ }
+  };
+
+
   // Real-time streaming
   const [streamEvents, setStreamEvents] = useState<StepEvent[]>([]);
   const [runningStepIdx, setRunningStepIdx] = useState<number>(-1);
@@ -384,8 +407,12 @@ function AutoDeployInner() {
           maxRetries: 2,
           ensureInfra: true,
           operatorToken,
+          ...(servedSiteUrl.trim() ? { servedSiteUrl: servedSiteUrl.trim() } : {}),
+          ...(servedSiteUrlTemplate.trim() ? { servedSiteUrlTemplate: servedSiteUrlTemplate.trim() } : {}),
+          strictServedSite,
         },
       });
+
 
 
       if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
@@ -696,6 +723,57 @@ function AutoDeployInner() {
           </button>
         </div>
       )}
+
+      {/* Served-site probe config — overrides PLUTO_SERVED_SITE_URL / _TEMPLATE env for this browser */}
+      <details className="rounded-xl border border-border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-medium flex items-center gap-2">
+          <Activity className="h-4 w-4" />
+          Served-site probe config
+          <span className="text-xs text-muted-foreground font-normal">
+            {servedSiteUrl || servedSiteUrlTemplate ? "(override active)" : "(using env defaults + autodetect)"}
+          </span>
+        </summary>
+        <div className="mt-3 space-y-3 text-sm">
+          <p className="text-xs text-muted-foreground">
+            Health check-এর served-site probe এই URL থেকে হবে। empty রাখলে <code className="font-mono">PLUTO_SERVED_SITE_URL</code> /
+            <code className="font-mono"> _TEMPLATE</code> env, তারপর autodetect (worker, nginx <code>/sites/&lt;slug&gt;</code>) fallback হবে।
+            Bundle unpack হয়ে গেলে served-site 404 আর deploy fail করবে না (warning-only) — unless "Strict" চেক করা থাকে।
+          </p>
+          <div>
+            <label className="text-xs text-muted-foreground">Explicit URL (highest priority)</label>
+            <input
+              type="text"
+              value={servedSiteUrl}
+              onChange={(e) => saveServedSiteConfig({ url: e.target.value })}
+              placeholder="https://myapp.example.com"
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">
+              URL template — <code className="font-mono">{"{slug}"}</code> placeholder
+            </label>
+            <input
+              type="text"
+              value={servedSiteUrlTemplate}
+              onChange={(e) => saveServedSiteConfig({ template: e.target.value })}
+              placeholder="https://api.timescard.cloud/sites/{slug}"
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={strictServedSite}
+              onChange={(e) => saveServedSiteConfig({ strict: e.target.checked })}
+              className="rounded"
+            />
+            <span>Strict mode — served-site 404 fails the deploy (only when explicit URL/template is set above)</span>
+          </label>
+        </div>
+      </details>
+
+
 
       {/* Source picker */}
       <section className="rounded-xl border border-border bg-card p-5 space-y-4">
@@ -1057,26 +1135,33 @@ function HealthCheckPanel({ health }: { health: HealthSummary }) {
 
 function EndpointRow({ endpoint }: { endpoint: EndpointCheck }) {
   const [open, setOpen] = useState(false);
+  const isWarn = !endpoint.ok && endpoint.severity === "warning";
+  const Icon = endpoint.ok ? CheckCircle2 : (isWarn ? AlertCircle : AlertCircle);
+  const iconColor = endpoint.ok ? "text-emerald-500" : (isWarn ? "text-amber-500" : "text-destructive");
+  const statusColor = endpoint.ok
+    ? "bg-emerald-500/15 text-emerald-600"
+    : (isWarn ? "bg-amber-500/15 text-amber-600" : "bg-destructive/15 text-destructive");
+  const reasonColor = isWarn ? "text-amber-600" : "text-destructive";
   return (
     <li>
       <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-accent/40">
-        {endpoint.ok
-          ? <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-          : <AlertCircle className="h-4 w-4 text-destructive shrink-0" />}
+        <Icon className={`h-4 w-4 shrink-0 ${iconColor}`} />
         <div className="flex-1 min-w-0">
           <div className="text-sm flex items-center gap-2">
             <span className="font-medium">{endpoint.label}</span>
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted">{endpoint.method}</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${endpoint.ok ? "bg-emerald-500/15 text-emerald-600" : "bg-destructive/15 text-destructive"}`}>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${statusColor}`}>
               {endpoint.status || "ERR"}
             </span>
+            {isWarn && <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600">WARN</span>}
             {endpoint.latencyMs > 0 && <span className="text-xs text-muted-foreground">{endpoint.latencyMs}ms</span>}
           </div>
           <div className="text-xs text-muted-foreground font-mono truncate mt-0.5">{endpoint.url}</div>
-          {endpoint.failReason && <div className="text-xs text-destructive mt-0.5">{endpoint.failReason}</div>}
+          {endpoint.failReason && <div className={`text-xs mt-0.5 ${reasonColor}`}>{endpoint.failReason}{isWarn ? " (non-fatal — served-site is downstream infra config)" : ""}</div>}
         </div>
         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
       </button>
+
       {open && (
         <div className="px-4 pb-3">
           <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-[11px] font-mono whitespace-pre-wrap">{endpoint.bodySnippet || "(empty)"}</pre>
