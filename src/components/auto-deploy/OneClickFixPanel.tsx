@@ -181,6 +181,120 @@ export function OneClickFixPanel({ slug, wildcard, acmeEmail, onAutoHealChange }
           )}
         </div>
 
+        {/* Per-slug SSL cert status */}
+        {slug && (
+          <div className="rounded-lg border border-border bg-background/60 p-3">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+              <div className="text-sm font-medium">SSL cert status</div>
+              <span className="ml-2 text-[11px] text-muted-foreground font-mono truncate">
+                {certStatus?.fqdn || `${slug}.${wildcard || "app.timescard.cloud"}`}
+              </span>
+              <button
+                onClick={refreshCert}
+                disabled={certBusy}
+                className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-50"
+              >
+                {certBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                Refresh
+              </button>
+            </div>
+            {certStatus && (
+              <div className="mt-2 text-xs">
+                {!certStatus.exists ? (
+                  <div className="flex items-start gap-2 rounded-md bg-amber-500/10 border border-amber-500/30 p-2 text-amber-700 dark:text-amber-300">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>{certStatus.error || certStatus.hint || "No certificate on disk yet. Click 'Issue per-slug HTTP-01 cert' below."}</span>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    <div className="text-muted-foreground">Source</div>
+                    <div className="font-mono">{certStatus.source}{certStatus.coversFqdn === false && <span className="ml-1 text-destructive">(does not cover FQDN)</span>}</div>
+                    <div className="text-muted-foreground">Issued</div>
+                    <div className="font-mono">{certStatus.notBefore ? new Date(certStatus.notBefore).toLocaleString() : "—"}</div>
+                    <div className="text-muted-foreground">Expires</div>
+                    <div className="font-mono">
+                      {certStatus.notAfter ? new Date(certStatus.notAfter).toLocaleString() : "—"}
+                      {typeof certStatus.daysLeft === "number" && (
+                        <span className={`ml-2 rounded px-1.5 py-0.5 text-[10px] ${
+                          certStatus.daysLeft < 15 ? "bg-destructive/15 text-destructive"
+                          : certStatus.daysLeft < 30 ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                          : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                        }`}>{certStatus.daysLeft}d left</span>
+                      )}
+                    </div>
+                    <div className="text-muted-foreground">Issuer</div>
+                    <div className="font-mono truncate" title={certStatus.issuer}>{certStatus.issuer || "—"}</div>
+                    {certStatus.hint && (
+                      <>
+                        <div className="text-muted-foreground">Hint</div>
+                        <div className="text-amber-600 dark:text-amber-400">{certStatus.hint}</div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Batch per-slug HTTP-01 issuance */}
+        <div className="rounded-lg border border-border bg-background/60 p-3">
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-muted-foreground" />
+            <div className="text-sm font-medium">Batch: per-slug HTTP-01 certs</div>
+            <span className="ml-auto text-[11px] text-muted-foreground">
+              {parsedBatchSlugs.length} valid slug{parsedBatchSlugs.length === 1 ? "" : "s"} (max 25)
+            </span>
+          </div>
+          <textarea
+            value={batchInput}
+            onChange={(e) => setBatchInput(e.target.value)}
+            placeholder="Paste slugs — one per line, or comma/space separated (e.g. dubaiborkahouse-tzsegx, frfrom-he3wm0)"
+            rows={3}
+            className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-xs font-mono resize-y focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={runBatchIssue}
+              disabled={batchBusy || parsedBatchSlugs.length === 0 || busy !== null}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {batchBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+              Issue {parsedBatchSlugs.length || ""} cert{parsedBatchSlugs.length === 1 ? "" : "s"}
+            </button>
+            {batchResults && (
+              <button
+                onClick={() => { setBatchResults(null); setBatchInput(""); }}
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {batchResults && (
+            <ul className="mt-3 space-y-1 text-xs">
+              {batchResults.map((r) => (
+                <li key={r.slug} className="rounded-md border border-border p-2">
+                  <details>
+                    <summary className="flex items-center gap-2 cursor-pointer">
+                      {r.ok
+                        ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                        : <XCircle className="h-3.5 w-3.5 text-destructive" />}
+                      <span className="font-mono">{r.slug}</span>
+                      <span className="ml-auto text-[11px] text-muted-foreground">
+                        exit {r.exitCode} · {r.durationMs}ms
+                      </span>
+                    </summary>
+                    {r.hint && <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">{r.hint}</p>}
+                    <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted p-2 text-[11px] whitespace-pre-wrap">{r.tail || "(no output)"}</pre>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {/* Repair action buttons */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {(Object.keys(ACTION_LABELS) as RepairAction[]).map((action) => {
