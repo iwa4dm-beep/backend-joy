@@ -155,9 +155,11 @@ export async function verifyDomainRecord(
     const records = await resolveDnsRecords(hostname, type, signal);
     if (records.length === 0) return { ok: false, reason: `No ${type} record found`, records };
     if (!matches(type, expectedValue, records)) {
+      const wants = parseExpectedValues(type, expectedValue);
+      const wantLabel = wants.length > 1 ? `any of [${wants.join(", ")}]` : `"${wants[0] ?? expectedValue}"`;
       return {
         ok: false,
-        reason: `${type} record does not match expected "${expectedValue}" (got ${records.join(", ")})`,
+        reason: `${type} record does not match expected ${wantLabel} (got ${records.join(", ")})`,
         records,
       };
     }
