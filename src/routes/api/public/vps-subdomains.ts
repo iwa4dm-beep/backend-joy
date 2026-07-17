@@ -24,7 +24,7 @@ export const Route = createFileRoute("/api/public/vps-subdomains")({
         }
         const url = new URL(request.url);
         const report = await fetchActiveSubdomains(url.searchParams.get("baseDomain") || undefined);
-        return new Response(JSON.stringify(report, null, 2), { status: report.ok ? 200 : 502, headers: headers() });
+        return new Response(JSON.stringify(report, null, 2), { status: 200, headers: headers() });
       },
     },
   },
