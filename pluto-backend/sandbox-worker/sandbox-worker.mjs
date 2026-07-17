@@ -226,6 +226,7 @@ async function sandboxHealth(filter = {}) {
     features: {
       request_body_service_key: true,
       storage_workspace_header_preserves_uuid: true,
+      served_site_diagnostics: true,
     },
     auth: { ok: true, method: "x-sandbox-secret" },
     // Flat operator-friendly fields (used by Auto Deploy preflight + docs).
@@ -924,6 +925,7 @@ const server = http.createServer(async (req, res) => {
         features: {
           request_body_service_key: true,
           storage_workspace_header_preserves_uuid: true,
+          served_site_diagnostics: true,
         },
         uptimeSec: Math.round(process.uptime()),
         sitesRoot: SITES_ROOT,
