@@ -139,7 +139,7 @@ nginx -t || die "nginx config invalid"
 systemctl reload nginx || die "nginx reload failed"
 
 # 5) verify
-if [ -n "${SLUG:-}" ]; then
+if [ -n "${SLUG:-}" ] && [ "${SKIP_VERIFY:-0}" != "1" ]; then
   log "verify deploy for slug=$SLUG"
   if ! bash "$DEPLOY/verify-deploy.sh" "$SLUG"; then
     log "verify failed; attempting worker + site recovery"
@@ -151,8 +151,13 @@ if [ -n "${SLUG:-}" ]; then
     fi
   fi
 else
-  log "no SLUG given — skipping end-to-end verification"
-  echo "  (rerun: bash deploy/verify-deploy.sh <slug>)"
+  if [ "${SKIP_VERIFY:-0}" = "1" ]; then
+    log "skip verify (SKIP_VERIFY=1)"
+    echo "  (rerun after TLS: bash deploy/verify-deploy.sh ${SLUG:-<slug>})"
+  else
+    log "no SLUG given — skipping end-to-end verification"
+    echo "  (rerun: bash deploy/verify-deploy.sh <slug>)"
+  fi
 fi
 
 printf '\n\033[1;32m✓ full-deploy completed\033[0m\n'

@@ -4,8 +4,9 @@
 # Autodetects the repo top-level, then runs, in order:
 #   1. preflight (repo path + script presence + DNS + HTTP-01)
 #   2. clean-pull.sh          (git sync)
-#   3. full-deploy.sh <slug>  (worker + nginx + verify)
+#   3. full-deploy.sh <slug>  (worker + API nginx; wildcard skipped)
 #   4. issue-per-slug-cert.sh <slug> <base>   (HTTP-01 cert)
+#   5. verify-deploy.sh <slug>
 #
 # Usage:
 #   sudo bash /path/to/go-live.sh <slug> [base]
@@ -22,6 +23,7 @@
 #   33  clean-pull failed
 #   34  full-deploy failed
 #   35  cert issuance failed
+#   36  final verify failed
 
 set -uo pipefail
 SLUG="${1:-}"
@@ -117,8 +119,8 @@ if ! bash pluto-backend/deploy/clean-pull.sh; then
 fi
 
 # ── 5. full-deploy ──────────────────────────────────────────────────────────
-bold "▸ Step 3/4: full-deploy $SLUG"
-if ! bash pluto-backend/deploy/full-deploy.sh "$SLUG"; then
+bold "▸ Step 3/5: full-deploy $SLUG (skip wildcard TLS; per-slug HTTP-01 will run next)"
+if ! SKIP_WILDCARD=1 SKIP_VERIFY=1 bash pluto-backend/deploy/full-deploy.sh "$SLUG"; then
   red "✗ full-deploy failed. Inspect:"
   red "    sudo journalctl -u pluto-sandbox-worker.service -n 200 --no-pager"
   red "    sudo nginx -t && sudo tail -n 100 /var/log/nginx/error.log"
@@ -126,11 +128,19 @@ if ! bash pluto-backend/deploy/full-deploy.sh "$SLUG"; then
 fi
 
 # ── 6. per-slug cert ────────────────────────────────────────────────────────
-bold "▸ Step 4/4: issue-per-slug-cert $SLUG $BASE"
+bold "▸ Step 4/5: issue-per-slug-cert $SLUG $BASE"
 if ! bash pluto-backend/deploy/issue-per-slug-cert.sh "$SLUG" "$BASE"; then
   red "✗ Cert issuance failed. Rerun preflight to see the specific block:"
   red "    sudo bash $REPO/pluto-backend/deploy/preflight-dns.sh $SLUG $BASE"
   exit 35
+fi
+
+# ── 7. final verify ─────────────────────────────────────────────────────────
+bold "▸ Step 5/5: verify-deploy $SLUG"
+if ! bash pluto-backend/deploy/verify-deploy.sh "$SLUG"; then
+  red "✗ Final verify failed. Diagnose now:"
+  red "    sudo bash $REPO/pluto-backend/deploy/diagnose-cert-failure.sh $SLUG $BASE"
+  exit 36
 fi
 
 echo

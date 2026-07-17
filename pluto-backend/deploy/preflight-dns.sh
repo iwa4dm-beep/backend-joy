@@ -129,7 +129,7 @@ MSG
 fi
 
 # ── 4. HTTP-01 self-probe on port 80 ────────────────────────────────────────
-WEBROOT="/var/www/letsencrypt"
+WEBROOT="/var/www/certbot"
 TOKEN="preflight-$(date +%s)-$$"
 mkdir -p "${WEBROOT}/.well-known/acme-challenge" 2>/dev/null || true
 echo "$TOKEN" > "${WEBROOT}/.well-known/acme-challenge/${TOKEN}" 2>/dev/null || true
