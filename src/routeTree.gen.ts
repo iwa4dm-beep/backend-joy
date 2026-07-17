@@ -108,6 +108,7 @@ import { Route as ApiPlutoMonitorRouteImport } from './routes/api/pluto.monitor'
 import { Route as ApiPlutoDeployRouteImport } from './routes/api/pluto/deploy'
 import { Route as ApiPlutoAuditRouteImport } from './routes/api/pluto.audit'
 import { Route as ApiPlutoSplatRouteImport } from './routes/api/pluto.$'
+import { Route as DashboardProjectsSlugStatusRouteImport } from './routes/dashboard.projects.$slug.status'
 import { Route as DashboardProjectsSlugEnvRouteImport } from './routes/dashboard.projects.$slug.env'
 import { Route as ApiPublicSiteMappingSlugRouteImport } from './routes/api/public/site-mapping.$slug'
 
@@ -617,6 +618,12 @@ const ApiPlutoSplatRoute = ApiPlutoSplatRouteImport.update({
   path: '/api/pluto/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardProjectsSlugStatusRoute =
+  DashboardProjectsSlugStatusRouteImport.update({
+    id: '/$slug/status',
+    path: '/$slug/status',
+    getParentRoute: () => DashboardProjectsRoute,
+  } as any)
 const DashboardProjectsSlugEnvRoute =
   DashboardProjectsSlugEnvRouteImport.update({
     id: '/$slug/env',
@@ -732,6 +739,7 @@ export interface FileRoutesByFullPath {
   '/sdk/download/$file': typeof SdkDownloadFileRoute
   '/api/public/site-mapping/$slug': typeof ApiPublicSiteMappingSlugRoute
   '/dashboard/projects/$slug/env': typeof DashboardProjectsSlugEnvRoute
+  '/dashboard/projects/$slug/status': typeof DashboardProjectsSlugStatusRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -834,6 +842,7 @@ export interface FileRoutesByTo {
   '/sdk/download/$file': typeof SdkDownloadFileRoute
   '/api/public/site-mapping/$slug': typeof ApiPublicSiteMappingSlugRoute
   '/dashboard/projects/$slug/env': typeof DashboardProjectsSlugEnvRoute
+  '/dashboard/projects/$slug/status': typeof DashboardProjectsSlugStatusRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -938,6 +947,7 @@ export interface FileRoutesById {
   '/sdk/download/$file': typeof SdkDownloadFileRoute
   '/api/public/site-mapping/$slug': typeof ApiPublicSiteMappingSlugRoute
   '/dashboard/projects/$slug/env': typeof DashboardProjectsSlugEnvRoute
+  '/dashboard/projects/$slug/status': typeof DashboardProjectsSlugStatusRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -1043,6 +1053,7 @@ export interface FileRouteTypes {
     | '/sdk/download/$file'
     | '/api/public/site-mapping/$slug'
     | '/dashboard/projects/$slug/env'
+    | '/dashboard/projects/$slug/status'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -1145,6 +1156,7 @@ export interface FileRouteTypes {
     | '/sdk/download/$file'
     | '/api/public/site-mapping/$slug'
     | '/dashboard/projects/$slug/env'
+    | '/dashboard/projects/$slug/status'
   id:
     | '__root__'
     | '/'
@@ -1248,6 +1260,7 @@ export interface FileRouteTypes {
     | '/sdk/download/$file'
     | '/api/public/site-mapping/$slug'
     | '/dashboard/projects/$slug/env'
+    | '/dashboard/projects/$slug/status'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -1969,6 +1982,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlutoSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard/projects/$slug/status': {
+      id: '/dashboard/projects/$slug/status'
+      path: '/$slug/status'
+      fullPath: '/dashboard/projects/$slug/status'
+      preLoaderRoute: typeof DashboardProjectsSlugStatusRouteImport
+      parentRoute: typeof DashboardProjectsRoute
+    }
     '/dashboard/projects/$slug/env': {
       id: '/dashboard/projects/$slug/env'
       path: '/$slug/env'
@@ -2032,10 +2052,12 @@ const DashboardIntegrationsRouteWithChildren =
 
 interface DashboardProjectsRouteChildren {
   DashboardProjectsSlugEnvRoute: typeof DashboardProjectsSlugEnvRoute
+  DashboardProjectsSlugStatusRoute: typeof DashboardProjectsSlugStatusRoute
 }
 
 const DashboardProjectsRouteChildren: DashboardProjectsRouteChildren = {
   DashboardProjectsSlugEnvRoute: DashboardProjectsSlugEnvRoute,
+  DashboardProjectsSlugStatusRoute: DashboardProjectsSlugStatusRoute,
 }
 
 const DashboardProjectsRouteWithChildren =

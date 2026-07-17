@@ -214,7 +214,7 @@ function StatusCard({
   hint: string;
   extra?: string;
 }) {
-  const styles: Record<typeof state, { icon: JSX.Element; ring: string }> = {
+  const styles: Record<typeof state, { icon: React.ReactElement; ring: string }> = {
     ok: { icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" />, ring: "border-emerald-500/40" },
     warn: { icon: <AlertCircle className="h-5 w-5 text-amber-500" />, ring: "border-amber-500/40" },
     bad: { icon: <XCircle className="h-5 w-5 text-red-500" />, ring: "border-red-500/40" },
