@@ -214,8 +214,20 @@ async function ensureMigrationPrerequisites(conn) {
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
     CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
-    LANGUAGE sql STABLE SET search_path = public AS $$
-      SELECT nullif(current_setting('pluto.user_id', true), '')::uuid
+    LANGUAGE plpgsql STABLE SET search_path = public AS $$
+    DECLARE raw text;
+    BEGIN
+      raw := nullif(current_setting('pluto.user_id', true), '');
+      IF raw IS NULL THEN
+        raw := nullif(current_setting('request.jwt.claim.sub', true), '');
+      END IF;
+      IF raw IS NULL OR btrim(raw) = '' THEN
+        RETURN NULL;
+      END IF;
+      RETURN raw::uuid;
+    EXCEPTION WHEN others THEN
+      RETURN NULL;
+    END
     $$;
 
     CREATE OR REPLACE FUNCTION auth.role() RETURNS text

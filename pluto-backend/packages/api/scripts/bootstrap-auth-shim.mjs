@@ -17,10 +17,22 @@ try {
     CREATE SCHEMA IF NOT EXISTS auth;
 
     CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
-      LANGUAGE sql STABLE
+      LANGUAGE plpgsql STABLE
       SET search_path = public
     AS $$
-      SELECT nullif(current_setting('pluto.user_id', true), '')::uuid
+    DECLARE raw text;
+    BEGIN
+      raw := nullif(current_setting('pluto.user_id', true), '');
+      IF raw IS NULL THEN
+        raw := nullif(current_setting('request.jwt.claim.sub', true), '');
+      END IF;
+      IF raw IS NULL OR btrim(raw) = '' THEN
+        RETURN NULL;
+      END IF;
+      RETURN raw::uuid;
+    EXCEPTION WHEN others THEN
+      RETURN NULL;
+    END
     $$;
 
     CREATE OR REPLACE FUNCTION auth.role() RETURNS text
