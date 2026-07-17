@@ -5,6 +5,7 @@ import {
   isValidHostname,
   newDomainId,
   nextRetryDelayMs,
+  parseExpectedValues,
   probeDomainSsl,
   removeCustomDomain,
   upsertCustomDomain,
