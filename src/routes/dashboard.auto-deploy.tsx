@@ -933,8 +933,6 @@ function AutoDeployInner() {
             </div>
           )}
 
-          {servedDiagnostics && <ServedSiteDiagnosticsPanel diagnostics={servedDiagnostics} />}
-
           {bootstrapInvokeUrl && (
             <div className="text-xs text-muted-foreground">
               Verifiable backend endpoint: <a href={bootstrapInvokeUrl} target="_blank" rel="noreferrer" className="underline font-mono">{bootstrapInvokeUrl}</a>
@@ -1164,6 +1162,15 @@ function HealthCheckPanel({
   diagnosticsBusy: boolean;
   onRunDiagnostics: () => void;
 }) {
+  const passing = health.endpoints.filter((e) => e.ok).length;
+  const warnings = health.endpoints.filter((e) => !e.ok && e.severity === "warning").length;
+  const errors = health.endpoints.filter((e) => !e.ok && e.severity !== "warning").length;
+  const statusText = errors > 0
+    ? `${passing}/${health.endpoints.length} passing · ${errors} error${errors === 1 ? "" : "s"}`
+    : warnings > 0
+      ? `${passing}/${health.endpoints.length} passing · ${warnings} warning${warnings === 1 ? "" : "s"}`
+      : `✓ ${health.endpoints.length}/${health.endpoints.length} passing`;
+
   return (
     <section className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-4 py-3 text-sm font-medium flex items-center gap-2 flex-wrap">
@@ -1172,8 +1179,8 @@ function HealthCheckPanel({
           Endpoint health
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <span className={`text-xs ${health.overallOk ? "text-emerald-500" : "text-destructive"}`}>
-            {health.overallOk ? `✓ ${health.endpoints.length}/${health.endpoints.length} passing` : `${health.endpoints.filter(e => e.ok).length}/${health.endpoints.length} passing`}
+          <span className={`text-xs ${errors > 0 ? "text-destructive" : warnings > 0 ? "text-amber-500" : "text-emerald-500"}`}>
+            {statusText}
           </span>
           <button
             onClick={onRunDiagnostics}
