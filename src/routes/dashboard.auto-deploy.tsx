@@ -1010,6 +1010,9 @@ function AutoDeployInner() {
         />
       )}
 
+      {/* Deployment settings — Phase 3 */}
+      <DeploymentSettingsPanel workspaceId={workspaceId} />
+
       {/* Summary + Checks */}
       {deployResult && <DeploySummaryChecksPanel result={deployResult} />}
 
