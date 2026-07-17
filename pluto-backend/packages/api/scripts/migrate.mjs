@@ -243,11 +243,8 @@ async function ensureMigrationPrerequisites(conn) {
       ADD COLUMN IF NOT EXISTS is_superadmin boolean NOT NULL DEFAULT false,
       ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false;
 
-    ALTER TABLE IF EXISTS admin.projects
-      ADD COLUMN IF NOT EXISTS owner_id uuid,
-      ADD COLUMN IF NOT EXISTS workspace_id uuid;
   `);
-  repairs.push({ kind: 'prerequisite', detail: 'auth shim, pgcrypto, compatibility columns ensured' });
+  repairs.push({ kind: 'prerequisite', detail: 'auth shim and pgcrypto ensured' });
 
   try {
     await conn.unsafe(`
@@ -284,6 +281,11 @@ function prepareMigrationSql(contents) {
   out = out.replace(/'\s*uuid_generate_v4\s*\(\s*\)\s*'/gi, 'gen_random_uuid()');
   out = out.replace(/\buuid_generate_v4\s*\(\s*\)/gi, 'gen_random_uuid()');
   if (out !== beforeUuid) repairs.push({ kind: 'uuid_default', detail: 'normalized uuid_generate_v4() to gen_random_uuid()' });
+
+  const beforeConcurrent = out;
+  out = out.replace(/\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/gi, 'CREATE $1INDEX');
+  out = out.replace(/\bDROP\s+INDEX\s+CONCURRENTLY\b/gi, 'DROP INDEX');
+  if (out !== beforeConcurrent) repairs.push({ kind: 'concurrent_index', detail: 'removed CONCURRENTLY so migration can run inside an atomic transaction' });
 
   const beforePolicies = out;
   out = makePolicyCreatesIdempotent(out);

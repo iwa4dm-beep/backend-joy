@@ -138,12 +138,17 @@ function inferEnumPreamble(tables: TableDef[]): string[] {
       if (/(?:^|_)status$|(?:^|_)role$|(?:^|_)type$|(?:^|_)state$|enum/i.test(base)) names.add(base);
     }
   }
+  const broadValues = [
+    "pending", "active", "inactive", "archived", "open", "closed", "draft", "published",
+    "in_progress", "processing", "completed", "failed", "success", "approved", "rejected",
+    "resolved", "cancelled", "canceled", "paid", "unpaid", "admin", "moderator", "user",
+  ];
   return [...names].map((name) => {
     const safe = name.replace(/"/g, "");
     const quoted = /^[a-z_][a-z0-9_]*$/i.test(safe) ? safe : `"${safe.replace(/"/g, '""')}"`;
     return `DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public' AND t.typname = '${safe.replace(/'/g, "''")}') THEN
-    CREATE TYPE public.${quoted} AS ENUM ('pending', 'active', 'inactive', 'archived');
+    CREATE TYPE public.${quoted} AS ENUM (${broadValues.map((v) => `'${v}'`).join(", ")});
   END IF;
 END $$;`;
   });

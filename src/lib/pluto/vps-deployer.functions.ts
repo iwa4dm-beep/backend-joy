@@ -71,6 +71,8 @@ function sanitizeMigrationSql(sql: string): string {
   out = out.replace(/'\s*uuid_generate_v4\s*\(\s*\)\s*'/gi, "gen_random_uuid()");
   out = out.replace(/\buuid_generate_v4\s*\(\s*\)/gi, "gen_random_uuid()");
   out = out.replace(/\bCREATE\s+SEQUENCE\s+(?!IF\s+NOT\s+EXISTS)(public\.invoice_number_seq\b)/gi, "CREATE SEQUENCE IF NOT EXISTS $1");
+  out = out.replace(/\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/gi, "CREATE $1INDEX");
+  out = out.replace(/\bDROP\s+INDEX\s+CONCURRENTLY\b/gi, "DROP INDEX");
   out = addAdaptiveMigrationPreamble(out);
   out = addOwnerIdPolicyGuards(out);
   if (/\bDEFAULT\s+(?:public\.)?generate_invoice_number\s*\(\s*\)/i.test(out)
