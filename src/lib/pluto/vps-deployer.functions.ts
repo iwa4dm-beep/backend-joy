@@ -504,10 +504,81 @@ export type DeployAllResult = {
     served?: boolean;
     /** Operator-facing hint when served=false. */
     servedHint?: string;
+    /** HTTPS/TLS verification for the resolved served-site URL. Only populated when the site is https:// */
+    sslProbe?: SslProbe;
   };
 };
 
 function nowIso(): string { return new Date().toISOString(); }
+
+/** Best-effort SSL/HTTPS verifier. Uses fetch() to validate the TLS chain +
+ *  hostname (any TLS/name error rejects the promise) and, when Node `tls`
+ *  is available in the runtime, harvests cert issuer/expiry via a direct
+ *  TLS handshake. Never throws — returns { ok:false, error } on failure. */
+async function probeSsl(url: string): Promise<SslProbe> {
+  const t0 = Date.now();
+  let httpsStatus = 0;
+  let fetchErr: string | undefined;
+  try {
+    if (!/^https:\/\//i.test(url)) {
+      return { url, ok: false, httpsStatus: 0, handshakeMs: 0, error: "not an https:// URL" };
+    }
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 12_000);
+    try {
+      const r = await fetch(url, { method: "GET", redirect: "manual", signal: ctl.signal, headers: { accept: "text/html,*/*" } });
+      httpsStatus = r.status;
+    } finally { clearTimeout(t); }
+  } catch (e) {
+    fetchErr = (e as Error).message || "fetch failed";
+  }
+  const handshakeMs = Date.now() - t0;
+
+  // Best-effort cert metadata via Node `tls`. Cloudflare Workers with
+  // nodejs_compat don't expose `tls`, so we fail-soft.
+  let cert: SslProbe["cert"] | undefined;
+  try {
+    const u = new URL(url);
+    const tlsMod = await import("node:tls").catch(() => null) as typeof import("node:tls") | null;
+    if (tlsMod && u.hostname) {
+      cert = await new Promise<SslProbe["cert"]>((resolve) => {
+        const done = (v: SslProbe["cert"]) => { try { socket.destroy(); } catch { /* noop */ } resolve(v); };
+        const socket = tlsMod.connect({
+          host: u.hostname, port: Number(u.port) || 443, servername: u.hostname, timeout: 8000,
+        }, () => {
+          try {
+            const c = socket.getPeerCertificate(false);
+            if (!c || Object.keys(c).length === 0) return done(undefined);
+            const validTo = c.valid_to ? new Date(c.valid_to) : null;
+            const days = validTo ? Math.floor((validTo.getTime() - Date.now()) / 86_400_000) : null;
+            const cn = c.subject?.CN ?? null;
+            const alt = (c.subjectaltname ?? "").split(/,\s*/).map((s: string) => s.replace(/^DNS:/, "").trim()).filter(Boolean);
+            const host = u.hostname.toLowerCase();
+            const match = (n: string) => n.startsWith("*.")
+              ? host.endsWith(n.slice(1).toLowerCase()) && host.split(".").length === n.split(".").length
+              : n.toLowerCase() === host;
+            const hostnameMatch = (cn && match(cn)) || alt.some(match) || null;
+            done({
+              issuer: c.issuer?.O ?? c.issuer?.CN ?? null,
+              subject: cn,
+              validFrom: c.valid_from ?? null,
+              validTo: c.valid_to ?? null,
+              daysUntilExpiry: days,
+              hostnameMatch,
+            });
+          } catch { done(undefined); }
+        });
+        socket.on("error", () => done(undefined));
+        socket.on("timeout", () => done(undefined));
+      });
+    }
+  } catch { /* tls not available — leave cert undefined */ }
+
+  const ok = !fetchErr && httpsStatus >= 200 && httpsStatus < 500
+    && (cert?.hostnameMatch !== false)
+    && (cert?.daysUntilExpiry == null || cert.daysUntilExpiry > 0);
+  return { url, ok, httpsStatus, handshakeMs, ...(fetchErr ? { error: fetchErr } : {}), ...(cert ? { cert } : {}) };
+}
 
 type AttemptOutcome = { ok: boolean; detail: string; debug: StepDebug | null; result: unknown };
 
