@@ -99,6 +99,7 @@ function LogsExplorer() {
   );
   const clearAll = useCallback(() => {
     void navigate({
+      to: ".",
       search: () => ({
         source: "", level: "", q: "", environment: "", resource: "", route: "",
         request_path: "", status_code: "", request_type: "", host: "", service: "",
