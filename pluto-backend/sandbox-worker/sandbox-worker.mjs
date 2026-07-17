@@ -1105,9 +1105,7 @@ async function rotateSlugSecret(slug, opts = {}) {
   if (!SLUG_RE.test(s)) throw new Error("invalid_slug");
   await fsp.mkdir(SLUG_SECRETS_DIR, { recursive: true, mode: 0o700 });
   const prev = await readSlugSecretRecord(s);
-  const bytes = new Uint8Array(32);
-  (globalThis.crypto ?? require("node:crypto").webcrypto).getRandomValues(bytes);
-  const secret = Buffer.from(bytes).toString("hex");
+  const secret = randomBytes(32).toString("hex");
   const now = new Date().toISOString();
   const record = {
     slug: s,
