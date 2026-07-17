@@ -1031,12 +1031,13 @@ export const deployAll = createServerFn({ method: "POST" })
       }
       const runtimeOk = h.ok;
       const invokeOk = inv.ok;
+      const siteOk = siteResult ? siteResult.status >= 200 && siteResult.status < 400 : false;
       const detail = [
         `runtime: ${runtimeOk ? `✓ HTTP ${h.status}` : `✗ HTTP ${h.status}`} (${h.text.slice(0, 120)})`,
         `bootstrap invoke: ${invokeOk ? `✓ HTTP ${inv.status}` : `✗ HTTP ${inv.status}`} (${inv.text.slice(0, 160)})`,
         siteLine,
       ].join(" | ");
-      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult, autoSource, autoDerivedCandidates, siteExplicitlyConfigured, strictServedSite: data.strictServedSite } };
+      return { ok: runtimeOk && (!data.strictServedSite || siteOk), detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult, autoSource, autoDerivedCandidates, siteExplicitlyConfigured, strictServedSite: data.strictServedSite } };
     });
     steps.push(healthStep);
 
