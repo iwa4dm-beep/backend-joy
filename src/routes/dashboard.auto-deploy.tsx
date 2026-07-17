@@ -29,6 +29,8 @@ import { BuildLogsPanel } from "@/components/auto-deploy/BuildLogsPanel";
 import { DeploymentSettingsPanel } from "@/components/auto-deploy/DeploymentSettingsPanel";
 import { RecommendationsPanel } from "@/components/auto-deploy/RecommendationsPanel";
 import { CustomDomainsPanel } from "@/components/auto-deploy/CustomDomainsPanel";
+import { OneClickFixPanel } from "@/components/auto-deploy/OneClickFixPanel";
+import { MigrationErrorCard, parseMigrationError } from "@/components/auto-deploy/MigrationErrorCard";
 import { loadDeploymentSettings } from "@/lib/pluto/deployment-settings";
 import { getUpstream } from "@/lib/pluto/upstream";
 
