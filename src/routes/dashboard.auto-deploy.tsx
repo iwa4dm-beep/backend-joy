@@ -166,6 +166,7 @@ function AutoDeployInner() {
   const workspaceId = active?.id ?? "";
   const approverEmail = session?.user?.email ?? "operator";
   const deploy = useServerFn(deployAll);
+  const diagnoseServedSiteFn = useServerFn(diagnoseServedSite);
 
   // Source form
   const [source, setSource] = useState<SourceKind>("github");
@@ -193,6 +194,8 @@ function AutoDeployInner() {
   const [showHistory, setShowHistory] = useState(false);
   const [preflight, setPreflight] = useState<UpstreamPreflight | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
+  const [servedDiagnostics, setServedDiagnostics] = useState<ServedSiteDiagnostics | null>(null);
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const pingUpstreamFn = useServerFn(pingUpstream);
 
   // Served-site probe config (persisted in localStorage). Overrides the
@@ -267,10 +270,28 @@ function AutoDeployInner() {
   const resetAll = () => {
     setPhase("source"); setAnalyze(null); setPlan(null); setLogs([]);
     setDeployResult(null); setErrorMsg(null); setExpanded({});
-    setPending(null); setHealth(null);
+    setPending(null); setHealth(null); setServedDiagnostics(null);
     setStreamEvents([]); setRunningStepIdx(-1);
     if (streamTimerRef.current) { clearInterval(streamTimerRef.current); streamTimerRef.current = null; }
   };
+
+  const runServedDiagnostics = useCallback(async () => {
+    if (!workspaceId || !slug) {
+      toast.error("Workspace/slug missing — deploy বা prepare আগে চালান");
+      return;
+    }
+    setDiagnosticsBusy(true);
+    try {
+      const r = await diagnoseServedSiteFn({ data: { workspaceId, slug } });
+      setServedDiagnostics(r);
+      if (r.ok) toast.success("Served-site mapping OK");
+      else toast.warning(r.hint ?? "Served-site mapping issue found");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Diagnostics failed");
+    } finally {
+      setDiagnosticsBusy(false);
+    }
+  }, [diagnoseServedSiteFn, workspaceId, slug]);
 
   const acquireFile = async (): Promise<{ file: File; sourceRef: string }> => {
     if (source === "zip") {
@@ -959,7 +980,14 @@ function AutoDeployInner() {
       )}
 
       {/* Health check panel */}
-      {health && <HealthCheckPanel health={health} />}
+      {health && (
+        <HealthCheckPanel
+          health={health}
+          diagnostics={servedDiagnostics}
+          diagnosticsBusy={diagnosticsBusy}
+          onRunDiagnostics={runServedDiagnostics}
+        />
+      )}
 
       {/* Per-step deploy result */}
       {deployResult && (
