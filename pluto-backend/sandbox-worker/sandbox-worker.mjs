@@ -23,6 +23,8 @@
 // Requires system `unzip` (apt install unzip). No npm dependencies.
 
 import http from "node:http";
+import https from "node:https";
+import tls from "node:tls";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +37,9 @@ const SITES_ROOT = process.env.SITES_ROOT ?? process.env.SANDBOX_SITES_ROOT ?? "
 const UPSTREAM = (process.env.PLUTO_UPSTREAM_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SERVICE_KEY = process.env.PLUTO_SERVICE_ROLE_KEY ?? "";
 const LAST_DEPLOY_FILE = path.join(SITES_ROOT, ".last-deploy.json");
+const DEFAULT_BASE_DOMAIN = process.env.PLUTO_WILDCARD_HOST || process.env.BASE_DOMAIN || "app.timescard.cloud";
+const NGINX_SITES_ENABLED = process.env.NGINX_SITES_ENABLED || "/etc/nginx/sites-enabled";
+const NGINX_SITES_AVAILABLE = process.env.NGINX_SITES_AVAILABLE || "/etc/nginx/sites-available";
 
 if (!SECRET) { console.error("SANDBOX_SHARED_SECRET is required"); process.exit(1); }
 if (!SERVICE_KEY) console.warn("PLUTO_SERVICE_ROLE_KEY is not set; POST /unpack will fail until it is configured");
@@ -72,6 +77,11 @@ async function readJson(req) {
 
 function safeSlug(s) {
   return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
+}
+
+function safeDomain(s) {
+  const out = String(s || "").trim().toLowerCase().replace(/^\*\./, "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  return /^[a-z0-9.-]{3,253}$/.test(out) && !out.includes("..") ? out : DEFAULT_BASE_DOMAIN;
 }
 
 function normalizeSlug(s) {
@@ -742,6 +752,156 @@ async function siteStatus(slug) {
   }
 }
 
+async function readTextFile(file) {
+  try { return await fsp.readFile(file, "utf-8"); }
+  catch { return ""; }
+}
+
+async function scanNginxDir(dir, baseDomain) {
+  const hosts = new Set();
+  let wildcard = false;
+  try {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const file = path.join(dir, entry.name);
+      const text = await readTextFile(file);
+      if (!text) continue;
+      if (text.includes(baseDomain) && (/proxy_pass\s+http:\/\/127\.0\.0\.1:8787\/sites\//.test(text) || /server_name\s+~\^/.test(text))) {
+        wildcard = true;
+      }
+      const re = /server_name\s+([^;]+);/g;
+      let m;
+      while ((m = re.exec(text))) {
+        for (const raw of String(m[1] || "").split(/\s+/)) {
+          const host = raw.trim().replace(/^\*\./, "").replace(/[;{}]/g, "").toLowerCase();
+          if (!host || host === "_" || host.startsWith("~")) continue;
+          if (host === baseDomain || host.endsWith(`.${baseDomain}`)) hosts.add(host);
+        }
+      }
+    }
+  } catch { /* nginx dir absent */ }
+  return { hosts, wildcard };
+}
+
+async function localProbe(protocol, host) {
+  const started = Date.now();
+  const isHttps = protocol === "https";
+  const mod = isHttps ? https : http;
+  return await new Promise((resolve) => {
+    const req = mod.request({
+      hostname: "127.0.0.1",
+      port: isHttps ? 443 : 80,
+      path: "/",
+      method: "GET",
+      servername: host,
+      rejectUnauthorized: false,
+      headers: { host, accept: "text/html,*/*" },
+      timeout: 8_000,
+    }, (r) => {
+      r.resume();
+      r.on("end", () => resolve({ status: r.statusCode || 0, latencyMs: Date.now() - started }));
+    });
+    req.on("timeout", () => { req.destroy(); resolve({ status: 0, latencyMs: Date.now() - started, error: "timeout" }); });
+    req.on("error", (e) => resolve({ status: 0, latencyMs: Date.now() - started, error: e?.message ?? String(e) }));
+    req.end();
+  });
+}
+
+function certNameMatches(host, name) {
+  const h = String(host || "").toLowerCase();
+  const n = String(name || "").toLowerCase();
+  if (!h || !n) return false;
+  if (n.startsWith("*.")) return h.endsWith(n.slice(1)) && h.split(".").length === n.split(".").length;
+  return h === n;
+}
+
+async function inspectLocalSsl(host) {
+  return await new Promise((resolve) => {
+    const socket = tls.connect({ host: "127.0.0.1", port: 443, servername: host, rejectUnauthorized: false, timeout: 8_000 }, () => {
+      try {
+        const c = socket.getPeerCertificate(false);
+        if (!c || Object.keys(c).length === 0) {
+          socket.destroy();
+          return resolve({ valid: false, cn: null, expiry: null, daysLeft: null, hostnameMatch: false, warning: "no_certificate" });
+        }
+        const validTo = c.valid_to ? new Date(c.valid_to) : null;
+        const daysLeft = validTo ? Math.floor((validTo.getTime() - Date.now()) / 86_400_000) : null;
+        const cn = typeof c.subject?.CN === "string" ? c.subject.CN : (Array.isArray(c.subject?.CN) ? String(c.subject.CN[0]) : null);
+        const sans = String(c.subjectaltname || "").split(/,\s*/).map((s) => s.replace(/^DNS:/, "").trim()).filter(Boolean);
+        const hostnameMatch = Boolean((cn && certNameMatches(host, cn)) || sans.some((n) => certNameMatches(host, n)));
+        const valid = Boolean(daysLeft != null && daysLeft >= 0 && hostnameMatch);
+        socket.destroy();
+        resolve({ valid, cn, expiry: c.valid_to || null, daysLeft, hostnameMatch, warning: daysLeft != null && daysLeft <= 30 ? "expires_soon" : null });
+      } catch (e) {
+        socket.destroy();
+        resolve({ valid: false, cn: null, expiry: null, daysLeft: null, hostnameMatch: false, warning: e?.message ?? "inspect_failed" });
+      }
+    });
+    socket.on("error", (e) => resolve({ valid: false, cn: null, expiry: null, daysLeft: null, hostnameMatch: false, warning: e?.message ?? "tls_error" }));
+    socket.on("timeout", () => { socket.destroy(); resolve({ valid: false, cn: null, expiry: null, daysLeft: null, hostnameMatch: false, warning: "timeout" }); });
+  });
+}
+
+async function listActiveSubdomains(baseDomainInput = DEFAULT_BASE_DOMAIN) {
+  const baseDomain = safeDomain(baseDomainInput);
+  const enabled = await scanNginxDir(NGINX_SITES_ENABLED, baseDomain);
+  const available = await scanNginxDir(NGINX_SITES_AVAILABLE, baseDomain);
+  const hosts = new Set([...enabled.hosts, ...available.hosts]);
+  try {
+    const entries = await fsp.readdir(SITES_ROOT, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const slug = e.name.toLowerCase();
+      if (SLUG_RE.test(slug)) hosts.add(`${slug}.${baseDomain}`);
+    }
+  } catch { /* sites root absent */ }
+
+  const rows = [];
+  for (const host of [...hosts].sort()) {
+    const suffix = `.${baseDomain}`;
+    const rawSlug = host.endsWith(suffix) ? host.slice(0, -suffix.length) : host;
+    const slug = rawSlug.endsWith("-dev") ? rawSlug.slice(0, -4) : rawSlug;
+    const status = SLUG_RE.test(slug) ? await siteStatus(slug) : { ok: false, ready: false, error: "invalid_slug" };
+    const httpProbe = await localProbe("http", host);
+    const httpsProbe = await localProbe("https", host);
+    const ssl = await inspectLocalSsl(host);
+    const nginxEnabled = enabled.hosts.has(host) || enabled.wildcard;
+    const nginxAvailable = available.hosts.has(host) || available.wildcard;
+    const issues = [];
+    if (!nginxEnabled) issues.push("nginx_not_enabled");
+    if (!status.ready) issues.push(status.error || "site_not_ready");
+    if (!ssl.valid) issues.push("ssl_invalid");
+    if (ssl.daysLeft != null && ssl.daysLeft <= 30) issues.push("ssl_expiring_soon");
+    rows.push({
+      host,
+      slug,
+      url: `https://${host}/`,
+      nginx: { enabled: nginxEnabled, available: nginxAvailable, wildcardEnabled: enabled.wildcard, wildcardAvailable: available.wildcard },
+      worker: { ok: Boolean(status.ok), ready: Boolean(status.ready), channel: status.channel || null, servedAt: status.servedAt || null, error: status.error || null },
+      http: httpProbe,
+      https: httpsProbe,
+      ssl,
+      issues,
+      ok: nginxEnabled && Boolean(status.ready) && ssl.valid && httpsProbe.status >= 200 && httpsProbe.status < 500,
+    });
+  }
+  const expiringSoon = rows.filter((r) => r.ssl?.daysLeft != null && r.ssl.daysLeft <= 30).length;
+  return {
+    ok: rows.every((r) => r.ok),
+    baseDomain,
+    checkedAt: new Date().toISOString(),
+    count: rows.length,
+    summary: {
+      ready: rows.filter((r) => r.ok).length,
+      nginxEnabled: rows.filter((r) => r.nginx.enabled).length,
+      sslValid: rows.filter((r) => r.ssl.valid).length,
+      expiringSoon,
+      broken: rows.filter((r) => !r.ok).length,
+    },
+    subdomains: rows,
+  };
+}
+
 async function pathExists(p, kind = "any") {
   try {
     const st = await fsp.lstat(p);
@@ -926,6 +1086,8 @@ const server = http.createServer(async (req, res) => {
           request_body_service_key: true,
           storage_workspace_header_preserves_uuid: true,
           served_site_diagnostics: true,
+          active_subdomains_api: true,
+          ssl_expiry_precheck: true,
         },
         uptimeSec: Math.round(process.uptime()),
         sitesRoot: SITES_ROOT,
@@ -981,6 +1143,14 @@ const server = http.createServer(async (req, res) => {
       const slug = normalizeSlug(q.get("slug"));
       const workspaceId = q.get("workspaceId") ? safeSlug(q.get("workspaceId")) : "";
       return json(res, 200, await sandboxHealth({ slug, workspaceId }));
+    }
+
+    // Authenticated JSON API for dashboards/automation:
+    // GET /admin/subdomains?baseDomain=app.timescard.cloud
+    // Returns active subdomains, nginx enable state, local HTTP/HTTPS probes,
+    // and SSL validity with a 30-day expiring-soon summary.
+    if (req.method === "GET" && (p === "/admin/subdomains" || p === "/sandbox/admin/subdomains")) {
+      return json(res, 200, await listActiveSubdomains(q.get("baseDomain") || DEFAULT_BASE_DOMAIN));
     }
 
 

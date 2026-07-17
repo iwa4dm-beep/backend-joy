@@ -21,6 +21,7 @@ NGINX_SITES_ENABLED="${NGINX_SITES_ENABLED:-/etc/nginx/sites-enabled}"
 NGINX_SITES_AVAILABLE="${NGINX_SITES_AVAILABLE:-/etc/nginx/sites-available}"
 WORKER_SITES_ROOT="${WORKER_SITES_ROOT:-/var/lib/pluto/sites}"
 OUTPUT_JSON=0
+SSL_WARN_DAYS="${SSL_WARN_DAYS:-30}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,6 +38,14 @@ C_R=$'\e[31m'; C_G=$'\e[32m'; C_Y=$'\e[33m'; C_B=$'\e[36m'; C_0=$'\e[0m'
 [[ -t 1 ]] || { C_R=""; C_G=""; C_Y=""; C_B=""; C_0=""; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+TOTAL=0
+READY=0
+NGINX_OK=0
+SSL_OK=0
+SSL_EXPIRING=0
+SSL_BAD=0
+BROKEN=0
 
 # ---------- subdomain হোস্টগুলো সংগ্রহ ---------------
 declare -A HOSTS=()
@@ -82,6 +91,7 @@ check_host() {
   local ng_avail="no" ng_enabled="no" ng_test="?"
   local http_code="000" https_code="000"
   local ssl_valid="no" ssl_cn="-" ssl_expiry="-" ssl_days="-"
+  local ssl_expiring_soon="no" ready="no"
   local slug_dir="no"
 
   # nginx presence
@@ -120,29 +130,45 @@ check_host() {
         if [[ "$end_ts" -gt "$now_ts" ]]; then
           ssl_valid="yes"
           ssl_days=$(( (end_ts - now_ts) / 86400 ))
+          if [[ "$ssl_days" =~ ^[0-9]+$ && "$ssl_days" -le "$SSL_WARN_DAYS" ]]; then
+            ssl_expiring_soon="yes"
+          fi
         fi
       fi
     fi
   fi
 
+  if [[ "$ng_enabled" == "yes" && "$ssl_valid" == "yes" && "$ssl_expiring_soon" == "no" && "$https_code" =~ ^[23] && "$slug_dir" == "yes" ]]; then
+    ready="yes"
+  fi
+
+  if [[ "$OUTPUT_JSON" != "1" ]]; then
+    TOTAL=$((TOTAL + 1))
+    [[ "$ready" == "yes" ]] && READY=$((READY + 1)) || BROKEN=$((BROKEN + 1))
+    [[ "$ng_enabled" == "yes" ]] && NGINX_OK=$((NGINX_OK + 1))
+    [[ "$ssl_valid" == "yes" ]] && SSL_OK=$((SSL_OK + 1)) || SSL_BAD=$((SSL_BAD + 1))
+    [[ "$ssl_expiring_soon" == "yes" ]] && SSL_EXPIRING=$((SSL_EXPIRING + 1))
+  fi
+
   if [[ "$OUTPUT_JSON" == "1" ]]; then
-    printf '{"host":"%s","nginx_enabled":"%s","nginx_available":"%s","slug_dir":"%s","http":"%s","https":"%s","ssl_valid":"%s","ssl_cn":"%s","ssl_expiry":"%s","ssl_days_left":"%s"}\n' \
-      "$host" "$ng_enabled" "$ng_avail" "$slug_dir" "$http_code" "$https_code" "$ssl_valid" "$ssl_cn" "$ssl_expiry" "$ssl_days"
+    printf '{"host":"%s","nginx_enabled":"%s","nginx_available":"%s","slug_dir":"%s","http":"%s","https":"%s","ssl_valid":"%s","ssl_expiring_soon":"%s","ssl_cn":"%s","ssl_expiry":"%s","ssl_days_left":"%s","ready":"%s"}\n' \
+      "$host" "$ng_enabled" "$ng_avail" "$slug_dir" "$http_code" "$https_code" "$ssl_valid" "$ssl_expiring_soon" "$ssl_cn" "$ssl_expiry" "$ssl_days" "$ready"
     return
   fi
 
   local ssl_color="$C_R"; [[ "$ssl_valid" == "yes" ]] && ssl_color="$C_G"
   local https_color="$C_R"; [[ "$https_code" =~ ^2|^3 ]] && https_color="$C_G"
   local ng_color="$C_R"; [[ "$ng_enabled" == "yes" ]] && ng_color="$C_G"
+  local exp_note=""; [[ "$ssl_expiring_soon" == "yes" ]] && exp_note=" ${C_Y}EXPIRING≤${SSL_WARN_DAYS}d${C_0}"
 
-  printf "%b%-45s%b  nginx=%b%-3s%b  http=%-3s  https=%b%-3s%b  ssl=%b%-3s%b (%s, %s days)  slug=%s\n" \
+  printf "%b%-45s%b  nginx=%b%-3s%b  http=%-3s  https=%b%-3s%b  ssl=%b%-3s%b (%s, %s days)%b  slug=%s  ready=%s\n" \
     "$C_B" "$host" "$C_0" \
     "$ng_color" "$ng_enabled" "$C_0" \
     "$http_code" \
     "$https_color" "$https_code" "$C_0" \
     "$ssl_color" "$ssl_valid" "$C_0" \
-    "$ssl_cn" "$ssl_days" \
-    "$slug_dir"
+    "$ssl_cn" "$ssl_days" "$exp_note" \
+    "$slug_dir" "$ready"
 }
 
 if [[ "$OUTPUT_JSON" == "1" ]]; then
@@ -162,5 +188,14 @@ else
     check_host "$h"
   done
   echo
-  echo "Legend: nginx=sites-enabled আছে কি না · http/https=লোকাল probe status · ssl=লোকাল cert valid + বাকি দিন · slug=/var/lib/pluto/sites/<slug> আছে কি না"
+  echo "${C_B}== SSL pre-check summary (warning threshold: ${SSL_WARN_DAYS} days) ==${C_0}"
+  printf "%-18s %6s\n" "Total" "$TOTAL"
+  printf "%-18s %6s\n" "Ready" "$READY"
+  printf "%-18s %6s\n" "Nginx enabled" "$NGINX_OK"
+  printf "%-18s %6s\n" "SSL valid" "$SSL_OK"
+  printf "%-18s %6s\n" "SSL expiring soon" "$SSL_EXPIRING"
+  printf "%-18s %6s\n" "SSL invalid" "$SSL_BAD"
+  printf "%-18s %6s\n" "Needs attention" "$BROKEN"
+  echo
+  echo "Legend: nginx=sites-enabled আছে কি না · http/https=লোকাল probe status · ssl=লোকাল cert valid + বাকি দিন · EXPIRING≤${SSL_WARN_DAYS}d=৩০ দিনের মধ্যে expire · slug=/var/lib/pluto/sites/<slug> আছে কি না"
 fi

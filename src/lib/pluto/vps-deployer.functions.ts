@@ -465,10 +465,10 @@ const DeployAllInput = z.object({
   // Use `{slug}` in the template (e.g. "https://api.timescard.cloud/sites/{slug}").
   servedSiteUrl: z.string().url().optional(),
   servedSiteUrlTemplate: z.string().min(1).max(255).optional(),
-  // When true, a failing served-site probe fails the whole health check.
-  // When false (default), it is reported as a warning — bundle unpack still
+  // When true (default), a failing served-site probe fails the whole health check.
+  // When false, it is reported as a warning — bundle unpack still
   // succeeded, and the 404 is downstream nginx / DNS / slug-symlink config.
-  strictServedSite: z.boolean().default(false),
+  strictServedSite: z.boolean().default(true),
 });
 
 
@@ -476,7 +476,7 @@ const DeployAllInput = z.object({
 export type DeployStepKey = "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check" | "verify-ssl";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
 export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
-export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number };
+export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number; healNote?: string | null };
 export type SslProbe = {
   url: string;
   ok: boolean;
@@ -757,10 +757,10 @@ export const deployAll = createServerFn({ method: "POST" })
     const unpackStep = await withRetry("unpack-serve", "Unpack bundle + serve (sandbox worker)", data.maxRetries, async () => {
       if (!sandboxUrl || !sandboxSecret) {
         return {
-          ok: true,
-          detail: "skipped — PLUTO_SANDBOX_URL / PLUTO_SANDBOX_SECRET not configured. Install pluto-backend/sandbox-worker on the VPS to enable auto-serve.",
+          ok: !data.strictServedSite,
+          detail: "blocked — PLUTO_SANDBOX_URL / PLUTO_SANDBOX_SECRET not configured. Install pluto-backend/sandbox-worker on the VPS to enable auto-serve before going live.",
           debug: null,
-          result: { skipped: true },
+          result: { skipped: true, strictServedSite: data.strictServedSite },
         };
       }
 
@@ -855,10 +855,10 @@ export const deployAll = createServerFn({ method: "POST" })
         // pipeline for that — treat it as skipped with a clear operator hint.
         if (wrongServiceAll) {
           return {
-            ok: true,
-            detail: `skipped — sandbox worker at ${sandboxBaseForUnpack} does not expose an /unpack endpoint (tried: ${triedList}). Upgrade sandbox-worker.mjs to include POST /unpack, or set PLUTO_SANDBOX_URL to the correct base (e.g. https://api.timescard.cloud/sandbox).`,
+            ok: !data.strictServedSite,
+            detail: `blocked — sandbox worker at ${sandboxBaseForUnpack} does not expose an /unpack endpoint (tried: ${triedList}). Upgrade sandbox-worker.mjs to include POST /unpack, or set PLUTO_SANDBOX_URL to the correct base (e.g. https://api.timescard.cloud/sandbox).`,
             debug: r?.debug ?? null,
-            result: { skipped: true, reason: "no-unpack-endpoint", tried: triedList },
+            result: { skipped: true, reason: "no-unpack-endpoint", tried: triedList, strictServedSite: data.strictServedSite },
           };
         }
         // 401 = secret mismatch between Lovable Cloud PLUTO_SANDBOX_SECRET and
@@ -997,7 +997,7 @@ export const deployAll = createServerFn({ method: "POST" })
       // Resolve the site URL: explicit env → worker webRoot → auto-derived probe.
       let effectiveSite = servedSiteUrl || servedSiteFromWorker.url || "";
       let autoSource: "env" | "worker" | "auto-derived" | "none" = servedSiteUrl ? "env" : (servedSiteFromWorker.url ? "worker" : "none");
-      let siteResult: { status: number; url: string; snippet: string } | null = null;
+      let siteResult: { status: number; url: string; snippet: string; healNote?: string | null } | null = null;
 
       if (!effectiveSite) {
         for (const candidate of autoDerivedCandidates) {
@@ -1008,20 +1008,36 @@ export const deployAll = createServerFn({ method: "POST" })
 
       let siteLine = "served site: (auto-detect failed — set PLUTO_SERVED_SITE_URL or install sandbox worker with /sites/<slug>/ vhost)";
       if (effectiveSite) {
-        const s = await rawFetch(`${effectiveSite}/`, "GET", { accept: "text/html" }, null, null, 15_000);
-        siteResult = { status: s.status, url: `${effectiveSite}/`, snippet: s.text.slice(0, 240) };
+        const probeUrl = `${effectiveSite}/`;
+        let s = await rawFetch(probeUrl, "GET", { accept: "text/html" }, null, null, 15_000);
+        let healNote: string | null = null;
+        if (!s.ok && (s.status === 404 || s.status === 0) && sandboxSecret) {
+          const statusUrl = `${base}/site-status/${encodeURIComponent(deploySlug)}?autoseed=1`;
+          const seed = await rawFetch(statusUrl, "GET", { accept: "application/json", "x-pluto-auto-seed": "1" }, null, null, 20_000);
+          healNote = seed.ok ? "auto-seed checked" : `auto-seed HTTP ${seed.status}`;
+          s = await rawFetch(probeUrl, "GET", { accept: "text/html" }, null, null, 15_000);
+          if (!s.ok) {
+            const repairBody = JSON.stringify({ action: "worker-and-site", slug: deploySlug });
+            const repair = await rawFetch(`${sandboxUrl}/admin/repair`, "POST", { "content-type": "application/json", "x-sandbox-secret": sandboxSecret, accept: "application/json" }, repairBody, repairBody, 180_000);
+            healNote = `${healNote}; worker/nginx repair HTTP ${repair.status}`;
+            s = await rawFetch(probeUrl, "GET", { accept: "text/html" }, null, null, 15_000);
+          }
+        }
+        siteResult = { status: s.status, url: probeUrl, snippet: s.text.slice(0, 240), ...(healNote ? { healNote } : {}) };
         siteLine = `served site (${autoSource}): ${s.ok ? `✓ HTTP ${s.status}` : `✗ HTTP ${s.status}`} @ ${effectiveSite}`;
+        if (healNote) siteLine += ` · heal=${healNote}`;
         // Cache the auto-derived URL for the resolvedSite block below.
         if (autoSource === "auto-derived") servedSiteFromWorker.url = servedSiteFromWorker.url ?? effectiveSite;
       }
       const runtimeOk = h.ok;
       const invokeOk = inv.ok;
+      const siteOk = siteResult ? siteResult.status >= 200 && siteResult.status < 400 : false;
       const detail = [
         `runtime: ${runtimeOk ? `✓ HTTP ${h.status}` : `✗ HTTP ${h.status}`} (${h.text.slice(0, 120)})`,
         `bootstrap invoke: ${invokeOk ? `✓ HTTP ${inv.status}` : `✗ HTTP ${inv.status}`} (${inv.text.slice(0, 160)})`,
         siteLine,
       ].join(" | ");
-      return { ok: runtimeOk, detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult, autoSource, autoDerivedCandidates, siteExplicitlyConfigured, strictServedSite: data.strictServedSite } };
+      return { ok: runtimeOk && (!data.strictServedSite || siteOk), detail, debug: h.debug, result: { runtime: { status: h.status, body: h.text.slice(0, 400) }, invoke: { status: inv.status, body: inv.text.slice(0, 400) }, site: siteResult, autoSource, autoDerivedCandidates, siteExplicitlyConfigured, strictServedSite: data.strictServedSite } };
     });
     steps.push(healthStep);
 
@@ -1034,7 +1050,20 @@ export const deployAll = createServerFn({ method: "POST" })
     let servedHint: string | undefined;
     if (resolvedSite) {
       const probeUrl = resolvedSite.endsWith("/") ? resolvedSite : `${resolvedSite}/`;
-      const p = await rawFetch(probeUrl, "GET", { accept: "text/html,*/*" }, null, null, 12_000);
+      let p = await rawFetch(probeUrl, "GET", { accept: "text/html,*/*" }, null, null, 12_000);
+      let healNote: string | null = null;
+      if (!p.ok && (p.status === 404 || p.status === 0) && sandboxSecret) {
+        const statusUrl = `${base}/site-status/${encodeURIComponent(deploySlug)}?autoseed=1`;
+        const seed = await rawFetch(statusUrl, "GET", { accept: "application/json", "x-pluto-auto-seed": "1" }, null, null, 20_000);
+        healNote = seed.ok ? "auto-seed checked" : `auto-seed HTTP ${seed.status}`;
+        p = await rawFetch(probeUrl, "GET", { accept: "text/html,*/*" }, null, null, 12_000);
+        if (!p.ok) {
+          const repairBody = JSON.stringify({ action: "worker-and-site", slug: deploySlug });
+          const repair = await rawFetch(`${sandboxUrl}/admin/repair`, "POST", { "content-type": "application/json", "x-sandbox-secret": sandboxSecret, accept: "application/json" }, repairBody, repairBody, 180_000);
+          healNote = `${healNote}; worker/nginx repair HTTP ${repair.status}`;
+          p = await rawFetch(probeUrl, "GET", { accept: "text/html,*/*" }, null, null, 12_000);
+        }
+      }
       const looksHtml = /<!DOCTYPE|<html/i.test(p.text);
       servedSiteProbe = {
         url: probeUrl,
@@ -1043,10 +1072,11 @@ export const deployAll = createServerFn({ method: "POST" })
         contentType: looksHtml ? "text/html" : null,
         snippet: p.text.slice(0, 240),
         latencyMs: p.debug.latencyMs,
+        healNote,
       };
       served = p.ok;
       if (!p.ok) {
-        servedHint = `Bundle uploaded, but ${probeUrl} returned HTTP ${p.status}. The hostname is not yet wired to nginx / a vhost, or the sandbox worker did not unpack the release. Configure PLUTO_SERVED_SITE_URL or install a sandbox worker with a working /unpack endpoint that serves /sites/<slug>/.`;
+        servedHint = `Bundle uploaded, but ${probeUrl} returned HTTP ${p.status} after auto-heal${healNote ? ` (${healNote})` : ""}. The hostname is not wired to nginx / wildcard SSL, or the sandbox worker did not unpack the release. Run One-click Fix or on VPS: sudo SLUG='${deploySlug}' bash deploy/repair-sandbox-worker-and-site.sh.`;
       }
     } else {
       servedHint = `Auto-detect could not find a reachable served site. Tried: ${autoDerivedCandidates.join(", ")}. To fix permanently, choose one: (a) set PLUTO_SERVED_SITE_URL_TEMPLATE (e.g. "https://{slug}.app.timescard.cloud" or "https://api.timescard.cloud/sites/{slug}/") so the URL is auto-computed per deploy; (b) set PLUTO_SERVED_SITE_URL to a static origin; or (c) install pluto-backend/sandbox-worker on the VPS — it now exposes GET /sites/<slug>/* which nginx can proxy at /sites/ or /sandbox/sites/.`;
@@ -1085,7 +1115,7 @@ export const deployAll = createServerFn({ method: "POST" })
       ...(servedHint ? { servedHint } : {}),
       ...(sslProbe ? { sslProbe } : {}),
     };
-    return { ok: steps.every(s => s.ok), workspaceId: data.workspaceId, totalMs: Date.now() - t0, steps, liveUrls };
+    return { ok: steps.every(s => s.ok) && (!data.strictServedSite || served), workspaceId: data.workspaceId, totalMs: Date.now() - t0, steps, liveUrls };
   });
 
 // ---------- Standalone post-deploy health check (for Result panel refresh) ----------

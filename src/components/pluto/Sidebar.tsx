@@ -27,6 +27,7 @@ const groups: Group[] = [
     items: [
       { to: "/dashboard", label: "Overview", icon: Gauge },
       { to: "/dashboard/vps-status", label: "VPS Status", icon: HeartPulse },
+      { to: "/dashboard/vps-subdomains", label: "VPS Subdomains", icon: Globe },
       { to: "/dashboard/deployment-history", label: "Deployment History", icon: ScrollText },
       { to: "/dashboard/deployment-compare", label: "Compare Deployments", icon: GitCompare },
       { to: "/dashboard/pluto-admin", label: "Pluto Admin", icon: Server },
