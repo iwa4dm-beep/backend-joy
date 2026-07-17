@@ -53,6 +53,19 @@ if [ -z "$UPSTREAM" ]; then
   fi
 fi
 
+# Reject placeholder / template values that would make sandbox/unpack fail
+# with "ERR_INVALID_URL" when the worker fetches storage.
+if echo "$UPSTREAM" | grep -qiE '<[^>]+>|<supabase-ref>|your-project|example\.com|placeholder'; then
+  echo "✗ UPSTREAM looks like a placeholder: $UPSTREAM"
+  echo "   Set it to your real Supabase URL, e.g.:"
+  echo "     UPSTREAM='https://abcd1234.supabase.co'"
+  exit 2
+fi
+if ! echo "$UPSTREAM" | grep -qE '^https?://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$'; then
+  echo "✗ UPSTREAM is not a valid http(s) URL: $UPSTREAM"
+  exit 2
+fi
+
 if [ -z "$UNIT" ]; then
   if $SUDO systemctl list-unit-files pluto-sandbox-worker.service >/dev/null 2>&1; then
     UNIT="pluto-sandbox-worker"
