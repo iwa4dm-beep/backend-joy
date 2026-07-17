@@ -8,6 +8,7 @@
 //      atomically flip the "current" symlink, and return the served path.
 //   3. GET /status/:workspaceId — report the currently-served bundle + timestamps.
 //   4. GET /healthz — process liveness.
+//   5. GET /sandbox/health (nginx strips to /health) — authenticated last-deploy status.
 //
 // Nginx (or Caddy) serves the "current" symlink for app.timescard.cloud, so
 // after a successful /unpack the new frontend goes live with zero downtime.
@@ -33,6 +34,7 @@ const SECRET = process.env.SANDBOX_SHARED_SECRET ?? "";
 const SITES_ROOT = process.env.SITES_ROOT ?? process.env.SANDBOX_SITES_ROOT ?? "/var/lib/pluto/sites";
 const UPSTREAM = (process.env.PLUTO_UPSTREAM_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 const SERVICE_KEY = process.env.PLUTO_SERVICE_ROLE_KEY ?? "";
+const LAST_DEPLOY_FILE = path.join(SITES_ROOT, ".last-deploy.json");
 
 if (!SECRET) { console.error("SANDBOX_SHARED_SECRET is required"); process.exit(1); }
 if (!SERVICE_KEY) console.warn("PLUTO_SERVICE_ROLE_KEY is not set; POST /unpack will fail until it is configured");
@@ -51,6 +53,16 @@ function json(res, status, body) {
   res.end(payload);
 }
 
+function requestPath(req) {
+  try { return new URL(req.url || "/", "http://127.0.0.1").pathname; }
+  catch { return req.url || "/"; }
+}
+
+function requestQuery(req) {
+  try { return new URL(req.url || "/", "http://127.0.0.1").searchParams; }
+  catch { return new URLSearchParams(); }
+}
+
 async function readJson(req) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
@@ -60,6 +72,157 @@ async function readJson(req) {
 
 function safeSlug(s) {
   return String(s).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128);
+}
+
+function normalizeSlug(s) {
+  const out = String(s || "").trim().toLowerCase();
+  return SLUG_RE.test(out) ? out : "";
+}
+
+function normalizeMigrations(input) {
+  if (input == null) return null;
+  if (typeof input === "number") return { ok: true, applied: input, count: input };
+  if (typeof input !== "object") return { ok: null, detail: String(input).slice(0, 800) };
+  const m = input;
+  const out = {
+    ok: typeof m.ok === "boolean" ? m.ok : null,
+    applied: typeof m.applied === "number" ? m.applied : null,
+    count: typeof m.count === "number" ? m.count : (typeof m.verifyCount === "number" ? m.verifyCount : null),
+    migrationId: typeof m.migrationId === "string" ? m.migrationId : null,
+    latest: m.latest && typeof m.latest === "object" ? m.latest : null,
+    idempotent: typeof m.idempotent === "boolean" ? m.idempotent : null,
+    verified: typeof m.verified === "boolean" ? m.verified : (typeof m.verifyOk === "boolean" ? m.verifyOk : null),
+    detail: typeof m.detail === "string" ? m.detail.slice(0, 800) : null,
+  };
+  return out;
+}
+
+async function readManifestFile(wsDir, name) {
+  try { return JSON.parse(await fsp.readFile(path.join(wsDir, name), "utf-8")); }
+  catch { return null; }
+}
+
+function deployStamp(record) {
+  const raw = record?.finishedAt ?? record?.servedAt ?? record?.publishedAt ?? record?.startedAt ?? record?.ts ?? null;
+  const t = raw ? Date.parse(raw) : 0;
+  return Number.isFinite(t) ? t : 0;
+}
+
+function recordMatches(record, filter) {
+  if (!record) return false;
+  if (filter?.workspaceId && String(record.workspaceId || "") !== filter.workspaceId) return false;
+  if (filter?.slug && String(record.slug || "") !== filter.slug) return false;
+  return true;
+}
+
+async function writeLastDeployStatus(record) {
+  const payload = {
+    schemaVersion: 1,
+    ts: new Date().toISOString(),
+    ...record,
+  };
+  await fsp.mkdir(SITES_ROOT, { recursive: true });
+  await fsp.writeFile(LAST_DEPLOY_FILE, JSON.stringify(payload, null, 2));
+}
+
+async function readLastDeployStatus(filter = {}) {
+  try {
+    const record = JSON.parse(await fsp.readFile(LAST_DEPLOY_FILE, "utf-8"));
+    return recordMatches(record, filter) ? record : null;
+  } catch {
+    return null;
+  }
+}
+
+async function latestSuccessfulDeploy(filter = {}) {
+  const candidates = [];
+  const addFromWorkspace = async (wsDir, workspaceId) => {
+    for (const file of ["current.json", "preview.json"]) {
+      const manifest = await readManifestFile(wsDir, file);
+      if (!manifest) continue;
+      const enriched = {
+        ok: true,
+        status: "succeeded",
+        phase: "served",
+        workspaceId: manifest.workspaceId || workspaceId,
+        slug: manifest.slug || null,
+        channel: manifest.channel || (file === "current.json" ? "production" : "preview"),
+        bucket: manifest.bucket || null,
+        key: manifest.key || null,
+        webRoot: manifest.webRoot || null,
+        releaseDir: manifest.releaseDir || null,
+        sizeBytes: manifest.sizeBytes ?? null,
+        envInjected: Boolean(manifest.envInjected),
+        unpack: { ok: true, servedAt: manifest.servedAt ?? null, durationMs: manifest.durationMs ?? null },
+        migrationsApplied: manifest.migrations ?? manifest.migrationStatus?.applied ?? null,
+        migrationStatus: manifest.migrationStatus ?? normalizeMigrations(manifest.migrations),
+        servedAt: manifest.servedAt ?? null,
+        finishedAt: manifest.servedAt ?? null,
+      };
+      if (recordMatches(enriched, filter)) candidates.push(enriched);
+    }
+  };
+
+  if (filter.slug) {
+    const r = await resolveSlug(filter.slug);
+    if (r.ok) await addFromWorkspace(path.join(SITES_ROOT, r.workspaceId), r.workspaceId);
+  } else if (filter.workspaceId) {
+    await addFromWorkspace(path.join(SITES_ROOT, filter.workspaceId), filter.workspaceId);
+  } else {
+    try {
+      const entries = await fsp.readdir(SITES_ROOT, { withFileTypes: true });
+      for (const e of entries) {
+        if (e.isDirectory() && !e.name.startsWith(".")) {
+          await addFromWorkspace(path.join(SITES_ROOT, e.name), e.name);
+        }
+      }
+    } catch { /* no sites root yet */ }
+  }
+
+  candidates.sort((a, b) => deployStamp(b) - deployStamp(a));
+  return candidates[0] ?? null;
+}
+
+async function sandboxHealth(filter = {}) {
+  const lastAttempt = await readLastDeployStatus(filter);
+  const lastSuccessful = await latestSuccessfulDeploy(filter);
+  const lastDeploy = [lastAttempt, lastSuccessful].filter(Boolean).sort((a, b) => deployStamp(b) - deployStamp(a))[0] ?? null;
+  let siteStatusResult = null;
+  const slug = filter.slug || normalizeSlug(lastDeploy?.slug);
+  if (slug) siteStatusResult = await siteStatus(slug);
+  return {
+    ok: true,
+    service: "pluto-sandbox-worker",
+    version: "v1-static-serve-2026-07-16",
+    auth: { ok: true, method: "x-sandbox-secret" },
+    filter: { slug: filter.slug || null, workspaceId: filter.workspaceId || null },
+    unpack: lastDeploy ? {
+      ok: lastDeploy.ok === true,
+      status: lastDeploy.status ?? (lastDeploy.ok ? "succeeded" : "unknown"),
+      phase: lastDeploy.phase ?? null,
+      workspaceId: lastDeploy.workspaceId ?? null,
+      slug: lastDeploy.slug ?? null,
+      channel: lastDeploy.channel ?? null,
+      bucket: lastDeploy.bucket ?? null,
+      key: lastDeploy.key ?? null,
+      sizeBytes: lastDeploy.sizeBytes ?? null,
+      startedAt: lastDeploy.startedAt ?? null,
+      finishedAt: lastDeploy.finishedAt ?? lastDeploy.servedAt ?? null,
+      durationMs: lastDeploy.durationMs ?? lastDeploy.unpack?.durationMs ?? null,
+      error: lastDeploy.error ?? null,
+    } : { ok: false, status: "missing", phase: null },
+    migrations: lastDeploy?.migrationStatus ?? normalizeMigrations(lastDeploy?.migrationsApplied ?? lastDeploy?.migrations) ?? null,
+    static: siteStatusResult ? {
+      ok: Boolean(siteStatusResult.staticServing || siteStatusResult.previewServing),
+      production: Boolean(siteStatusResult.staticServing),
+      preview: Boolean(siteStatusResult.previewServing),
+      ready: Boolean(siteStatusResult.ready),
+      servedAt: siteStatusResult.servedAt ?? null,
+    } : null,
+    lastDeploy,
+    lastSuccessfulDeploy: lastSuccessful,
+    ts: new Date().toISOString(),
+  };
 }
 
 async function fetchBundle(bucket, key) {
@@ -170,7 +333,7 @@ async function atomicSymlink(linkPath, targetRelPath) {
   await fsp.rename(tmp, linkPath);
 }
 
-async function unpack({ workspaceId, slug, bucket, key, env, channel }) {
+async function unpack({ workspaceId, slug, bucket, key, env, channel, migrations }) {
   const ws = safeSlug(workspaceId);
   if (!ws) throw new Error("invalid workspaceId");
   if (!bucket || !key) throw new Error("bucket and key are required");
@@ -223,6 +386,8 @@ async function unpack({ workspaceId, slug, bucket, key, env, channel }) {
     servedAt: new Date().toISOString(),
     sizeBytes: zipBytes.length,
     durationMs: Date.now() - started,
+    migrations: normalizeMigrations(migrations)?.applied ?? normalizeMigrations(migrations)?.count ?? null,
+    migrationStatus: normalizeMigrations(migrations),
   };
   // Per-channel manifest, plus a legacy `current.json` that mirrors the
   // last write (backward compat with earlier /status callers).
@@ -566,7 +731,9 @@ code{background:#1c2740;padding:.15rem .4rem;border-radius:4px}</style></head>
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === "GET" && req.url === "/healthz") {
+    const p = requestPath(req);
+    const q = requestQuery(req);
+    if (req.method === "GET" && p === "/healthz") {
       // Detailed liveness — safe to expose publicly (no secrets, no PII).
       let siteCount = 0; let slugCount = 0; let lastServedAt = null;
       try {
@@ -600,22 +767,21 @@ const server = http.createServer(async (req, res) => {
       });
     }
     // Public static routes — no shared secret, safe to expose behind nginx.
-    if (req.method === "GET" && req.url && req.url.startsWith("/sites/")) {
+    if (req.method === "GET" && p.startsWith("/sites/")) {
       return handleStatic(req, res, "/sites/", "current");
     }
-    if (req.method === "GET" && req.url && req.url.startsWith("/preview/")) {
+    if (req.method === "GET" && p.startsWith("/preview/")) {
       return handleStatic(req, res, "/preview/", "preview");
     }
     // Public readiness endpoint — no secret required.
-    if (req.method === "GET" && req.url && req.url.startsWith("/site-status/")) {
-      const [rawSlug, qs] = req.url.slice("/site-status/".length).split("?");
+    if (req.method === "GET" && p.startsWith("/site-status/")) {
+      const rawSlug = p.slice("/site-status/".length);
       const s = decodeURIComponent(rawSlug || "");
       let r = await siteStatus(s);
       // Auto-seed placeholder when a trusted probe asks for it. Prevents the
       // "verify-deploy → 404 → run seed-slug.sh by hand" loop.
       if (!r.ok && (r.error === "slug_not_found" || r.error === "slug_not_linked")) {
-        const params = new URLSearchParams(qs || "");
-        const wantsSeed = params.get("autoseed") === "1"
+        const wantsSeed = q.get("autoseed") === "1"
           || req.headers["x-pluto-auto-seed"] === "1";
         if (wantsSeed && SLUG_RE.test(String(s || "").toLowerCase())) {
           try {
@@ -633,15 +799,57 @@ const server = http.createServer(async (req, res) => {
 
     if (!checkSecret(req)) return json(res, 401, { error: "invalid or missing x-sandbox-secret" });
 
+    if (req.method === "GET" && (p === "/health" || p === "/sandbox/health")) {
+      const slug = normalizeSlug(q.get("slug"));
+      const workspaceId = q.get("workspaceId") ? safeSlug(q.get("workspaceId")) : "";
+      return json(res, 200, await sandboxHealth({ slug, workspaceId }));
+    }
 
 
-    if (req.method === "POST" && req.url === "/unpack") {
+    if (req.method === "POST" && p === "/unpack") {
       const body = await readJson(req);
-      const m = await unpack(body);
+      const startedAt = new Date().toISOString();
+      const recordBase = {
+        ok: false,
+        status: "running",
+        phase: "unpack",
+        startedAt,
+        workspaceId: safeSlug(body?.workspaceId || ""),
+        slug: normalizeSlug(body?.slug),
+        channel: VALID_CHANNELS.has(body?.channel) ? body.channel : "preview",
+        bucket: body?.bucket || null,
+        key: body?.key || null,
+        migrationStatus: normalizeMigrations(body?.migrations),
+      };
+      await writeLastDeployStatus(recordBase).catch(() => {});
+      let m;
+      try {
+        m = await unpack(body);
+        await writeLastDeployStatus({
+          ...recordBase,
+          ...m,
+          ok: true,
+          status: "succeeded",
+          phase: "served",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          migrationStatus: m.migrationStatus ?? recordBase.migrationStatus,
+        }).catch(() => {});
+      } catch (e) {
+        await writeLastDeployStatus({
+          ...recordBase,
+          ok: false,
+          status: "failed",
+          phase: "unpack",
+          finishedAt: new Date().toISOString(),
+          error: e?.message ?? String(e),
+        }).catch(() => {});
+        throw e;
+      }
       return json(res, 200, { ok: true, ...m });
     }
     // Authenticated placeholder seeder — dashboard "Heal" button calls this.
-    if (req.method === "POST" && req.url === "/admin/seed-slug") {
+    if (req.method === "POST" && p === "/admin/seed-slug") {
       const body = await readJson(req).catch(() => ({}));
       const slug = body?.slug;
       if (!slug || !SLUG_RE.test(String(slug).toLowerCase())) {
@@ -650,26 +858,26 @@ const server = http.createServer(async (req, res) => {
       const m = await seedPlaceholder(String(slug).toLowerCase());
       return json(res, 200, { ok: true, ...m });
     }
-    const statusMatch = req.method === "GET" && req.url && req.url.startsWith("/status/");
+    const statusMatch = req.method === "GET" && p.startsWith("/status/");
     if (statusMatch) {
-      const ws = decodeURIComponent(req.url.slice("/status/".length));
+      const ws = decodeURIComponent(p.slice("/status/".length));
       return json(res, 200, await status(ws));
     }
-    const resolveMatch = req.method === "GET" && req.url && req.url.startsWith("/resolve/");
+    const resolveMatch = req.method === "GET" && p.startsWith("/resolve/");
     if (resolveMatch) {
-      const s = decodeURIComponent(req.url.slice("/resolve/".length));
+      const s = decodeURIComponent(p.slice("/resolve/".length));
       return json(res, 200, await resolveSlug(s));
     }
-    if (req.method === "POST" && req.url === "/env") {
+    if (req.method === "POST" && p === "/env") {
       const body = await readJson(req);
       const r = await rotateEnv(body);
       return json(res, 200, r);
     }
-    if (req.method === "POST" && req.url === "/publish") {
+    if (req.method === "POST" && p === "/publish") {
       const r = await publish(await readJson(req));
       return json(res, 200, r);
     }
-    if (req.method === "POST" && req.url === "/unpublish") {
+    if (req.method === "POST" && p === "/unpublish") {
       const r = await unpublish(await readJson(req));
       return json(res, 200, r);
     }

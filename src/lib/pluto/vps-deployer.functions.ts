@@ -543,6 +543,21 @@ export const deployAll = createServerFn({ method: "POST" })
     });
     steps.push(verStep);
 
+    let migrationResult: { migrationId?: string; idempotent?: boolean } = {};
+    let verifyResult: { latest?: unknown; count?: number } = {};
+    try { migrationResult = migStep.result ? JSON.parse(migStep.result) : {}; } catch { /* keep empty */ }
+    try { verifyResult = verStep.result ? JSON.parse(verStep.result) : {}; } catch { /* keep empty */ }
+    const migrationStatus = {
+      ok: migStep.ok && verStep.ok,
+      applied: migStep.ok ? (migrationResult.idempotent ? 0 : 1) : 0,
+      migrationId: migrationResult.migrationId ?? null,
+      idempotent: Boolean(migrationResult.idempotent),
+      verified: verStep.ok,
+      count: typeof verifyResult.count === "number" ? verifyResult.count : null,
+      latest: verifyResult.latest ?? null,
+      detail: `${migStep.ok ? "migrations applied" : "migration apply failed"}; ${verStep.ok ? "history verified" : "history verify failed"}`,
+    };
+
     // Step 3.5: unpack + serve — call the sandbox-worker on the VPS to
     //           unpack the just-uploaded ZIP and flip the "current" symlink
     //           that nginx serves. Requires PLUTO_SANDBOX_URL + PLUTO_SANDBOX_SECRET.
@@ -562,7 +577,7 @@ export const deployAll = createServerFn({ method: "POST" })
           result: { skipped: true },
         };
       }
-      const body = JSON.stringify({ workspaceId: data.workspaceId, slug: deploySlug, bucket: data.bucket, key: cleanPath, channel: "production" });
+      const body = JSON.stringify({ workspaceId: data.workspaceId, slug: deploySlug, bucket: data.bucket, key: cleanPath, channel: "production", migrations: migrationStatus });
       // The sandbox worker is nginx-proxied under /sandbox/* on api.timescard.cloud.
       // Operators sometimes set PLUTO_SANDBOX_URL to the bare host, which routes
       // POST /unpack into the main app and returns "Only HTML requests are supported here".
@@ -617,7 +632,8 @@ export const deployAll = createServerFn({ method: "POST" })
             ok: false,
             detail:
               `unpack HTTP 401: sandbox secret mismatch. The VPS worker rejected our x-sandbox-secret.\n` +
-              `Fix: on the VPS run  →  sudo grep SANDBOX_SHARED_SECRET /etc/pluto/sandbox-worker.env\n` +
+              `Fix: from ~/backend-joy/pluto-backend run  →  sudo bash deploy/print-sandbox-secret.sh\n` +
+              `Or manually check the VPS value with  →  sudo grep SANDBOX_SHARED_SECRET /etc/pluto/sandbox-worker.env\n` +
               `Then set that exact value as the Lovable Cloud secret PLUTO_SANDBOX_SECRET (Cloud → Secrets).\n` +
               `If /etc/pluto/sandbox-worker.env has no SANDBOX_SHARED_SECRET, generate one:\n` +
               `  sudo bash -c "echo SANDBOX_SHARED_SECRET=$(openssl rand -hex 32) >> /etc/pluto/sandbox-worker.env && systemctl restart pluto-sandbox-worker"\n` +
