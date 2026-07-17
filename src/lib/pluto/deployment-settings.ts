@@ -51,6 +51,9 @@ export function loadDeploymentSettings(workspaceId: string): DeploymentSettings 
       Object.assign(merged, parsed);
     }
   } catch { /* ignore */ }
+  if (!merged.servedSiteUrlTemplate.trim()) {
+    merged.servedSiteUrlTemplate = DEFAULT_SETTINGS.servedSiteUrlTemplate;
+  }
   return merged;
 }
 
