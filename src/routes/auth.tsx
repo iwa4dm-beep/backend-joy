@@ -119,7 +119,7 @@ function AuthPage() {
                 />
               </div>
             )}
-            {error && <div className="text-xs text-destructive">{error}</div>}
+            <ErrorBanner error={error} onDismiss={() => setError(null)} className="mb-0" />
             <button
               type="submit"
               disabled={busy}
