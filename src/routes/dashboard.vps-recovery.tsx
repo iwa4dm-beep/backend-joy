@@ -112,6 +112,13 @@ function VpsRecoveryPage() {
         description="Wildcard mapping / SSL auto-recovery status, repair history, and per-subdomain secret rotation."
       />
 
+      <ErrorBanner error={history.error} onRetry={() => history.refetch()} />
+      <ErrorBanner error={status.error} onRetry={() => status.refetch()} />
+      <ErrorBanner error={repair.error} onDismiss={repair.reset} />
+      <ErrorBanner error={provision.error} onDismiss={provision.reset} />
+      <ErrorBanner error={rotate.error} onDismiss={rotate.reset} />
+      <ErrorBanner error={revoke.error} onDismiss={revoke.reset} />
+
       {/* Wildcard/SSL status via last repair actions */}
       <section className="grid gap-3 md:grid-cols-3">
         {(["wildcard-ssl", "worker-and-site", "deploy-and-verify"] as const).map((action) => {
@@ -128,15 +135,11 @@ function VpsRecoveryPage() {
               {e?.hint ? <div className="mt-2 text-xs text-amber-500">{e.hint}</div> : null}
               <button
                 type="button"
-                disabled={busy === `run-${action}`}
-                onClick={() => withBusy(
-                  `run-${action}`,
-                  () => repair({ data: { action, slug: slug || undefined } }),
-                  `Triggered ${action}`
-                )}
-                className="mt-3 inline-flex items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-1 text-xs hover:bg-muted"
+                disabled={repair.isPending}
+                onClick={() => repair.run({ data: { action, slug: slug || undefined } })}
+                className="mt-3 inline-flex items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
               >
-                <RotateCw className="h-3 w-3" /> Run now
+                <RotateCw className={`h-3 w-3 ${repair.isPending ? "animate-spin" : ""}`} /> Run now
               </button>
             </div>
           );
@@ -157,52 +160,38 @@ function VpsRecoveryPage() {
           </label>
           <button
             type="button"
-            disabled={!slug || busy === "provision"}
-            onClick={() => withBusy(
-              "provision",
-              async () => {
-                const r = await provision({ data: { slug, seed: true, rotateSecret: true, revealSecret: true } }) as WorkerJson;
-                if (r?.secret && (r.secret as WorkerJson).secret) setRevealed(String((r.secret as WorkerJson).secret));
-                return r;
-              },
-              "Subdomain provisioned + secret rotated"
-            )}
+            disabled={!slug || provision.isPending}
+            onClick={() => provision.run({ data: { slug, seed: true, rotateSecret: true, revealSecret: true } })}
             className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            Provision + rotate
+            {provision.isPending ? "Provisioning…" : "Provision + rotate"}
           </button>
           <button
             type="button"
-            disabled={!slug || busy === "rotate"}
-            onClick={() => withBusy(
-              "rotate",
-              async () => {
-                const r = await rotate({ data: { slug } }) as WorkerJson;
-                if (r?.secret) setRevealed(String(r.secret));
-                return r;
-              },
-              "Secret rotated"
-            )}
+            disabled={!slug || rotate.isPending}
+            onClick={() => rotate.run({ data: { slug } })}
             className="rounded-md border border-border/60 bg-background px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
           >
-            Rotate secret
+            {rotate.isPending ? "Rotating…" : "Rotate secret"}
           </button>
           <button
             type="button"
-            disabled={!slug || busy === "revoke"}
-            onClick={() => withBusy("revoke", () => revoke({ data: { slug } }), "Secret revoked")}
+            disabled={!slug || revoke.isPending}
+            onClick={() => revoke.run({ data: { slug } })}
             className="rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
           >
-            Revoke
+            {revoke.isPending ? "Revoking…" : "Revoke"}
           </button>
           <button
             type="button"
-            onClick={() => { history.refetch(); status.refetch(); }}
-            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={refetchAll}
+            disabled={busy}
+            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
             <RefreshCw className="h-3 w-3" /> Refresh
           </button>
         </div>
+
 
         {slug && status.data ? (
           <div className="mt-3 grid gap-2 text-xs md:grid-cols-2">
