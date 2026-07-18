@@ -1001,6 +1001,10 @@ function AutoDeployInner() {
         <StreamPanel events={streamEvents} runningIdx={runningStepIdx} />
       )}
 
+      {/* Server-action errors (probe / diagnostics) */}
+      <ErrorBanner error={probeAction.error} onDismiss={probeAction.reset} />
+      <ErrorBanner error={diagnosticsAction.error} onDismiss={diagnosticsAction.reset} />
+
       {/* Error banner */}
       {phase === "error" && errorMsg && (
         <section className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive flex items-start gap-2">
