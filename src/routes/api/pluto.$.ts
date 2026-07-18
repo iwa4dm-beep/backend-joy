@@ -36,11 +36,15 @@ function offlineJson(payload: Record<string, unknown>) {
 }
 
 async function handle({ request, params }: { request: Request; params: { _splat?: string } }) {
-  const upstream = process.env.PLUTO_UPSTREAM_URL ?? "https://api.timescard.cloud";
+  const rawUpstream = process.env.PLUTO_UPSTREAM_URL;
+  const upstream = rawUpstream ?? "https://api.timescard.cloud";
   const splat = params._splat ?? "";
   const url = new URL(request.url);
 
-  if (!upstream) {
+  // Check the raw env var, not the defaulted value — otherwise the offline
+  // stub branch is unreachable and misconfigured deployments hit the network
+  // instead of returning the friendly "backend not configured" payload.
+  if (!rawUpstream) {
     const issues = validateSecrets();
     // Graceful offline stub — probes see a well-formed 200 with offline:true
     // instead of a network error, and TerminalCard renders "backend not

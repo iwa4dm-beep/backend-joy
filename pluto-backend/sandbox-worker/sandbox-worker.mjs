@@ -75,7 +75,15 @@ async function readJson(req) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
   const text = Buffer.concat(chunks).toString("utf-8") || "{}";
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Surface as a 400 to callers instead of leaking as an unhandled 500.
+    const err = new Error(`invalid_json: ${e?.message || "parse error"}`);
+    err.httpStatus = 400;
+    err.code = "invalid_json";
+    throw err;
+  }
 }
 
 function safeSlug(s) {
@@ -651,7 +659,13 @@ async function serveStatic(req, res, wsDir, linkName, relPath) {
 
   const clean = decodeURIComponent(relPath || "").replace(/^\/+/, "");
   const requested = path.resolve(baseDir, clean);
-  if (!requested.startsWith(baseDir)) return json(res, 400, { error: "bad_path" });
+  // Containment check must use a path-separator boundary. `startsWith(baseDir)`
+  // alone treats `/var/lib/pluto/sites/foo` as a prefix of
+  // `/var/lib/pluto/sites/foobar/…`, allowing cross-slug reads when two slugs
+  // share a common prefix.
+  if (requested !== baseDir && !requested.startsWith(baseDir + path.sep)) {
+    return json(res, 400, { error: "bad_path" });
+  }
 
   let filePath = requested;
   try {
@@ -1540,7 +1554,8 @@ const server = http.createServer(async (req, res) => {
 
     return json(res, 404, { error: "not_found" });
   } catch (e) {
-    return json(res, 500, { error: e?.message ?? String(e) });
+    const status = Number.isInteger(e?.httpStatus) ? e.httpStatus : 500;
+    return json(res, status, { error: e?.code || e?.message || String(e), message: e?.message });
   }
 });
 
