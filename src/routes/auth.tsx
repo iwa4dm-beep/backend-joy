@@ -1,8 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { LogIn, UserPlus, Zap } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "@/lib/pluto/auth-context";
-import { isLive } from "@/lib/pluto/live";
+import { describeError, isLive } from "@/lib/pluto/live";
+import { ErrorBanner } from "@/components/pluto/ErrorBanner";
 
 export const Route = createFileRoute("/auth")({
   ssr: false,
@@ -18,7 +20,7 @@ function AuthPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
     if (!loading && session) navigate({ to: "/dashboard" });
@@ -38,7 +40,11 @@ function AuthPage() {
       }
       navigate({ to: "/dashboard" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : mode === "signup" ? "Sign-up failed" : "Sign-in failed");
+      setError(err);
+      const info = describeError(err);
+      toast.error(mode === "signup" ? "Sign-up failed" : "Sign-in failed", {
+        description: info.detail ?? info.title,
+      });
     } finally {
       setBusy(false);
     }
@@ -113,7 +119,7 @@ function AuthPage() {
                 />
               </div>
             )}
-            {error && <div className="text-xs text-destructive">{error}</div>}
+            <ErrorBanner error={error} onDismiss={() => setError(null)} className="mb-0" />
             <button
               type="submit"
               disabled={busy}
