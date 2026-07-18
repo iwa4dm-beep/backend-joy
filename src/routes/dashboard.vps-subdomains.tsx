@@ -132,7 +132,7 @@ function VpsSubdomainsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.subdomains.map((row) => <SubdomainRow key={row.host} row={row} onFix={fixSubdomain} fixing={repairing === row.host} />)}
+                  {data.subdomains.map((row) => <SubdomainRow key={row.host} row={row} onFix={fixSubdomain} fixing={repairingHost === row.host} />)}
                   {!data.subdomains.length && (
                     <tr><td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">No active subdomains found.</td></tr>
                   )}
