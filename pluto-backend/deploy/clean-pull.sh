@@ -58,9 +58,12 @@ BACKUP_FILE="$BACKUP_DIR/pre-clean-pull-${STAMP}.tar.gz"
 
 if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
   log "Local edits detected — backing up dirty tree"
-  # shellcheck disable=SC2046
-  tar -czf "$BACKUP_FILE" \
-      $(git ls-files -m -o --exclude-standard 2>/dev/null | head -500) 2>/dev/null || true
+  # NUL-delimited pipeline so filenames with spaces/globs are preserved
+  # before `git clean -fdx` below deletes any untracked files.
+  if git ls-files -z -m -o --exclude-standard 2>/dev/null \
+      | tar --null -T - -czf "$BACKUP_FILE" 2>/dev/null; then
+    :
+  fi
   if [ -s "$BACKUP_FILE" ]; then
     pass "Backup: $BACKUP_FILE"
   else

@@ -32,12 +32,11 @@ if [[ -z "$SLUG" ]]; then
   echo "Usage: $0 <slug> [base-domain] [admin-email]" >&2
   exit 2
 fi
-if ! [[ "$SLUG" =~ ^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])?$ ]] 2>/dev/null; then
-  # bash regex doesn't support (?:) — do a plain check.
-  if ! [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$ ]]; then
-    echo "Invalid slug: $SLUG" >&2
-    exit 2
-  fi
+# Slug must be a valid DNS label. Keep bounds identical to preflight-dns.sh
+# so a slug that passes preflight cannot be rejected here mid-deploy.
+if ! [[ "$SLUG" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "Invalid slug: $SLUG (must be a DNS-label safe string, 1-63 chars)" >&2
+  exit 2
 fi
 
 FQDN="${SLUG}.${BASE}"
