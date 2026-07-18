@@ -1554,7 +1554,8 @@ const server = http.createServer(async (req, res) => {
 
     return json(res, 404, { error: "not_found" });
   } catch (e) {
-    return json(res, 500, { error: e?.message ?? String(e) });
+    const status = Number.isInteger(e?.httpStatus) ? e.httpStatus : 500;
+    return json(res, status, { error: e?.code || e?.message || String(e), message: e?.message });
   }
 });
 
