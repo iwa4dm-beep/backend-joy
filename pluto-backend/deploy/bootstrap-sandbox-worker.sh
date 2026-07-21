@@ -193,7 +193,10 @@ run_one() {
     worker-and-site) SLUG="\$SLUG" WILDCARD="\$WILDCARD" ACME_EMAIL="\$ACME_EMAIL" bash "\$DEPLOY_DIR/repair-sandbox-worker-and-site.sh";;
     wildcard-ssl)    APEX="\${WILDCARD:-app.timescard.cloud}" ACME_EMAIL="\$ACME_EMAIL" bash "\$DEPLOY_DIR/fix-wildcard-ssl.sh" "\$SLUG";;
     per-slug-ssl)    bash "\$DEPLOY_DIR/issue-per-slug-cert.sh" "\$SLUG" "\${WILDCARD:-app.timescard.cloud}" "\${ACME_EMAIL:-admin@timescard.cloud}";;
-    primary-frontend) bash "\$DEPLOY_DIR/set-primary-frontend.sh" --activate "\$SLUG";;
+    primary-frontend)
+      APEX_DOMAIN="\${WILDCARD:-app.timescard.cloud}" bash "\$DEPLOY_DIR/set-primary-frontend.sh" --install --email "\${ACME_EMAIL:-admin@timescard.cloud}"
+      [ -n "\$SLUG" ] && APEX_DOMAIN="\${WILDCARD:-app.timescard.cloud}" bash "\$DEPLOY_DIR/set-primary-frontend.sh" --activate "\$SLUG"
+      ;;
     deploy-and-verify) SLUG="\$SLUG" bash "\$DEPLOY_DIR/deploy-and-verify.sh";;
     *) echo "unknown action: \$1" >&2; exit 2;;
   esac
