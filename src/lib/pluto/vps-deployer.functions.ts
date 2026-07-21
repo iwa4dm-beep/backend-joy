@@ -162,15 +162,18 @@ async function rawFetch(
     };
     return { status: res.status, text, debug, ok: res.ok, headers: hdrs };
   } catch (e) {
+    const err = e as Error & { cause?: { code?: string; message?: string } };
+    const cause = err.cause?.code || err.cause?.message;
+    const message = cause ? `${err.message} (${cause})` : err.message;
     const debug: StepDebug = {
       url,
       method,
       status: 0,
       latencyMs: Date.now() - started,
       reqBodyPreview: reqBodyForPreview ? truncate(reqBodyForPreview) : null,
-      resBodyPreview: (e as Error).message,
+      resBodyPreview: message,
     };
-    return { status: 0, text: (e as Error).message, debug, ok: false, headers: {} };
+    return { status: 0, text: message, debug, ok: false, headers: {} };
   } finally {
     clearTimeout(t);
   }
@@ -548,6 +551,7 @@ export type LiveUrlProbe = {
   primaryActivationOk?: boolean | null;
   primaryVhostInstalled?: boolean | null;
   routeMismatchReason?: string | null;
+  failureReason?: string | null;
 };
 export type SslProbe = {
   url: string;
@@ -607,10 +611,14 @@ export type ServedSiteDiagnostics = {
   hint?: string;
 };
 
-const DEFAULT_PRIMARY_FRONTEND_URL = "https://app.timescard.cloud";
+const DEFAULT_PRIMARY_FRONTEND_URL = "https://app.timescard.app";
 
 function primaryFrontendUrl(): string {
   return (process.env.PLUTO_PRIMARY_FRONTEND_URL || DEFAULT_PRIMARY_FRONTEND_URL).replace(/\/+$/, "");
+}
+
+function hostFromUrl(url: string): string {
+  try { return new URL(url).hostname; } catch { return url.replace(/^https?:\/\//i, "").replace(/\/.*$/, ""); }
 }
 
 export type DeployAllResult = {
