@@ -143,13 +143,15 @@ async function rawFetch(
   body: BodyInit | null,
   reqBodyForPreview: string | null,
   timeoutMs = 60_000,
-): Promise<{ status: number; text: string; debug: StepDebug; ok: boolean }> {
+): Promise<{ status: number; text: string; debug: StepDebug; ok: boolean; headers: Record<string, string> }> {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   const started = Date.now();
   try {
     const res = await fetch(url, { method, headers, body, signal: ac.signal });
     const text = await res.text();
+    const hdrs: Record<string, string> = {};
+    res.headers.forEach((v, k) => { hdrs[k.toLowerCase()] = v; });
     const debug: StepDebug = {
       url,
       method,
@@ -158,7 +160,7 @@ async function rawFetch(
       reqBodyPreview: reqBodyForPreview ? truncate(reqBodyForPreview) : null,
       resBodyPreview: truncate(text || "(empty)"),
     };
-    return { status: res.status, text, debug, ok: res.ok };
+    return { status: res.status, text, debug, ok: res.ok, headers: hdrs };
   } catch (e) {
     const debug: StepDebug = {
       url,
@@ -168,7 +170,7 @@ async function rawFetch(
       reqBodyPreview: reqBodyForPreview ? truncate(reqBodyForPreview) : null,
       resBodyPreview: (e as Error).message,
     };
-    return { status: 0, text: (e as Error).message, debug, ok: false };
+    return { status: 0, text: (e as Error).message, debug, ok: false, headers: {} };
   } finally {
     clearTimeout(t);
   }
