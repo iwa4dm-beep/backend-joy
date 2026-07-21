@@ -180,6 +180,52 @@ async function serviceHeaders(extra: Record<string, string> = {}, override?: str
   return { apikey: key, authorization: `Bearer ${key}`, accept: "application/json", ...extra };
 }
 
+/**
+ * "Service user login": preflight the VPS admin API with the current service
+ * token by hitting a cheap admin endpoint. On success returns the working
+ * headers; on 401 the auto-minted JWT cache is cleared and re-minted once, so
+ * ensureDeployInfra never runs with a stale/expired service credential.
+ */
+type ServiceSession = { headers: Record<string, string>; token: string };
+async function loginServiceUser(override?: string): Promise<ServiceSession | { error: string; status: number; debug: StepDebug | null }> {
+  const base = getVpsBaseUrl();
+  const tryOnce = async (): Promise<{ ok: boolean; status: number; text: string; debug: StepDebug; headers: Record<string, string>; token: string } | { ok: false; error: string; status: number; debug: null }> => {
+    const h = await serviceHeaders({}, override);
+    if ("error" in h) return { ok: false, error: h.error, status: 500, debug: null };
+    const probe = await rawFetch(`${base}/admin/v1/workspaces?limit=1`, "GET", h, null, null, 15_000);
+    return { ok: probe.ok, status: probe.status, text: probe.text, debug: probe.debug, headers: h, token: h.authorization?.replace(/^Bearer\s+/i, "") ?? "" };
+  };
+  let first = await tryOnce();
+  if ("error" in first) return { error: first.error, status: first.status, debug: null };
+  if (first.ok) return { headers: first.headers, token: first.token };
+  if (first.status === 401 || first.status === 403) {
+    // Refresh: drop the cached auto-minted JWT and retry once.
+    resetServiceRoleKeyCache();
+    const second = await tryOnce();
+    if ("error" in second) return { error: second.error, status: second.status, debug: null };
+    if (second.ok) return { headers: second.headers, token: second.token };
+    return { error: `service login failed after refresh (HTTP ${second.status}): ${second.text.slice(0, 200)}`, status: second.status, debug: second.debug };
+  }
+  return { error: `service login failed (HTTP ${first.status}): ${first.text.slice(0, 200)}`, status: first.status, debug: first.debug };
+}
+
+/** Wrap a rawFetch call: on 401/403 invalidate the service JWT cache, refresh
+ *  headers, retry once. `mkHeaders` receives the freshly-minted headers. */
+async function serviceFetchWithRefresh(
+  mkHeaders: () => Promise<Record<string, string> | { error: string }>,
+  doFetch: (headers: Record<string, string>) => Promise<{ ok: boolean; status: number; text: string; debug: StepDebug }>,
+): Promise<{ ok: boolean; status: number; text: string; debug: StepDebug | null; refreshed: boolean }> {
+  const h1 = await mkHeaders();
+  if ("error" in h1) return { ok: false, status: 500, text: h1.error, debug: null, refreshed: false };
+  const r1 = await doFetch(h1);
+  if (r1.ok || (r1.status !== 401 && r1.status !== 403)) return { ...r1, refreshed: false };
+  resetServiceRoleKeyCache();
+  const h2 = await mkHeaders();
+  if ("error" in h2) return { ok: false, status: 500, text: h2.error, debug: r1.debug, refreshed: true };
+  const r2 = await doFetch(h2);
+  return { ...r2, refreshed: true };
+}
+
 
 // ---------- Step 1: push migrations ----------
 const MigrationInput = z.object({
