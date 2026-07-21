@@ -5,7 +5,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requirePlutoAdmin } from "./admin-middleware";
 import { z } from "zod";
-import { getVpsBaseUrl, getServiceRoleKey } from "./vps-client";
+import { getVpsBaseUrl, getServiceRoleKey, resetServiceRoleKeyCache } from "./vps-client";
 
 /** Version tag embedded into the bootstrap function code. Bump when the
  *  bootstrap handler shape changes so `verifyBootstrap` can confirm the VPS
