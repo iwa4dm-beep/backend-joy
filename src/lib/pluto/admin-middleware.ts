@@ -199,7 +199,11 @@ export const requirePlutoAdmin = createMiddleware({ type: "function" })
       });
     }
     const admin = await verifyAdminToken(header);
-    return next({ context: { plutoAdmin: admin } });
+    // Stash the verified header in AsyncLocalStorage so nested server-fn
+    // calls (whose `.client()` runs server-side without localStorage) can
+    // recover it even when the outer HTTP request has no Authorization header.
+    const { runWithAuthHeader } = await import("./admin-request-header.server");
+    return runWithAuthHeader(header, () => next({ context: { plutoAdmin: admin } }));
   });
 
 export type PlutoAdminContext = { plutoAdmin: VerifiedAdmin };
