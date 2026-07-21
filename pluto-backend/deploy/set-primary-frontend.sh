@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# set-primary-frontend.sh — Make app.timescard.app the single, permanent
+# set-primary-frontend.sh — Make app.timescard.cloud the single, permanent
 # frontend URL for every published Pluto project.
 #
 # Instead of minting a new subdomain + Let's Encrypt cert for every project,
@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-APEX="${APEX_DOMAIN:-app.timescard.app}"
+APEX="${APEX_DOMAIN:-app.timescard.cloud}"
 SITES_ROOT="${PLUTO_SITES_ROOT:-/var/lib/pluto/sites}"
 PRIMARY_DIR="$SITES_ROOT/_primary"
 PRIMARY_LINK="$PRIMARY_DIR/current"
@@ -203,6 +203,36 @@ resolve_release() {
   die "Could not find a live release for '$key' under $SITES_ROOT"
 }
 
+resolve_webroot_with_index() {
+  # Normalize a release/current path to the exact directory nginx should serve.
+  # The target must contain index.html; otherwise primary activation succeeds on
+  # disk but app.timescard.cloud keeps showing the wrong app or a broken route.
+  local root="$1" p count nested
+  [ -d "$root" ] || die "Resolved release is not a directory: $root"
+  if [ -f "$root/index.html" ]; then
+    printf '%s\n' "$root"
+    return 0
+  fi
+  for p in "$root/dist" "$root/build" "$root/public" "$root/out" "$root/.output/public"; do
+    if [ -f "$p/index.html" ]; then
+      printf '%s\n' "$p"
+      return 0
+    fi
+  done
+  count=0; nested=""
+  shopt -s nullglob
+  for p in "$root"/*; do
+    [ -d "$p" ] || continue
+    count=$((count+1)); nested="$p"
+  done
+  shopt -u nullglob
+  if [ "$count" -eq 1 ]; then
+    resolve_webroot_with_index "$nested"
+    return $?
+  fi
+  die "No index.html found for '$root' (checked root, dist, build, public, out). Re-run Auto Deploy so the bundle is built/unpacked correctly."
+}
+
 cmd_install() {
   local email="${1:-}"
   need_root
@@ -234,7 +264,8 @@ cmd_activate() {
   ensure_primary_dir
   local target
   target=$(resolve_release "$key")
-  [ -d "$target" ] || die "Resolved target is not a directory: $target"
+  target=$(resolve_webroot_with_index "$target")
+  [ -f "$target/index.html" ] || die "Resolved target has no index.html: $target"
   local tmplink="$PRIMARY_DIR/.current.new"
   ln -sfn "$target" "$tmplink"
   mv -Tf "$tmplink" "$PRIMARY_LINK"
