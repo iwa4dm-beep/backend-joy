@@ -532,7 +532,7 @@ const DeployAllInput = z.object({
 export type DeployStepKey = "service-login" | "ensure-infra" | "push-migrations" | "upload-bundle" | "verify-deploy" | "unpack-serve" | "activate-service" | "health-check" | "verify-ssl";
 export type DeployStepAttempt = { attempt: number; ok: boolean; detail: string; debug: StepDebug | null; startedAt: string; latencyMs: number };
 export type DeployStepLog = { key: DeployStepKey; label: string; ok: boolean; attempts: DeployStepAttempt[]; result: string | null };
-export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number; healNote?: string | null };
+export type LiveUrlProbe = { url: string; status: number; reachable: boolean; contentType: string | null; snippet: string; latencyMs: number; healNote?: string | null; primaryActivationOk?: boolean | null };
 export type SslProbe = {
   url: string;
   ok: boolean;
@@ -1170,11 +1170,12 @@ export const deployAll = createServerFn({ method: "POST" })
       servedSiteProbe = {
         url: probeUrl,
         status: p.status,
-        reachable: p.ok,
+        reachable: served,
         contentType: looksHtml ? "text/html" : null,
         snippet: p.text.slice(0, 240),
         latencyMs: p.debug.latencyMs,
         healNote,
+        primaryActivationOk: primaryRequired ? primaryActivation?.ok === true : null,
       };
       const primaryRequired = probeUrl.replace(/\/+$/, "") === defaultPrimaryServedSiteUrl;
       const primaryActivation = primaryActivationState.current;
