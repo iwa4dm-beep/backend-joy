@@ -208,25 +208,23 @@ PY
   local ws_url
   ws_url="${PLUTO_API/https:/wss:}"
   ws_url="${ws_url/http:/ws:}/realtime/v1?apikey=${key}&channel=smoke-cutover"
-  if python3 - "$ws_url" <<'PY'
-import asyncio, sys
-from websockets.asyncio.client import connect
-
-async def main():
-    async with connect(sys.argv[1], open_timeout=6, close_timeout=1) as ws:
-        msg = await asyncio.wait_for(ws.recv(), timeout=6)
-        if not msg:
-            raise SystemExit(1)
-
-asyncio.run(main())
-PY
-  then
+  local headers key
+  headers="$(mktemp)"
+  key="$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | awk '{print $1}')"
+  curl -sS -D "$headers" -o /dev/null --http1.1 --max-time 4 \
+    -H 'Connection: Upgrade' \
+    -H 'Upgrade: websocket' \
+    -H "Sec-WebSocket-Key: $key" \
+    -H 'Sec-WebSocket-Version: 13' \
+    "$ws_url" >/dev/null 2>&1 || true
+  if grep -qE '^HTTP/[0-9.]+ 101\b' "$headers"; then
     REALTIME_STATUS="ok"
   else
     REALTIME_STATUS="fail"
     REASONS+=("pluto-realtime-ws")
     FAIL=1
   fi
+  rm -f "$headers"
 }
 
 [[ -n "$DIST"     ]] && scan_dir "$DIST"
