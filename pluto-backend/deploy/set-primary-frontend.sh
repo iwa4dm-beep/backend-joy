@@ -135,6 +135,11 @@ ensure_primary_dir() {
 <code>$APEX</code>.</p>
 HTML
   fi
+  if [ -e "$PRIMARY_LINK" ] && [ ! -L "$PRIMARY_LINK" ]; then
+    local backup="$PRIMARY_DIR/current.backup.$(date +%Y%m%d-%H%M%S)"
+    warn "$PRIMARY_LINK exists but is not a symlink; moving it to $backup"
+    mv -f "$PRIMARY_LINK" "$backup"
+  fi
   if [ ! -L "$PRIMARY_LINK" ]; then
     ln -sfn "$PRIMARY_DIR/_placeholder" "$PRIMARY_LINK"
     pass "Initialized $PRIMARY_LINK → _placeholder"
@@ -327,11 +332,17 @@ cmd_activate() {
   [ -f "$target/index.html" ] || die "Resolved target has no index.html: $target"
   local tmplink="$PRIMARY_DIR/.current.new"
   ln -sfn "$target" "$tmplink"
+  if [ -e "$PRIMARY_LINK" ] && [ ! -L "$PRIMARY_LINK" ]; then
+    local backup="$PRIMARY_DIR/current.backup.$(date +%Y%m%d-%H%M%S)"
+    warn "$PRIMARY_LINK exists but is not a symlink; moving it to $backup"
+    mv -f "$PRIMARY_LINK" "$backup"
+  fi
   mv -Tf "$tmplink" "$PRIMARY_LINK"
   echo "{\"activatedAt\":\"$(date -u +%FT%TZ)\",\"key\":\"$key\",\"target\":\"$target\"}" \
     > "$PRIMARY_DIR/current.json"
   pass "Primary now serves: $target"
   pass "URL: https://$APEX"
+  verify_primary_header
 }
 
 cmd_status() {
