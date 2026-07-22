@@ -5,11 +5,11 @@
 # Instead of minting a new subdomain + Let's Encrypt cert for every project,
 # this script:
 #   1. Ensures /var/lib/pluto/sites/_primary/ exists with a `current` symlink.
-#   2. Installs a fixed nginx vhost for app.timescard.app that serves
+#   2. Installs a fixed nginx vhost for app.timescard.cloud that serves
 #      /var/lib/pluto/sites/_primary/current (SPA fallback + long-cache assets).
 #   3. On every publish, atomically flips `_primary/current` to the given
 #      workspace's live release, so the *latest* project is what app.
-#      timescard.app serves — no DNS change, no cert reissue, ever.
+#      timescard.cloud serves — no DNS change, no cert reissue, ever.
 #
 # Usage (first time — installs vhost + cert):
 #   sudo bash set-primary-frontend.sh --install --email admin@timescard.cloud
@@ -27,7 +27,8 @@ SITES_ROOT="${PLUTO_SITES_ROOT:-/var/lib/pluto/sites}"
 PRIMARY_DIR="$SITES_ROOT/_primary"
 PRIMARY_LINK="$PRIMARY_DIR/current"
 NGX_AVAIL="/etc/nginx/sites-available/pluto-primary.conf"
-NGX_ENABL="/etc/nginx/sites-enabled/pluto-primary.conf"
+NGX_ENABL="/etc/nginx/sites-enabled/000-pluto-primary.conf"
+NGX_LEGACY_ENABL="/etc/nginx/sites-enabled/pluto-primary.conf"
 CONFLICT_BACKUP_DIR="/etc/nginx/pluto-primary-disabled"
 
 log()  { printf "\n▶ %s\n" "$*"; }
@@ -80,6 +81,7 @@ disable_conflicting_vhosts() {
     # Never quarantine our own managed files or nginx's main config.
     [ "$real" = "$NGX_AVAIL" ] && continue
     [ "$conflict" = "$NGX_ENABL" ] && continue
+    [ "$conflict" = "$NGX_LEGACY_ENABL" ] && continue
     [ "$conflict" = "/etc/nginx/nginx.conf" ] && continue
     case "$conflict" in
       /etc/nginx/mime.types|/etc/nginx/fastcgi_params|/etc/nginx/proxy_params|/etc/nginx/scgi_params|/etc/nginx/uwsgi_params|/etc/nginx/koi-*|/etc/nginx/win-utf|/etc/nginx/modules-enabled/*|/etc/letsencrypt/options-ssl-nginx.conf)
@@ -91,9 +93,10 @@ disable_conflicting_vhosts() {
     if grep -Eq "server_name[[:space:]][^;]*${apex_re}([[:space:];]|$)" "$conflict" 2>/dev/null; then
       hit=1
     fi
-    # (b) default_server on :80 or :443 — catches marketing app deployed as
-    # nginx default when no vhost matches the hostname.
-    if [ "$hit" = "0" ] && grep -Eq "listen[[:space:]]+([0-9.:]+:)?(80|443)([[:space:]]+ssl)?([[:space:]]+http2)?[[:space:]]+default_server" "$conflict" 2>/dev/null; then
+    # (b) any default_server on :80 or :443 — catches marketing app deployed as
+    # nginx default. Match IPv4, IPv6 ([::]:443), and any directive ordering
+    # (e.g. `listen 443 default_server ssl http2;`).
+    if [ "$hit" = "0" ] && grep -Ei "listen[[:space:]][^;]*default_server[^;]*;" "$conflict" 2>/dev/null | grep -Eq "(^|[^0-9])(80|443)([^0-9]|$)|\[::\]:(80|443)"; then
       hit=1
     fi
     [ "$hit" = "1" ] || continue
@@ -140,11 +143,15 @@ HTML
 
 write_vhost() {
   disable_conflicting_vhosts
+  # Older installs used this enabled filename. Remove it so nginx loads exactly
+  # one managed primary vhost, and loads it early enough to beat stale duplicate
+  # server_name blocks if an operator left one outside the usual include paths.
+  rm -f "$NGX_LEGACY_ENABL"
   cat > "$NGX_AVAIL" <<NGX
 # Managed by set-primary-frontend.sh — do not edit by hand.
 server {
-    listen 80;
-    listen [::]:80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name $APEX;
 
     location /.well-known/acme-challenge/ { root /var/www/html; default_type "text/plain"; }
@@ -152,8 +159,8 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
     http2 on;
     server_name $APEX;
 
