@@ -1248,12 +1248,17 @@ export const deployAll = createServerFn({ method: "POST" })
       if (primaryRequired && !primaryVhostInstalled && sandboxSecret) {
         const repairBody = JSON.stringify({ action: "primary-frontend", slug: deploySlug, wildcard: hostFromUrl(defaultPrimaryServedSiteUrl) });
         const repair = await rawFetch(`${sandboxEndpointBase}/admin/repair`, "POST", { "content-type": "application/json", "x-sandbox-secret": sandboxSecret, accept: "application/json" }, repairBody, repairBody, 240_000);
-        healNote = `${healNote ? healNote + "; " : ""}primary vhost install HTTP ${repair.status}`;
-        if (repair.ok && (!primaryActivationState.current || primaryActivationState.current.ok !== true)) {
-          primaryActivationState.current = { ok: true, status: repair.status, detail: "primary frontend installed + activated by repair" };
+        const repairSummary = summarizeWorkerRepair(repair);
+        healNote = `${healNote ? healNote + "; " : ""}primary vhost repair ${repairSummary.note}`;
+        if (!repairSummary.ok) {
+          primaryActivationState.current = { ok: false, status: repair.status, detail: repairSummary.detail };
         }
+        if (repairSummary.ok) await sleep(750);
         p = await rawFetch(probeUrl, "GET", { accept: "text/html,*/*" }, null, null, 12_000);
         primaryVhostInstalled = Boolean(p.headers["x-pluto-primary"]) && !/Pluto\s*BaaS/i.test(p.text);
+        primaryActivationState.current = primaryVhostInstalled
+          ? { ok: true, status: repair.status, detail: "primary frontend verified by X-Pluto-Primary header after repair" }
+          : { ok: false, status: repair.status, detail: `repair returned ${repairSummary.detail}, but live probe still lacks X-Pluto-Primary` };
       }
       const refreshedPrimaryActivation = primaryActivationState.current;
       served = p.ok && (!primaryRequired || (refreshedPrimaryActivation?.ok === true && primaryVhostInstalled));
