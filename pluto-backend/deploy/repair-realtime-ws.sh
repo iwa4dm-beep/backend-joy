@@ -12,11 +12,13 @@
 #   sudo bash pluto-backend/deploy/repair-realtime-ws.sh
 #
 # Optional env:
-#   DOMAIN=api.timescard.cloud API_PORT=3000 PLUTO_ANON_KEY=pk_anon_...
+#   DOMAIN=api.timescard.cloud API_PORT=3000 API_WAIT_SECONDS=90 PLUTO_ANON_KEY=pk_anon_...
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-api.timescard.cloud}"
-API_PORT="${API_PORT:-3000}"
+API_HOST="${API_HOST:-127.0.0.1}"
+API_PORT="${API_PORT:-}"
+API_WAIT_SECONDS="${API_WAIT_SECONDS:-90}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROUTE="$ROOT/packages/api/src/routes/realtime.ts"
 NGINX_CONF="${NGINX_CONF:-}"
@@ -26,6 +28,42 @@ green() { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
 blue()  { printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
 red()   { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; }
 die()   { red "$*"; exit 1; }
+
+compose_cmd() {
+  $SUDO docker compose --env-file "$ROOT/.env" -f "$ROOT/docker/docker-compose.yml" "$@"
+}
+
+detect_api_port() {
+  if [ -n "$API_PORT" ]; then return; fi
+  API_PORT="3000"
+  if [ -f "$ROOT/docker/docker-compose.yml" ] && [ -f "$ROOT/.env" ] && command -v docker >/dev/null 2>&1; then
+    local published
+    published="$(compose_cmd port api 3000 2>/dev/null | tail -1 || true)"
+    if [ -n "$published" ]; then
+      API_HOST="${published%:*}"
+      API_PORT="${published##*:}"
+      [ "$API_HOST" = "0.0.0.0" ] && API_HOST="127.0.0.1"
+      [ "$API_HOST" = "[::]" ] && API_HOST="127.0.0.1"
+    fi
+  fi
+}
+
+api_logs_tail() {
+  if [ -f "$ROOT/docker/docker-compose.yml" ] && [ -f "$ROOT/.env" ] && command -v docker >/dev/null 2>&1; then
+    echo "--- docker compose ps ---" >&2
+    compose_cmd ps api >&2 || true
+    echo "--- docker compose logs api (last 80 lines) ---" >&2
+    compose_cmd logs --tail=80 api >&2 || true
+  fi
+}
+
+nginx_logs_tail() {
+  echo "--- nginx error log (last realtime/upstream lines) ---" >&2
+  if [ -f /var/log/nginx/error.log ]; then
+    $SUDO sh -c "grep -Ei 'realtime|upstream|connect\(\)|bad gateway|websocket' /var/log/nginx/error.log | tail -40" >&2 || true
+  fi
+  $SUDO journalctl -u nginx --no-pager -n 40 >&2 2>/dev/null || true
+}
 
 find_nginx_conf() {
   if [ -n "$NGINX_CONF" ] && [ -f "$NGINX_CONF" ]; then printf '%s' "$NGINX_CONF"; return; fi
@@ -126,8 +164,9 @@ restart_api() {
   blue "restart/rebuild Pluto API"
   if [ -f "$ROOT/docker/docker-compose.yml" ] && command -v docker >/dev/null 2>&1; then
     if [ -f "$ROOT/.env" ]; then
-      $SUDO docker compose --env-file "$ROOT/.env" -f "$ROOT/docker/docker-compose.yml" build api
-      $SUDO docker compose --env-file "$ROOT/.env" -f "$ROOT/docker/docker-compose.yml" up -d api
+      compose_cmd build api
+      compose_cmd up -d api
+      detect_api_port
       green "docker api rebuilt + restarted"
       return
     fi
@@ -147,9 +186,36 @@ restart_api() {
   die "could not restart API automatically; run deploy/detect-pluto-api.sh --restart"
 }
 
-verify_ws() {
-  blue "verify realtime websocket handshake"
-  local key="${PLUTO_ANON_KEY:-smoke_key}" headers ws_key code
+wait_api_ready() {
+  detect_api_port
+  blue "wait for local Pluto API on http://${API_HOST}:${API_PORT}"
+  local deadline=$(( $(date +%s) + API_WAIT_SECONDS )) code path
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    for path in /livez /readyz /healthz /v1/health; do
+      code="$(curl -s -o /tmp/pluto-api-ready.$$ -w '%{http_code}' --max-time 3 "http://${API_HOST}:${API_PORT}${path}" || echo 000)"
+      rm -f /tmp/pluto-api-ready.$$
+      if [[ "$code" =~ ^2 ]]; then
+        green "local API ready (${path} → ${code})"
+        return 0
+      fi
+    done
+    sleep 2
+  done
+  red "local API did not become ready on http://${API_HOST}:${API_PORT} within ${API_WAIT_SECONDS}s"
+  api_logs_tail
+  exit 1
+}
+
+normalise_smoke_key() {
+  local key="${PLUTO_ANON_KEY:-smoke_key}"
+  case "$key" in
+    pk_anon_xxx|pk_anon_XXX|pk_xxx|pk_XXX|REPLACE_ME|CHANGE_ME|YOUR_KEY|YOUR_ANON_KEY) key="smoke_key";;
+  esac
+  printf '%s' "$key"
+}
+
+probe_ws_url() {
+  local url="$1" headers ws_key code
   headers="$(mktemp)"
   ws_key="$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | awk '{print $1}')"
   curl -sS -D "$headers" -o /dev/null --http1.1 --max-time 8 \
@@ -157,16 +223,40 @@ verify_ws() {
     -H 'Upgrade: websocket' \
     -H "Sec-WebSocket-Key: $ws_key" \
     -H 'Sec-WebSocket-Version: 13' \
-    "https://${DOMAIN}/realtime/v1?apikey=${key}&channel=home-content-all" >/dev/null 2>&1 || true
+    "$url" >/dev/null 2>&1 || true
   code="$(awk 'toupper($0) ~ /^HTTP\// {print $2}' "$headers" | tail -1)"
   cat "$headers" | sed -n '1,8p'
   rm -f "$headers"
-  [ "$code" = "101" ] || die "WebSocket handshake still failed (HTTP ${code:-none})"
+  [ "$code" = "101" ]
+}
+
+verify_ws() {
+  blue "verify realtime websocket handshake"
+  local key local_url public_url
+  key="$(normalise_smoke_key)"
+  local_url="http://${API_HOST}:${API_PORT}/realtime/v1?apikey=${key}&channel=home-content-all"
+  public_url="https://${DOMAIN}/realtime/v1?apikey=${key}&channel=home-content-all"
+
+  blue "local WS probe: ${local_url%%\?*}?apikey=***&channel=home-content-all"
+  if ! probe_ws_url "$local_url"; then
+    red "local WebSocket handshake failed — API route/container is the problem, not nginx"
+    api_logs_tail
+    exit 1
+  fi
+  green "local WebSocket handshake OK (101)"
+
+  blue "public WS probe: https://${DOMAIN}/realtime/v1?apikey=***&channel=home-content-all"
+  if ! probe_ws_url "$public_url"; then
+    red "public WebSocket handshake failed — nginx/proxy path is the problem"
+    nginx_logs_tail
+    exit 1
+  fi
   green "WebSocket handshake OK (101)"
 }
 
 patch_realtime_route
 restart_api
+wait_api_ready
 patch_nginx
 verify_ws
 
