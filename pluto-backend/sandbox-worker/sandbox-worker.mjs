@@ -1550,7 +1550,13 @@ const server = http.createServer(async (req, res) => {
       });
       const tail = Buffer.concat(chunks).toString("utf8").slice(-4096);
       let hint = null;
-      if (exitCode === 127) hint = "/usr/local/sbin/pluto-repair not installed or sudoers rule missing — run `sudo bash pluto-backend/deploy/full-deploy.sh`.";
+      if (exitCode === 127) {
+        if (/No such file or directory|no deploy dir found/i.test(tail)) {
+          hint = "pluto-repair wrapper is installed, but the deploy scripts moved. Re-run `sudo bash pluto-backend/deploy/bootstrap-sandbox-worker.sh` (mirrors scripts to /opt/pluto/deploy) or `sudo /usr/local/sbin/pluto-repair sync-scripts`.";
+        } else {
+          hint = "/usr/local/sbin/pluto-repair not installed or sudoers rule missing — run `sudo bash pluto-backend/deploy/full-deploy.sh`.";
+        }
+      }
       else if (action === "set-upstream" && exitCode === 2) hint = "set-upstream rejected the URL — check that it is a real Supabase project URL (https://<ref>.supabase.co), not a placeholder.";
       else if (exitCode !== 0) hint = "Repair script exited non-zero — inspect tail for the failing step.";
       const durationMs = Date.now() - startedAt;
