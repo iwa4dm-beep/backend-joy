@@ -532,6 +532,7 @@ function AutoDeployInner() {
         }
         result = await runDeployAttempt(payload, attempt);
         setDeployResult(result);
+        setVerifyRefreshKey((k) => k + 1);
         for (const s of result.steps) {
           log(`${s.ok ? "✓" : "✗"} ${s.label}${s.attempts.at(-1)?.detail ? ` — ${s.attempts.at(-1)!.detail}` : ""}`);
         }
