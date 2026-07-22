@@ -1,11 +1,11 @@
 // Same-origin proxy to the Pluto/Fastify backend.
 //
 // Frontend calls `/api/pluto/<anything>` and this route either forwards to
-// `PLUTO_UPSTREAM_URL` (production/self-host) or returns a graceful 503 JSON
-// stub when the backend isn't configured (dev). Eliminates the
+// `PLUTO_UPSTREAM_URL` (production/self-host) or the canonical
+// api.timescard.cloud fallback when the secret isn't injected. Eliminates the
 // `localhost:3000` "Failed to fetch" errors on fresh installs.
 import { createFileRoute } from "@tanstack/react-router";
-import { recordError, recordSuccess, validateSecrets } from "@/lib/pluto/upstream-status";
+import { recordError, recordSuccess } from "@/lib/pluto/upstream-status";
 
 const HOP_BY_HOP = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -36,27 +36,11 @@ function offlineJson(payload: Record<string, unknown>) {
 }
 
 async function handle({ request, params }: { request: Request; params: { _splat?: string } }) {
-  const rawUpstream = process.env.PLUTO_UPSTREAM_URL;
-  const upstream = rawUpstream ?? "https://api.timescard.cloud";
+  const upstream = (process.env.PLUTO_UPSTREAM_URL || "https://api.timescard.cloud").replace(/\/+$/, "");
   const splat = params._splat ?? "";
   const url = new URL(request.url);
 
-  // Check the raw env var, not the defaulted value — otherwise the offline
-  // stub branch is unreachable and misconfigured deployments hit the network
-  // instead of returning the friendly "backend not configured" payload.
-  if (!rawUpstream) {
-    const issues = validateSecrets();
-    // Graceful offline stub — probes see a well-formed 200 with offline:true
-    // instead of a network error, and TerminalCard renders "backend not
-    // configured" rather than the misleading "Failed to fetch".
-    return offlineJson({
-      path: `/${splat}`,
-      reason: "PLUTO_UPSTREAM_URL not set — configure the Fastify backend URL in project secrets to enable live probes.",
-      issues,
-    });
-  }
-
-  const target = upstream.replace(/\/$/, "") + "/" + splat + (url.search || "");
+  const target = upstream + "/" + splat + (url.search || "");
   const headers = new Headers();
   request.headers.forEach((value, key) => {
     if (!HOP_BY_HOP.has(key.toLowerCase())) headers.set(key, value);
