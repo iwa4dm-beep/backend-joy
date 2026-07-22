@@ -42,6 +42,31 @@ type ChannelSub = {
   presence: { key: string } | null;
 };
 
+function parsePgFilter(raw: unknown): PgSub['filter'] | undefined {
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+  const m = raw.match(/^([A-Za-z_][A-Za-z0-9_]*)=eq\.(.+)$/);
+  if (!m) return undefined;
+  return { column: m[1], op: 'eq', value: decodeURIComponent(m[2]) };
+}
+
+function normalizePgSubs(input: unknown): PgSub[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item): PgSub | null => {
+      if (!item || typeof item !== 'object') return null;
+      const v = item as Record<string, unknown>;
+      const eventRaw = String(v.event ?? '*').toUpperCase();
+      const event: PgSub['event'] = eventRaw === 'INSERT' || eventRaw === 'UPDATE' || eventRaw === 'DELETE' ? eventRaw : '*';
+      return {
+        event,
+        schema: typeof v.schema === 'string' ? v.schema : '*',
+        table: typeof v.table === 'string' ? v.table : '*',
+        filter: parsePgFilter(v.filter),
+      };
+    })
+    .filter((v): v is PgSub => !!v);
+}
+
 function matchFilter(row: Record<string, any> | null, f?: PgSub['filter']): boolean {
   if (!f || !row) return true;
   return String(row[f.column]) === String(f.value);
@@ -63,20 +88,72 @@ export async function realtimeRoutes(app: FastifyInstance, cfg: Config) {
     app.log.warn({ err: e.message }, 'realtime: pg LISTEN not available');
   }
 
-  app.get('/realtime/v1/websocket', { websocket: true }, (socket, req) => {
+  const websocketHandler = (socket: any, req: any) => {
     const connId = randomUUID();
     const subs = new Map<string, ChannelSub>(); // topic -> sub
     const disposers: Array<() => void> = [];
     let userId: string | null = null;
     let role: 'anon' | 'authenticated' | 'service_role' = 'anon';
+    const url = new URL(req.url ?? '/', 'http://x');
+
+    const addSubscription = (topic: string, cfgSub: any = {}, ref?: unknown) => {
+      if (!topic) {
+        send({ type: 'error', ref, message: 'topic required' });
+        return;
+      }
+      if (subs.has(topic)) {
+        send({ type: 'subscribed', event: 'SUBSCRIBED', status: 'SUBSCRIBED', ref, topic, channel: topic });
+        return;
+      }
+      const sub: ChannelSub = {
+        topic,
+        pg: normalizePgSubs(cfgSub.postgres_changes),
+        broadcast: cfgSub.broadcast === false ? null : { self: !!cfgSub.broadcast?.self },
+        presence: cfgSub.presence ? { key: String(cfgSub.presence.key || userId || connId) } : null,
+      };
+
+      // Broadcast listener per topic. Enabled by default for query-param
+      // subscriptions so Supabase-style clients that open
+      // /realtime/v1?channel=<topic> are actually attached immediately.
+      if (sub.broadcast) {
+        const evName = `broadcast:${topic}`;
+        const handler = (b: BroadcastMsg) => {
+          if (!sub.broadcast!.self && b.sender === connId) return;
+          send({ type: 'broadcast', event: b.event, topic, channel: topic, payload: b.payload });
+        };
+        hub.on(evName, handler);
+        disposers.push(() => hub.off(evName, handler));
+      }
+
+      // Presence listener
+      if (sub.presence) {
+        const evName = `presence:${topic}`;
+        const handler = (e: any) => {
+          send({
+            type: 'presence_diff',
+            event: 'presence_diff',
+            topic,
+            channel: topic,
+            joins: e.event === 'join' ? { [e.id]: e.state } : {},
+            leaves: e.event === 'leave' ? { [e.id]: e.state } : {},
+          });
+        };
+        hub.on(evName, handler);
+        disposers.push(() => hub.off(evName, handler));
+        // initial snapshot
+        send({ type: 'presence_state', event: 'presence_state', topic, channel: topic, state: hub.presenceSnapshot(topic) });
+      }
+
+      subs.set(topic, sub);
+      send({ type: 'subscribed', event: 'SUBSCRIBED', status: 'SUBSCRIBED', ref, topic, channel: topic });
+    };
 
     // Best-effort auth via ?apikey= or ?access_token=
     (async () => {
-      const url = new URL(req.url ?? '/', 'http://x');
       const token = url.searchParams.get('access_token') || url.searchParams.get('apikey') || '';
       if (token) {
         try {
-          const decoded: any = app.jwt.verify(token);
+          const decoded: any = await app.jwt.verify(token);
           userId = decoded?.sub ?? null;
           role = decoded?.role === 'service_role' ? 'service_role' : 'authenticated';
         } catch { /* ignore, stays anon */ }
@@ -92,7 +169,7 @@ export async function realtimeRoutes(app: FastifyInstance, cfg: Config) {
       for (const sub of subs.values()) {
         for (const rule of sub.pg) {
           if (matchPg(rule, p)) {
-            send({ type: 'postgres_changes', topic: sub.topic, payload: p });
+            send({ type: 'postgres_changes', event: p.type, topic: sub.topic, channel: sub.topic, payload: p });
             break;
           }
         }
@@ -112,45 +189,8 @@ export async function realtimeRoutes(app: FastifyInstance, cfg: Config) {
 
         case 'subscribe': {
           const topic = String(msg.topic || '');
-          if (!topic) return send({ type: 'error', ref: msg.ref, message: 'topic required' });
-          const cfgSub = msg.config || {};
-          const sub: ChannelSub = {
-            topic,
-            pg: Array.isArray(cfgSub.postgres_changes) ? cfgSub.postgres_changes : [],
-            broadcast: cfgSub.broadcast ? { self: !!cfgSub.broadcast.self } : null,
-            presence: cfgSub.presence ? { key: String(cfgSub.presence.key || userId || connId) } : null,
-          };
-
-          // Broadcast listener per topic
-          if (sub.broadcast) {
-            const evName = `broadcast:${topic}`;
-            const handler = (b: BroadcastMsg) => {
-              if (!sub.broadcast!.self && b.sender === connId) return;
-              send({ type: 'broadcast', topic, event: b.event, payload: b.payload });
-            };
-            hub.on(evName, handler);
-            disposers.push(() => hub.off(evName, handler));
-          }
-
-          // Presence listener
-          if (sub.presence) {
-            const evName = `presence:${topic}`;
-            const handler = (e: any) => {
-              send({
-                type: 'presence_diff',
-                topic,
-                joins: e.event === 'join' ? { [e.id]: e.state } : {},
-                leaves: e.event === 'leave' ? { [e.id]: e.state } : {},
-              });
-            };
-            hub.on(evName, handler);
-            disposers.push(() => hub.off(evName, handler));
-            // initial snapshot
-            send({ type: 'presence_state', topic, state: hub.presenceSnapshot(topic) });
-          }
-
-          subs.set(topic, sub);
-          return send({ type: 'subscribed', ref: msg.ref, topic });
+          addSubscription(topic, msg.config || {}, msg.ref);
+          return;
         }
 
         case 'unsubscribe': {
@@ -159,7 +199,7 @@ export async function realtimeRoutes(app: FastifyInstance, cfg: Config) {
         }
 
         case 'broadcast': {
-          const topic = String(msg.topic || '');
+          const topic = String(msg.topic || msg.channel || '');
           if (!subs.has(topic)) return send({ type: 'error', message: 'not subscribed' });
           hub.broadcast({ channel: topic, event: String(msg.event || 'message'), payload: msg.payload, sender: connId });
           return;
@@ -190,7 +230,13 @@ export async function realtimeRoutes(app: FastifyInstance, cfg: Config) {
 
     // Greet
     send({ type: 'connected', connId, role, userId });
-  });
+    const initialChannel = url.searchParams.get('channel');
+    if (initialChannel) addSubscription(initialChannel, { broadcast: { self: true } }, 'query');
+  };
+
+  // Support both Supabase-style /realtime/v1 and explicit /realtime/v1/websocket.
+  app.get('/realtime/v1', { websocket: true }, websocketHandler);
+  app.get('/realtime/v1/websocket', { websocket: true }, websocketHandler);
 
   // Simple HTTP broadcast (for server-side triggers)
   app.post<{ Body: { channel: string; event: string; payload: any } }>(

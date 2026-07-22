@@ -5,8 +5,9 @@
 #   1. Scans a dist/ dir (or a live URL) for supabase.co URLs
 #   2. Probes Pluto /health with /readyz and /healthz fallbacks
 #   3. Probes Pluto /auth/v1/settings
-#   4. Optionally verifies a real authenticated session with /auth/v1/user
-#   5. Prints ONE-LINE status: CUTOVER=OK|FAIL <reasons>
+#   4. Verifies realtime WebSocket handshake on /realtime/v1
+#   5. Optionally verifies a real authenticated session with /auth/v1/user
+#   6. Prints ONE-LINE status: CUTOVER=OK|FAIL <reasons>
 #
 # Usage:
 #   bash smoke-cutover.sh [--dist ./dist] [--url https://app.timescard.cloud] \
@@ -25,6 +26,7 @@ AUTH_EMAIL="${SMOKE_AUTH_EMAIL:-${PLUTO_TEST_EMAIL:-}}"
 AUTH_PASSWORD="${SMOKE_AUTH_PASSWORD:-${PLUTO_TEST_PASSWORD:-}}"
 REQUIRE_AUTH_SMOKE="${REQUIRE_AUTH_SMOKE:-0}"
 AUTH_STATUS="skip"
+REALTIME_STATUS="skip"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -185,11 +187,52 @@ probe_auth_session() {
   fi
 }
 
+probe_realtime_ws() {
+  local key="${VITE_PLUTO_ANON_KEY:-${PLUTO_ANON_KEY:-}}"
+  if [[ -z "$key" && -n "$DIST" && -f "$DIST/env.js" ]]; then
+    key="$(python3 - "$DIST/env.js" <<'PY'
+import re, sys
+text = open(sys.argv[1], 'r', encoding='utf-8', errors='ignore').read()
+for m in re.finditer(r"\b(?:anonKey|VITE_PLUTO_ANON_KEY)\s*:\s*(['\"])(.*?)\1", text):
+    v = m.group(2).strip()
+    if v and '...' not in v and 'replace_me' not in v.lower():
+        print(v)
+        break
+PY
+)"
+  fi
+  if [[ -z "$key" ]]; then
+    REALTIME_STATUS="skip-no-key"
+    return
+  fi
+  local ws_url
+  ws_url="${PLUTO_API/https:/wss:}"
+  ws_url="${ws_url/http:/ws:}/realtime/v1?apikey=${key}&channel=smoke-cutover"
+  local headers ws_key
+  headers="$(mktemp)"
+  ws_key="$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | awk '{print $1}')"
+  curl -sS -D "$headers" -o /dev/null --http1.1 --max-time 4 \
+    -H 'Connection: Upgrade' \
+    -H 'Upgrade: websocket' \
+    -H "Sec-WebSocket-Key: $ws_key" \
+    -H 'Sec-WebSocket-Version: 13' \
+    "$ws_url" >/dev/null 2>&1 || true
+  if grep -qE '^HTTP/[0-9.]+ 101\b' "$headers"; then
+    REALTIME_STATUS="ok"
+  else
+    REALTIME_STATUS="fail"
+    REASONS+=("pluto-realtime-ws")
+    FAIL=1
+  fi
+  rm -f "$headers"
+}
+
 [[ -n "$DIST"     ]] && scan_dir "$DIST"
 [[ -n "$SITE_URL" ]] && scan_url "$SITE_URL"
 
 # API probes
 probe_health
+probe_realtime_ws
 
 settings="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$PLUTO_API/auth/v1/settings" || echo 000)"
 [[ "$settings" =~ ^[23] ]] || { REASONS+=("pluto-auth-settings-$settings"); FAIL=1; }
@@ -197,9 +240,9 @@ settings="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$PLUTO_API/auth
 probe_auth_session
 
 if [[ $FAIL -eq 0 ]]; then
-  echo "CUTOVER=OK dist=${DIST:-skip} site=${SITE_URL:-skip} api=$PLUTO_API health=${HEALTH_PATH:-?}:$HEALTH_STATUS settings=$settings auth=$AUTH_STATUS"
+  echo "CUTOVER=OK dist=${DIST:-skip} site=${SITE_URL:-skip} api=$PLUTO_API health=${HEALTH_PATH:-?}:$HEALTH_STATUS realtime=$REALTIME_STATUS settings=$settings auth=$AUTH_STATUS"
   exit 0
 else
-  IFS=,; echo "CUTOVER=FAIL reasons=${REASONS[*]} api=$PLUTO_API health=${HEALTH_PATH:-?}:$HEALTH_STATUS settings=$settings auth=$AUTH_STATUS"
+  IFS=,; echo "CUTOVER=FAIL reasons=${REASONS[*]} api=$PLUTO_API health=${HEALTH_PATH:-?}:$HEALTH_STATUS realtime=$REALTIME_STATUS settings=$settings auth=$AUTH_STATUS"
   exit 1
 fi
