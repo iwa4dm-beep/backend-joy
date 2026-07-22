@@ -624,6 +624,24 @@ function hostFromUrl(url: string): string {
   try { return new URL(url).hostname; } catch { return url.replace(/^https?:\/\//i, "").replace(/\/.*$/, ""); }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function summarizeWorkerRepair(r: { ok: boolean; status: number; text: string }): { ok: boolean; note: string; detail: string } {
+  try {
+    const parsed = JSON.parse(r.text) as { ok?: unknown; exitCode?: unknown; hint?: unknown; tail?: unknown };
+    const exitCode = typeof parsed.exitCode === "number" ? parsed.exitCode : null;
+    const wrapperOk = r.ok && parsed.ok !== false && (exitCode == null || exitCode === 0);
+    const hint = typeof parsed.hint === "string" && parsed.hint ? ` · ${parsed.hint}` : "";
+    const tail = typeof parsed.tail === "string" && parsed.tail ? ` · ${parsed.tail.slice(-240)}` : "";
+    const exit = exitCode == null ? "" : ` exit=${exitCode}`;
+    return { ok: wrapperOk, note: `HTTP ${r.status}${exit}`, detail: `HTTP ${r.status}${exit}${hint}${tail}` };
+  } catch {
+    return { ok: r.ok, note: `HTTP ${r.status}`, detail: `HTTP ${r.status}: ${r.text.slice(0, 240)}` };
+  }
+}
+
 export type DeployAllResult = {
   ok: boolean;
   workspaceId: string;
