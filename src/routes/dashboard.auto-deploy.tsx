@@ -30,6 +30,8 @@ import { DeploymentSettingsPanel } from "@/components/auto-deploy/DeploymentSett
 import { RecommendationsPanel } from "@/components/auto-deploy/RecommendationsPanel";
 import { CustomDomainsPanel } from "@/components/auto-deploy/CustomDomainsPanel";
 import { OneClickFixPanel } from "@/components/auto-deploy/OneClickFixPanel";
+import { PrimaryHeaderVerifyCard } from "@/components/auto-deploy/PrimaryHeaderVerifyCard";
+import { LiveRepairLogsPanel } from "@/components/auto-deploy/LiveRepairLogsPanel";
 import { MigrationErrorCard, parseMigrationError } from "@/components/auto-deploy/MigrationErrorCard";
 import { loadDeploymentSettings } from "@/lib/pluto/deployment-settings";
 import { getUpstream } from "@/lib/pluto/upstream";
