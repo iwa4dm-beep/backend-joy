@@ -5,24 +5,36 @@
 #   1. Scans a dist/ dir (or a live URL) for supabase.co URLs
 #   2. Probes Pluto /health
 #   3. Probes Pluto /auth/v1/settings
-#   4. Prints ONE-LINE status: CUTOVER=OK|FAIL <reasons>
+#   4. Optionally verifies a real authenticated session with /auth/v1/user
+#   5. Prints ONE-LINE status: CUTOVER=OK|FAIL <reasons>
 #
 # Usage:
 #   bash smoke-cutover.sh [--dist ./dist] [--url https://app.timescard.cloud] \
-#                        [--api https://api.timescard.cloud]
+#                        [--api https://api.timescard.cloud] \
+#                        [--auth-token <jwt> | --email <e> --password <p>]
 #
-# Env fallbacks: DIST, SITE_URL, PLUTO_API
+# Env fallbacks: DIST, SITE_URL, PLUTO_API, SMOKE_AUTH_TOKEN,
+#                SMOKE_AUTH_EMAIL, SMOKE_AUTH_PASSWORD, REQUIRE_AUTH_SMOKE=1
 set -euo pipefail
 
 DIST="${DIST:-}"
 SITE_URL="${SITE_URL:-}"
 PLUTO_API="${PLUTO_API:-https://api.timescard.cloud}"
+AUTH_TOKEN="${SMOKE_AUTH_TOKEN:-${PLUTO_AUTH_ACCESS_TOKEN:-}}"
+AUTH_EMAIL="${SMOKE_AUTH_EMAIL:-${PLUTO_TEST_EMAIL:-}}"
+AUTH_PASSWORD="${SMOKE_AUTH_PASSWORD:-${PLUTO_TEST_PASSWORD:-}}"
+REQUIRE_AUTH_SMOKE="${REQUIRE_AUTH_SMOKE:-0}"
+AUTH_STATUS="skip"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dist) DIST="$2"; shift 2;;
     --url)  SITE_URL="$2"; shift 2;;
     --api)  PLUTO_API="$2"; shift 2;;
+    --auth-token) AUTH_TOKEN="$2"; shift 2;;
+    --email) AUTH_EMAIL="$2"; shift 2;;
+    --password) AUTH_PASSWORD="$2"; shift 2;;
+    --require-auth) REQUIRE_AUTH_SMOKE=1; shift;;
     -h|--help)
       sed -n '2,15p' "$0"; exit 0;;
     *) echo "unknown arg: $1" >&2; exit 2;;
@@ -70,6 +82,65 @@ scan_url() {
   fi
 }
 
+json_get_access_token() {
+  python3 -c 'import json,sys; print((json.load(sys.stdin) or {}).get("access_token", ""))' 2>/dev/null || true
+}
+
+json_token_payload() {
+  AUTH_EMAIL_PAYLOAD="$AUTH_EMAIL" AUTH_PASSWORD_PAYLOAD="$AUTH_PASSWORD" python3 - <<'PY'
+import json, os
+print(json.dumps({
+  "grant_type": "password",
+  "email": os.environ.get("AUTH_EMAIL_PAYLOAD", ""),
+  "password": os.environ.get("AUTH_PASSWORD_PAYLOAD", ""),
+}))
+PY
+}
+
+probe_auth_session() {
+  local token_body token user_code token_code unauth_code
+
+  if [[ -z "$AUTH_TOKEN" && -n "$AUTH_EMAIL" && -n "$AUTH_PASSWORD" ]]; then
+    token_body="$(mktemp)"
+    token_code="$(curl -sS -o "$token_body" -w '%{http_code}' --max-time 10 \
+      -X POST "$PLUTO_API/auth/v1/token?grant_type=password" \
+      -H 'content-type: application/json' \
+      --data "$(json_token_payload)" || echo 000)"
+    if [[ "$token_code" =~ ^2 ]]; then
+      AUTH_TOKEN="$(json_get_access_token < "$token_body")"
+    else
+      REASONS+=("pluto-auth-token-$token_code"); FAIL=1; AUTH_STATUS="token-$token_code"
+      rm -f "$token_body"
+      return
+    fi
+    rm -f "$token_body"
+  fi
+
+  if [[ -n "$AUTH_TOKEN" ]]; then
+    user_code="$(curl -s -o /tmp/pluto-auth-user.$$ -w '%{http_code}' --max-time 10 \
+      -H "authorization: Bearer ${AUTH_TOKEN}" "$PLUTO_API/auth/v1/user" || echo 000)"
+    rm -f /tmp/pluto-auth-user.$$
+    if [[ "$user_code" =~ ^2 ]]; then
+      AUTH_STATUS="ok"
+    else
+      REASONS+=("pluto-auth-user-$user_code"); FAIL=1; AUTH_STATUS="user-$user_code"
+    fi
+    return
+  fi
+
+  unauth_code="$(curl -s -o /tmp/pluto-auth-unauth.$$ -w '%{http_code}' --max-time 8 \
+    "$PLUTO_API/auth/v1/user" || echo 000)"
+  rm -f /tmp/pluto-auth-unauth.$$
+  if [[ "$unauth_code" = "401" ]]; then
+    AUTH_STATUS="guard-401"
+    if [[ "$REQUIRE_AUTH_SMOKE" = "1" ]]; then
+      REASONS+=("auth-credentials-missing"); FAIL=1
+    fi
+  else
+    REASONS+=("auth-user-guard-$unauth_code"); FAIL=1; AUTH_STATUS="guard-$unauth_code"
+  fi
+}
+
 [[ -n "$DIST"     ]] && scan_dir "$DIST"
 [[ -n "$SITE_URL" ]] && scan_url "$SITE_URL"
 
@@ -80,10 +151,12 @@ health="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$PLUTO_API/health
 settings="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$PLUTO_API/auth/v1/settings" || echo 000)"
 [[ "$settings" =~ ^[23] ]] || { REASONS+=("pluto-auth-settings-$settings"); FAIL=1; }
 
+probe_auth_session
+
 if [[ $FAIL -eq 0 ]]; then
-  echo "CUTOVER=OK dist=${DIST:-skip} site=${SITE_URL:-skip} api=$PLUTO_API health=$health settings=$settings"
+  echo "CUTOVER=OK dist=${DIST:-skip} site=${SITE_URL:-skip} api=$PLUTO_API health=$health settings=$settings auth=$AUTH_STATUS"
   exit 0
 else
-  IFS=,; echo "CUTOVER=FAIL reasons=${REASONS[*]} api=$PLUTO_API health=$health settings=$settings"
+  IFS=,; echo "CUTOVER=FAIL reasons=${REASONS[*]} api=$PLUTO_API health=$health settings=$settings auth=$AUTH_STATUS"
   exit 1
 fi
