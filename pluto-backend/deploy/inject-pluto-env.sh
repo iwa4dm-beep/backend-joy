@@ -45,10 +45,25 @@ INDEX="$DIST/index.html"
 SCRUBBED=0
 while IFS= read -r -d '' html; do
   if grep -qiE "<link[^>]*(dns-prefetch|preconnect)[^>]*supabase\.(co|in)|<link[^>]*supabase\.(co|in)[^>]*(dns-prefetch|preconnect)" "$html"; then
-    perl -0777 -i -pe '
-      s#\s*<link\b(?=[^>]*\brel=["'"'](?:dns-prefetch|preconnect)["'"'])(?=[^>]*\bhref=["'"']https?://[a-z0-9-]+\.supabase\.(?:co|in)[^"'"'>]*["'"'])[^>]*>\s*\n?##gi;
-      s#\s*<link\b(?=[^>]*\bhref=["'"']https?://[a-z0-9-]+\.supabase\.(?:co|in)[^"'"'>]*["'"'])(?=[^>]*\brel=["'"'](?:dns-prefetch|preconnect)["'"'])[^>]*>\s*\n?##gi;
-    ' "$html"
+    python3 - "$html" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+    before = fh.read()
+
+after = re.sub(
+    r"\s*<link\b(?=[^>]*\brel=[\"'](?:dns-prefetch|preconnect)[\"'])(?=[^>]*\bhref=[\"']https?://[a-z0-9-]+\.supabase\.(?:co|in)[^\"'>]*[\"'])[^>]*>\s*\n?",
+    "",
+    before,
+    flags=re.IGNORECASE,
+)
+
+if after != before:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(after)
+PY
     SCRUBBED=$((SCRUBBED + 1))
   fi
 done < <(find "$DIST" -type f \( -name '*.html' -o -name '*.htm' \) -print0 2>/dev/null)
