@@ -336,7 +336,7 @@ export const diagnoseRepairChannel = createServerFn({ method: "POST" })
       try {
         const j = JSON.parse(text);
         out.worker.version = j.version;
-        out.worker.features = j.features;
+        out.worker.features = j.features ? JSON.stringify(j.features) : undefined;
       } catch { /* keep raw */ }
     } catch (e) { out.worker.detail = (e as Error).message; }
 
