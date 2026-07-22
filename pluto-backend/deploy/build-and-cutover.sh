@@ -28,6 +28,8 @@
 #   SKIP_INSTALL=1       skip `bun install`
 #   SKIP_BUILD=1         reuse existing dist/
 #   SKIP_DEPLOY=1        build + verify only, don't deploy
+#   PLUTO_PROFILE=prod   profile used by secret/env helpers
+#   REQUIRE_AUTH_SMOKE=1 fail smoke if no auth token/email/password is supplied
 # ---------------------------------------------------------------
 set -euo pipefail
 
@@ -40,6 +42,8 @@ warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ -d "$PROJECT_DIR" ]] || die "project dir not found: $PROJECT_DIR"
+[[ -f "$DEPLOY_DIR/inject-pluto-env.sh" && -f "$DEPLOY_DIR/assert-no-supabase.sh" && -f "$DEPLOY_DIR/smoke-cutover.sh" ]] || \
+  die "deploy helper scripts missing in $DEPLOY_DIR. Fix: cd /root/backend-joy && git pull && sudo bash pluto-backend/deploy/install-deploy-scripts.sh"
 cd "$PROJECT_DIR"
 [[ -f package.json ]] || die "no package.json in $PROJECT_DIR"
 
@@ -136,6 +140,8 @@ if [[ -n "${SLUG:-}" && "${SKIP_DEPLOY:-0}" != "1" ]]; then
   log "deploying $ZIP to primary frontend (slug=$SLUG)"
   sudo -E PLUTO_URL="$VITE_PLUTO_URL" PLUTO_ANON_KEY="$VITE_PLUTO_ANON_KEY" \
     bash "$DEPLOY_DIR/deploy-local-zip-to-primary.sh" "$SLUG" "$ZIP"
+elif [[ -z "${SLUG:-}" ]]; then
+  warn "SLUG not set — skipping primary deploy (set SLUG=timesn to deploy)"
 fi
 
 # --- smoke test -----------------------------------------------

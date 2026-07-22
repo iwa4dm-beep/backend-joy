@@ -24,6 +24,7 @@
 #   ENABLE_WILDCARD_SUBDOMAINS=1 also install wildcard <slug>.app.timescard.cloud vhost
 #   UPSTREAM    required on first install; existing env value is preserved later
 #   SERVICE_KEY required on first install for /sandbox/unpack; existing value is preserved later
+#   PLUTO_PROFILE=prod selects /etc/pluto/<profile>/sandbox-worker.env first
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -42,7 +43,7 @@ die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 # Resolve SECRET via read-sandbox-secret.sh (single source of truth).
 # Falls back to print-sandbox-secret.sh to bootstrap the env file, then re-reads.
 if [ -z "${SECRET:-}" ] && [ -r "$DEPLOY/read-sandbox-secret.sh" ]; then
-  if val="$(bash "$DEPLOY/read-sandbox-secret.sh" 2>/dev/null)" && [ -n "$val" ]; then
+  if val="$(bash "$DEPLOY/read-sandbox-secret.sh" --profile "${PLUTO_PROFILE:-prod}" 2>/dev/null)" && [ -n "$val" ]; then
     SECRET="$val"; export SECRET
     log "loaded SECRET via read-sandbox-secret.sh (len=${#SECRET})"
   fi
@@ -50,13 +51,13 @@ fi
 if [ -z "${SECRET:-}" ] && [ -r "$DEPLOY/print-sandbox-secret.sh" ]; then
   log "no SECRET found — bootstrapping via print-sandbox-secret.sh"
   bash "$DEPLOY/print-sandbox-secret.sh" >/tmp/pluto-secret.out 2>&1 || true
-  if val="$(bash "$DEPLOY/read-sandbox-secret.sh" 2>/dev/null)" && [ -n "$val" ]; then
+  if val="$(bash "$DEPLOY/read-sandbox-secret.sh" --profile "${PLUTO_PROFILE:-prod}" 2>/dev/null)" && [ -n "$val" ]; then
     SECRET="$val"; export SECRET
     log "SECRET bootstrapped (len=${#SECRET})"
   fi
 fi
 if [ -z "${SECRET:-}" ]; then
-  die "SECRET is missing or empty. Run: sudo bash deploy/print-sandbox-secret.sh  (or export SANDBOX_SECRET=<value>)"
+  die "SECRET is missing or empty for profile=${PLUTO_PROFILE:-prod}. Run: sudo bash deploy/print-sandbox-secret.sh  (or export SANDBOX_SECRET=<value>)"
 fi
 
 
