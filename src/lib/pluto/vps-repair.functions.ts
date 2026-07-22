@@ -193,7 +193,9 @@ export const preflightAndHeal = createServerFn({ method: "POST" })
       try {
         const r = await fetch(url, { headers });
         const text = await r.text();
-        return { status: r.status, ok: r.ok, detail: text.slice(0, 240) };
+        const primaryHeader = r.headers.get("x-pluto-primary") || "";
+        const releaseHeader = r.headers.get("x-pluto-release") || "";
+        return { status: r.status, ok: r.ok, detail: `x-pluto-primary=${primaryHeader}; x-pluto-release=${releaseHeader}; ${text.slice(0, 240)}` };
       } catch (e) { return { status: 0, ok: false, detail: (e as Error).message }; }
     }
 
