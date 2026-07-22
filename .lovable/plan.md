@@ -1,62 +1,60 @@
-# Auto-Deploy Studio — 6 new panels
+# Supabase → Pluto Migration Toolkit
 
-Delivered as tabs on `/dashboard/auto-deploy` so the current pipeline UI stays intact. Each phase ships end-to-end (data + UI + tests) before the next.
+`timesn` কোডবেসটি VPS-এ (`/opt/timesn`) — এই Lovable প্রজেক্টে সরাসরি এডিট করা যাবে না। তাই আমি `pluto-backend/deploy/`-এ **তিনটি স্ক্রিপ্ট** যোগ করব যেগুলো VPS-এ চালিয়ে সম্পূর্ণ migration করা যাবে।
 
-## Phase 1 — Deployment Summary & Deployment Checks
-Read-only surfaces over the existing deploy report; no new server work.
+## কী তৈরি হবে
 
-- **Summary tab**: last deploy status, total ms, step count (ok/warn/fail), served-site URL, SSL cert issuer + days-to-expiry, resolved bundle sha, workspace/slug — sourced from `auto-deploy-history` + `liveUrls`.
-- **Checks tab**: enumerated rule list (SSL valid, SSL >30d, served-site 2xx, health probe ok, migrations applied, worker version marker, DNS resolves). Each check derived from the last deploy result; badge = pass/warn/fail with a "why" tooltip and a "re-run" button that re-hits the relevant server fn.
+### 1. `migrate-frontend-to-pluto.sh`
+Codebase স্ক্যান করে Supabase → Pluto rewrite:
+- `@supabase/supabase-js` → `@pluto/js` (package.json + imports)
+- `createClient(...)` কল-সাইট patch
+- `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` → `VITE_PLUTO_URL` / `VITE_PLUTO_ANON_KEY`
+- `src/integrations/supabase/client.ts` → `src/lib/pluto.ts` shim (backward-compatible export)
+- `.env` template তৈরি
+- Dry-run mode (`--dry`) — কোন file বদলাবে তার diff দেখাবে
 
-## Phase 2 — Build Logs
-Structured, filterable log viewer for the current deploy.
+### 2. `extract-supabase-schema.sh`
+Supabase project থেকে schema+RLS extract:
+- `pg_dump --schema-only --no-owner` চালিয়ে `schema.sql`
+- RLS policies, functions, triggers আলাদা করে dump
+- Pluto migrator-compatible bundle (`pluto-backend/migrations/tenants/<slug>.sql`)
+- Supabase-specific জিনিস (`auth.uid()` etc.) auto-translate করে Pluto equivalent-এ
 
-- Reuse the existing `steps[].attempts[].debug` stream and surface it as a virtualized log list with per-step collapsers, level filter (info/warn/error), copy-to-clipboard, and a "download .log" export.
-- Add `stepStartedAt`/`stepEndedAt` to each row so timing is visible.
-- Live tail via existing polling of `getDeployStatus`.
+### 3. `verify-pluto-cutover.sh`
+Cutover verify:
+- Deployed bundle scan → `api.timescard.cloud` + `pk_anon_` উপস্থিত কিনা
+- `/auth/v1/token` probe (Pluto login endpoint)
+- Sample data query
+- Red/Green report
 
-## Phase 3 — Deployment Settings
-Per-workspace persisted settings (new `deployment_settings` table).
+## Workflow (VPS-এ)
 
-Fields:
-- `auto_deploy_on_push` (bool)
-- `strict_served_site` (bool — flips warning→fatal)
-- `strict_ssl` (bool)
-- `served_site_url_override` (text, nullable)
-- `notify_email` (text, nullable)
-- `default_branch` (text, default `main`)
+```text
+1. bash migrate-frontend-to-pluto.sh --dry     # preview
+2. bash migrate-frontend-to-pluto.sh           # apply
+3. bash extract-supabase-schema.sh <SUPABASE_DB_URL> timesn
+4. Push schema via Dashboard → Auto Deploy → Migrations (or migrator CLI)
+5. Edit /opt/timesn/.env → VITE_PLUTO_URL, VITE_PLUTO_ANON_KEY
+6. cd /opt/timesn && bun install && bun run build
+7. zip + deploy via existing flow
+8. bash verify-pluto-cutover.sh app.timescard.cloud
+```
 
-Server fns: `getDeploymentSettings` + `updateDeploymentSettings` (both `requireSupabaseAuth`, RLS scoped to workspace admins). UI: settings form with dirty-check + save.
+## Prerequisites (আপনার লাগবে)
 
-## Phase 4 — Recommendations
-Deterministic advisor over the last deploy + settings.
+- **Pluto anon key** — Pluto Dashboard → Workspace → API Keys → `pk_anon_...`
+- **Supabase DB URL** — Supabase Dashboard → Project Settings → Database → Connection string (schema extract-এর জন্য এক-বার)
+- **User data migration** — schema-only extract করব; user rows / auth.users আলাদা flow লাগবে (script-এ warning দেব, চাইলে পরে data-migration step যোগ করব)
 
-Rules (each returns severity + suggested action + one-click apply where safe):
-- SSL cert expiring <30 days → run `fix-wildcard-ssl.sh` hint.
-- Served-site 404 → open Diagnostics panel.
-- `strict_served_site=false` but 5+ consecutive warnings → prompt to enable.
-- No `notify_email` set → prompt to add.
-- Worker version marker older than repo → prompt to run `refresh-worker.sh`.
-- Migrations drift detected → link to migration console.
+## ঝুঁকি / সীমাবদ্ধতা
 
-Rendered as dismissible cards; dismissals stored per-workspace.
+- Supabase Auth users (`auth.users` table) সরাসরি Pluto-তে move হয় না — password hash format আলাদা হতে পারে; ব্যবহারকারীদের password reset লাগতে পারে (verify-cutover script warning দেবে)
+- Storage bucket থাকলে আলাদা migration লাগবে (এই toolkit-এ নেই — চাইলে পরে যোগ করব)
+- Edge Functions (Supabase) → Pluto Edge Functions মানুয়ালি port করতে হবে
+- `auth.uid()` → Pluto equivalent (`current_setting('pluto.user_id')`) auto-translate করব, কিন্তু জটিল RLS policy manual review লাগতে পারে
 
-## Phase 5 — Assigning Custom Domains
-Manage `<slug>.app.timescard.cloud` overrides and user-supplied apex domains.
+## Approve করলে
 
-- New table `custom_domains` (workspace_id, slug, hostname, status, verify_token, cert_status, last_checked_at).
-- Server fns: `listCustomDomains`, `addCustomDomain`, `removeCustomDomain`, `verifyCustomDomain` (checks A record → 185.158.133.1 pattern via DNS-over-HTTPS, then triggers wildcard cert issuance via existing `fix-wildcard-ssl.sh` on the VPS through the sandbox worker).
-- UI: table with hostname input, status pill (Pending DNS → Verifying → Active → Failed), copy-DNS-record helper, remove action.
-- Wire nginx installer to include per-hostname server block when domain is Active.
+স্ক্রিপ্ট ৩টা `pluto-backend/deploy/`-এ commit করব। তারপর আপনি VPS-এ পুল করে চালাবেন — আমি step-by-step guide করব এবং verify script-এর আউটপুট দেখে যেকোনো mismatch fix করব।
 
-## Technical notes
-
-- All new tables include `GRANT` + RLS policies scoped via `has_role(auth.uid(), 'admin')` where writes are admin-only; reads scoped to workspace members via existing `workspace_members` join.
-- All new server fns use `requireSupabaseAuth` and never load `supabaseAdmin` at module scope.
-- UI added as new tabs in `dashboard.auto-deploy.tsx` under an existing `<Tabs>` structure; each tab is a separate component file under `src/components/auto-deploy/` to keep the route file small.
-- E2E tests per phase: history-seeded render tests for Summary/Checks/Logs, form-round-trip test for Settings, rule-fires test for Recommendations, add-remove-verify flow for Custom Domains.
-
-## Execution order
-Phase 1 → 2 → 3 → 4 → 5, one phase per turn. Confirm after each phase before continuing.
-
-Shall I start with **Phase 1 (Summary + Checks)** now?
+চাইলে **user data migration** আর **storage migration**-ও আজই এই প্ল্যানে যোগ করতে পারি — জানান।
