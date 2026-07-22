@@ -1041,6 +1041,9 @@ function AutoDeployInner() {
       {/* Deployment settings — Phase 3 */}
       <DeploymentSettingsPanel workspaceId={workspaceId} />
 
+      {/* Live X-Pluto-Primary red/green verification (runs after every deploy) */}
+      <PrimaryHeaderVerifyCard slug={slug} refreshKey={verifyRefreshKey} />
+
       {/* Summary + Checks */}
       {deployResult && <DeploySummaryChecksPanel result={deployResult} />}
 
@@ -1050,11 +1053,15 @@ function AutoDeployInner() {
       {/* Build logs — Phase 2 */}
       {deployResult && <BuildLogsPanel result={deployResult} />}
 
+      {/* Real-time deployer / nginx tail + hint stream */}
+      <LiveRepairLogsPanel slug={slug} refreshKey={verifyRefreshKey} />
+
       {/* Custom domains — Phase 5 */}
       <CustomDomainsPanel workspaceId={workspaceId} currentSlug={slug} />
 
       {/* One-click VPS repair — auto-heal preflight + remediation buttons */}
       <OneClickFixPanel slug={slug} />
+
 
 
       {/* Per-step deploy result */}
