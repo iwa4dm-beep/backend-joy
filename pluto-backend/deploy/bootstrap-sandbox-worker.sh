@@ -171,51 +171,95 @@ fi
 install -m 0640 -o root -g www-data "$TMP" "$ENV_FILE" 2>/dev/null || install -m 0600 -o root -g root "$TMP" "$ENV_FILE"
 rm -f "$TMP"
 
+echo "▶ Mirroring deploy scripts to stable path /opt/pluto/deploy"
+SRC_DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
+STABLE_DEPLOY_DIR="/opt/pluto/deploy"
+install -d -m 0755 "$STABLE_DEPLOY_DIR"
+# Copy every deploy script so the wrapper doesn't depend on the repo path
+# (fixes exit 127 when the checkout is moved/renamed after install).
+cp -a "$SRC_DEPLOY_DIR"/. "$STABLE_DEPLOY_DIR"/
+find "$STABLE_DEPLOY_DIR" -maxdepth 2 -type f -name '*.sh' -exec chmod 0755 {} +
+
 echo "▶ Installing /usr/local/sbin/pluto-repair wrapper + sudoers rule"
-DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-cat > /usr/local/sbin/pluto-repair <<PLUTO_REPAIR_EOF
+cat > /usr/local/sbin/pluto-repair <<'PLUTO_REPAIR_EOF'
 #!/usr/bin/env bash
 # Whitelisted repair dispatcher invoked by pluto-sandbox-worker via sudo.
-# Accepts: <action> [--slug S] [--wildcard W] [--acme-email E]
+# Accepts: <action> [--slug S] [--wildcard W] [--acme-email E] [--upstream U]
 set -euo pipefail
 umask 022
-DEPLOY_DIR="${DEPLOY_DIR}"
-ACTION="\${1:-}"; shift || true
+
+# Resolve deploy dir: prefer the stable mirror, fall back to common repo paths
+# so a moved/renamed checkout doesn't break the buttons.
+CANDIDATES=(
+  "/opt/pluto/deploy"
+  "/root/backend-joy/pluto-backend/deploy"
+  "/root/pluto-backend/deploy"
+  "/root/frfrom/pluto-backend/deploy"
+  "/srv/pluto-backend/deploy"
+  "/opt/pluto-backend/deploy"
+)
+# Also auto-discover any pluto-backend checkout under /root or /srv.
+while IFS= read -r p; do CANDIDATES+=("$p"); done < <(
+  find /root /srv /opt -maxdepth 4 -type d -name deploy -path '*/pluto-backend/deploy' 2>/dev/null | head -20
+)
+DEPLOY_DIR=""
+for d in "${CANDIDATES[@]}"; do
+  if [ -f "$d/repair-sandbox-worker-and-site.sh" ]; then DEPLOY_DIR="$d"; break; fi
+done
+if [ -z "$DEPLOY_DIR" ]; then
+  echo "pluto-repair: no deploy dir found (looked in: ${CANDIDATES[*]})" >&2
+  echo "  Re-run: sudo bash pluto-backend/deploy/bootstrap-sandbox-worker.sh" >&2
+  exit 127
+fi
+
+ACTION="${1:-}"; shift || true
 SLUG=""; WILDCARD=""; ACME_EMAIL=""; UPSTREAM=""
-while [ \$# -gt 0 ]; do
-  case "\$1" in
-    --slug) SLUG="\${2:-}"; shift 2;;
-    --wildcard) WILDCARD="\${2:-}"; shift 2;;
-    --acme-email) ACME_EMAIL="\${2:-}"; shift 2;;
-    --upstream) UPSTREAM="\${2:-}"; shift 2;;
-    *) echo "unknown arg: \$1" >&2; exit 2;;
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --slug) SLUG="${2:-}"; shift 2;;
+    --wildcard) WILDCARD="${2:-}"; shift 2;;
+    --acme-email) ACME_EMAIL="${2:-}"; shift 2;;
+    --upstream) UPSTREAM="${2:-}"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
 run_one() {
-  case "\$1" in
-    worker-and-site) SLUG="\$SLUG" WILDCARD="\$WILDCARD" ACME_EMAIL="\$ACME_EMAIL" bash "\$DEPLOY_DIR/repair-sandbox-worker-and-site.sh";;
-    wildcard-ssl)    APEX="\${WILDCARD:-app.timescard.cloud}" ACME_EMAIL="\$ACME_EMAIL" bash "\$DEPLOY_DIR/fix-wildcard-ssl.sh" "\$SLUG";;
-    per-slug-ssl)    bash "\$DEPLOY_DIR/issue-per-slug-cert.sh" "\$SLUG" "\${WILDCARD:-app.timescard.cloud}" "\${ACME_EMAIL:-admin@timescard.cloud}";;
+  case "$1" in
+    worker-and-site) SLUG="$SLUG" WILDCARD="$WILDCARD" ACME_EMAIL="$ACME_EMAIL" bash "$DEPLOY_DIR/repair-sandbox-worker-and-site.sh";;
+    wildcard-ssl)    APEX="${WILDCARD:-app.timescard.cloud}" ACME_EMAIL="$ACME_EMAIL" bash "$DEPLOY_DIR/fix-wildcard-ssl.sh" "$SLUG";;
+    per-slug-ssl)    bash "$DEPLOY_DIR/issue-per-slug-cert.sh" "$SLUG" "${WILDCARD:-app.timescard.cloud}" "${ACME_EMAIL:-admin@timescard.cloud}";;
     primary-frontend)
-      APEX_DOMAIN="\${WILDCARD:-app.timescard.cloud}" bash "\$DEPLOY_DIR/set-primary-frontend.sh" --install --email "\${ACME_EMAIL:-admin@timescard.cloud}"
-      [ -n "\$SLUG" ] && APEX_DOMAIN="\${WILDCARD:-app.timescard.cloud}" bash "\$DEPLOY_DIR/set-primary-frontend.sh" --activate "\$SLUG"
+      APEX_DOMAIN="${WILDCARD:-app.timescard.cloud}" bash "$DEPLOY_DIR/set-primary-frontend.sh" --install --email "${ACME_EMAIL:-admin@timescard.cloud}"
+      [ -n "$SLUG" ] && APEX_DOMAIN="${WILDCARD:-app.timescard.cloud}" bash "$DEPLOY_DIR/set-primary-frontend.sh" --activate "$SLUG"
       ;;
-    deploy-and-verify) SLUG="\$SLUG" bash "\$DEPLOY_DIR/deploy-and-verify.sh";;
+    deploy-and-verify) SLUG="$SLUG" bash "$DEPLOY_DIR/deploy-and-verify.sh";;
     set-upstream)
-      [ -n "\$UPSTREAM" ] || { echo "set-upstream requires --upstream <url>" >&2; exit 2; }
-      UPSTREAM="\$UPSTREAM" bash "\$DEPLOY_DIR/set-upstream-env.sh"
+      [ -n "$UPSTREAM" ] || { echo "set-upstream requires --upstream <url>" >&2; exit 2; }
+      UPSTREAM="$UPSTREAM" bash "$DEPLOY_DIR/set-upstream-env.sh"
       ;;
-    *) echo "unknown action: \$1" >&2; exit 2;;
+    sync-scripts)
+      # Refresh /opt/pluto/deploy from the discovered repo checkout.
+      SRC="$DEPLOY_DIR"
+      if [ "$SRC" != "/opt/pluto/deploy" ]; then
+        install -d -m 0755 /opt/pluto/deploy
+        cp -a "$SRC"/. /opt/pluto/deploy/
+        find /opt/pluto/deploy -maxdepth 2 -type f -name '*.sh' -exec chmod 0755 {} +
+        echo "synced from $SRC → /opt/pluto/deploy"
+      else
+        echo "already using /opt/pluto/deploy"
+      fi
+      ;;
+    *) echo "unknown action: $1" >&2; exit 2;;
   esac
 }
-case "\$ACTION" in
+case "$ACTION" in
   all)
     run_one worker-and-site
     run_one primary-frontend
     run_one deploy-and-verify
     ;;
-  worker-and-site|wildcard-ssl|per-slug-ssl|primary-frontend|deploy-and-verify|set-upstream) run_one "\$ACTION";;
-  *) echo "invalid action: \$ACTION" >&2; exit 2;;
+  worker-and-site|wildcard-ssl|per-slug-ssl|primary-frontend|deploy-and-verify|set-upstream|sync-scripts) run_one "$ACTION";;
+  *) echo "invalid action: $ACTION" >&2; exit 2;;
 esac
 PLUTO_REPAIR_EOF
 chmod 0755 /usr/local/sbin/pluto-repair
