@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useAuth } from "@/lib/pluto/auth-context";
 import {
   Activity, ArrowRight, Boxes, Check, Cloud, Code2, Copy, Database,
   Files, Github, KeyRound, Layers, LineChart, Lock, Radio, Search,
@@ -236,12 +237,31 @@ const faqs = [
 // ---------- page ------------------------------------------------------------
 
 function Landing() {
+  const { session, loading } = useAuth();
+  const isDashboardHost =
+    typeof window !== "undefined" &&
+    window.location.hostname === "dashboard.timescard.cloud";
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (window.location.hostname === "dashboard.timescard.cloud") {
+    if (!isDashboardHost) return;
+    if (loading) return;
+    if (session) {
       window.location.replace("/dashboard");
+    } else {
+      window.location.replace("/auth");
     }
-  }, []);
+  }, [isDashboardHost, loading, session]);
+
+  // On the dashboard subdomain we never want to flash the marketing page.
+  if (isDashboardHost) {
+    return (
+      <div className="min-h-dvh flex items-center justify-center bg-background text-muted-foreground text-sm">
+        Loading Pluto dashboard…
+      </div>
+    );
+  }
+
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
