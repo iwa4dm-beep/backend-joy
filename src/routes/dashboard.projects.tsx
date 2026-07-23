@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Copy, ExternalLink, FolderKanban, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, ExternalLink, FolderKanban, KeyRound, Pencil, Plus, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/components/pluto/PageHeader";
 import { HelpPanel } from "@/components/help/HelpPanel";
 import { dashboardProjectsHelp } from "@/content/help/dashboard.projects";
@@ -25,7 +25,9 @@ function ProjectsPage() {
   const [newKind, setNewKind] = useState<"anon" | "service_role">("anon");
   const [projectName, setProjectName] = useState("");
   const [projectSlug, setProjectSlug] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string; slug: string } | null>(null);
   const slugStatus = useMemo(() => checkSlug(projectSlug), [projectSlug]);
+  const editSlugStatus = useMemo(() => (editing ? checkSlug(editing.slug) : { ok: true as const }), [editing]);
 
   const loadTop = useCallback(async () => {
     if (!isLive()) return;
@@ -81,6 +83,26 @@ function ProjectsPage() {
   }
 
   const visibleProjects = projects.filter((p) => !wsId || !p.workspace_id || p.workspace_id === wsId);
+
+  async function saveEdit() {
+    if (!editing) return;
+    if (!editing.name.trim() || !editSlugStatus.ok) return;
+    setErr(null);
+    try {
+      await live.admin.projects.update(editing.id, { name: editing.name.trim(), slug: editing.slug.trim() });
+      setEditing(null);
+      setProjects(await live.admin.projects.list());
+    } catch (e) { setErr(e); }
+  }
+
+  async function removeProject(id: string, name: string) {
+    if (!confirm(`Delete project "${name}"? এই action reversible নয় — সব API keys revoke হয়ে যাবে।`)) return;
+    setErr(null);
+    try {
+      await live.admin.projects.remove(id);
+      setProjects(await live.admin.projects.list());
+    } catch (e) { setErr(e); }
+  }
 
   async function revoke(id: string) {
     if (!wsId) return;
@@ -167,20 +189,78 @@ function ProjectsPage() {
                 <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Project</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Slug</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Live URL</th>
+                <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {visibleProjects.length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-xs text-muted-foreground">No projects in this workspace yet.</td></tr>}
+              {visibleProjects.length === 0 && <tr><td colSpan={4} className="px-3 py-4 text-center text-xs text-muted-foreground">No projects in this workspace yet.</td></tr>}
               {visibleProjects.map((p) => {
                 const url = previewSubdomainUrl(p.slug);
+                const isEditing = editing?.id === p.id;
                 return (
                   <tr key={p.id} className="border-t border-border">
-                    <td className="px-3 py-2">{p.name}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{p.slug}</td>
+                    <td className="px-3 py-2">
+                      {isEditing ? (
+                        <input
+                          value={editing!.name}
+                          onChange={(e) => setEditing({ ...editing!, name: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                        />
+                      ) : p.name}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {isEditing ? (
+                        <input
+                          value={editing!.slug}
+                          onChange={(e) => setEditing({ ...editing!, slug: coerceSlug(e.target.value) })}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs font-mono"
+                        />
+                      ) : p.slug}
+                    </td>
                     <td className="px-3 py-2 text-xs">
                       <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-foreground underline underline-offset-2">
                         {url} <ExternalLink className="h-3 w-3" />
                       </a>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="inline-flex items-center gap-1">
+                        {isEditing ? (
+                          <>
+                            <button
+                              onClick={saveEdit}
+                              disabled={!editing!.name.trim() || !editSlugStatus.ok}
+                              className="rounded-md border border-input p-1 hover:bg-accent disabled:opacity-50"
+                              title="Save"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setEditing(null)}
+                              className="rounded-md border border-input p-1 hover:bg-accent"
+                              title="Cancel"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setEditing({ id: p.id, name: p.name, slug: p.slug })}
+                              className="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-accent"
+                              title="Rename"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => removeProject(p.id, p.name)}
+                              className="rounded-md p-1 text-muted-foreground hover:text-destructive hover:bg-accent"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -227,6 +307,11 @@ function ProjectsPage() {
             <Plus className="h-3.5 w-3.5" /> Mint
           </button>
         </div>
+        {keys.some((k) => !k.revoked_at && k.name === newName.trim() && k.kind === newKind) && (
+          <p className="-mt-2 mb-3 text-xs text-amber-600">
+            এই workspace-এ "{newName.trim()}" নামের active {newKind} key ইতিমধ্যেই আছে — mint duplicate name reject করবে। ভিন্ন নাম দিন (e.g. <code className="font-mono">{newName.trim()}-2</code>)।
+          </p>
+        )}
 
         <table className="w-full text-sm">
           <thead className="bg-muted/40">

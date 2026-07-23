@@ -363,6 +363,26 @@ export async function adminRoutes(app: FastifyInstance, cfg: Config) {
     return reply.send(row);
   });
 
+  app.patch<{ Params: { id: string } }>('/admin/v1/projects/:id', async (req, reply) => {
+    uuidSchema.parse(req.params.id);
+    const actor = await requireAuth(req, cfg);
+    await requireProjectRole(cfg, req.params.id, actor, ['owner', 'admin']);
+    const body = z.object({
+      name: z.string().min(1).max(120).optional(),
+      slug: slugSchema.optional(),
+    }).parse(req.body);
+    if (!body.name && !body.slug) return reply.code(400).send({ error: 'no_fields' });
+    const sql = getSql(cfg);
+    const [row] = await sql<any[]>`
+      update admin.projects set
+        name = coalesce(${body.name ?? null}, name),
+        slug = coalesce(${body.slug ?? null}, slug)
+      where id = ${req.params.id}
+      returning *`;
+    if (!row) return reply.code(404).send({ error: 'Not found' });
+    await logAudit(cfg, { actor_id: actor.userId, project_id: row.id, action: 'project.update', resource_type: 'project', resource_id: row.id, params: body });
+    return reply.send(row);
+
   app.delete<{ Params: { id: string } }>('/admin/v1/projects/:id', async (req, reply) => {
     uuidSchema.parse(req.params.id);
     const actor = await requireAuth(req, cfg);

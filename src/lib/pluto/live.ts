@@ -212,9 +212,20 @@ export async function api<T = unknown>(
   let res = await doFetch();
   let text = await res.text();
   let json = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : null;
-  const messageOf = () => (typeof json === "object" && json
-    ? String((json as { message?: unknown; error?: unknown; reason?: unknown }).message ?? (json as { error?: unknown }).error ?? (json as { reason?: unknown }).reason ?? `HTTP ${res.status}`)
-    : (typeof json === "string" ? json : `HTTP ${res.status}`));
+  const messageOf = () => {
+    if (typeof json === "string") return json || `HTTP ${res.status}`;
+    if (!json || typeof json !== "object") return `HTTP ${res.status}`;
+    const j = json as { message?: unknown; error?: unknown; reason?: unknown; body?: unknown; offline?: unknown; upstreamStatus?: unknown };
+    // Offline fallback: unwrap upstream error body so real DB / validator messages surface.
+    if (j.offline === true && typeof j.body === "string") {
+      try {
+        const inner = JSON.parse(j.body) as { message?: string; detail?: string; error?: string };
+        const parts = [inner.message ?? inner.error, inner.detail].filter(Boolean) as string[];
+        if (parts.length) return parts.join(" — ");
+      } catch { /* fall through */ }
+    }
+    return String(j.message ?? j.error ?? j.reason ?? `HTTP ${res.status}`);
+  };
 
   if (!skipRefresh && !service && looksLikeExpiredAuth(res.status, messageOf())) {
     const ok = await attemptRefresh();
@@ -762,6 +773,13 @@ export const live = {
           "/admin/v1/projects",
           { method: "POST", service: true, body: JSON.stringify(input) },
         ),
+      update: (id: string, patch: { name?: string; slug?: string }) =>
+        api<{ id: string; slug: string; name: string; workspace_id?: string | null }>(
+          `/admin/v1/projects/${id}`,
+          { method: "PATCH", service: true, body: JSON.stringify(patch) },
+        ),
+      remove: (id: string) =>
+        api<{ message: string }>(`/admin/v1/projects/${id}`, { method: "DELETE", service: true }),
     },
     users: {
       list:   () => api<AdminUser[]>("/admin/v1/users", { service: true }),
