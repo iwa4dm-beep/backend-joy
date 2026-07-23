@@ -84,6 +84,26 @@ function ProjectsPage() {
 
   const visibleProjects = projects.filter((p) => !wsId || !p.workspace_id || p.workspace_id === wsId);
 
+  async function saveEdit() {
+    if (!editing) return;
+    if (!editing.name.trim() || !editSlugStatus.ok) return;
+    setErr(null);
+    try {
+      await live.admin.projects.update(editing.id, { name: editing.name.trim(), slug: editing.slug.trim() });
+      setEditing(null);
+      setProjects(await live.admin.projects.list());
+    } catch (e) { setErr(e); }
+  }
+
+  async function removeProject(id: string, name: string) {
+    if (!confirm(`Delete project "${name}"? এই action reversible নয় — সব API keys revoke হয়ে যাবে।`)) return;
+    setErr(null);
+    try {
+      await live.admin.projects.remove(id);
+      setProjects(await live.admin.projects.list());
+    } catch (e) { setErr(e); }
+  }
+
   async function revoke(id: string) {
     if (!wsId) return;
     try {
