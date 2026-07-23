@@ -773,6 +773,13 @@ export const live = {
           "/admin/v1/projects",
           { method: "POST", service: true, body: JSON.stringify(input) },
         ),
+      update: (id: string, patch: { name?: string; slug?: string }) =>
+        api<{ id: string; slug: string; name: string; workspace_id?: string | null }>(
+          `/admin/v1/projects/${id}`,
+          { method: "PATCH", service: true, body: JSON.stringify(patch) },
+        ),
+      remove: (id: string) =>
+        api<{ message: string }>(`/admin/v1/projects/${id}`, { method: "DELETE", service: true }),
     },
     users: {
       list:   () => api<AdminUser[]>("/admin/v1/users", { service: true }),
