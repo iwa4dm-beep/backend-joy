@@ -189,20 +189,78 @@ function ProjectsPage() {
                 <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Project</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Slug</th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Live URL</th>
+                <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {visibleProjects.length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-xs text-muted-foreground">No projects in this workspace yet.</td></tr>}
+              {visibleProjects.length === 0 && <tr><td colSpan={4} className="px-3 py-4 text-center text-xs text-muted-foreground">No projects in this workspace yet.</td></tr>}
               {visibleProjects.map((p) => {
                 const url = previewSubdomainUrl(p.slug);
+                const isEditing = editing?.id === p.id;
                 return (
                   <tr key={p.id} className="border-t border-border">
-                    <td className="px-3 py-2">{p.name}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{p.slug}</td>
+                    <td className="px-3 py-2">
+                      {isEditing ? (
+                        <input
+                          value={editing!.name}
+                          onChange={(e) => setEditing({ ...editing!, name: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                        />
+                      ) : p.name}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {isEditing ? (
+                        <input
+                          value={editing!.slug}
+                          onChange={(e) => setEditing({ ...editing!, slug: coerceSlug(e.target.value) })}
+                          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs font-mono"
+                        />
+                      ) : p.slug}
+                    </td>
                     <td className="px-3 py-2 text-xs">
                       <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-foreground underline underline-offset-2">
                         {url} <ExternalLink className="h-3 w-3" />
                       </a>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="inline-flex items-center gap-1">
+                        {isEditing ? (
+                          <>
+                            <button
+                              onClick={saveEdit}
+                              disabled={!editing!.name.trim() || !editSlugStatus.ok}
+                              className="rounded-md border border-input p-1 hover:bg-accent disabled:opacity-50"
+                              title="Save"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setEditing(null)}
+                              className="rounded-md border border-input p-1 hover:bg-accent"
+                              title="Cancel"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setEditing({ id: p.id, name: p.name, slug: p.slug })}
+                              className="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-accent"
+                              title="Rename"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => removeProject(p.id, p.name)}
+                              className="rounded-md p-1 text-muted-foreground hover:text-destructive hover:bg-accent"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
