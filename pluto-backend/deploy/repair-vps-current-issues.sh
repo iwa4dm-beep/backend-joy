@@ -118,8 +118,14 @@ ensure_env_key() {
   local key="$1" fallback="${2:-}" generated_msg="${3:-set}"
   local value
   value="$(env_value_from_file "$key" "$ENV_FILE" || true)"
+  if [[ "$value" == *CHANGE_ME* || "$value" == *your-domain.com* || "$value" == *your-frontend.com* ]]; then
+    value=""
+  fi
   if [ -z "$value" ]; then
     value="$(env_value_from_file "$key" "$ROOT/docker/.env" || true)"
+    if [[ "$value" == *CHANGE_ME* || "$value" == *your-domain.com* || "$value" == *your-frontend.com* ]]; then
+      value=""
+    fi
   fi
   if [ -z "$value" ]; then
     value="$(env_value_from_containers "$key" || true)"
@@ -223,7 +229,6 @@ pg_container() {
 
 container_env() {
   local container="$1" key="$2"
-  $SUDO docker exec "$container" sh -lc "printf '%s' \"\">${key}\"" >/dev/null 2>&1 || true
   $SUDO docker exec "$container" env 2>/dev/null | awk -F= -v k="$key" '$1==k {sub(/^[^=]*=/,""); print; exit}'
 }
 
