@@ -28,15 +28,39 @@ type ReadSession = {
   refresh_token?: string;
 } | null;
 
-function readClientAuthHeader(): string | null {
+function readClientSession(): (ReadSession & { expires_at?: number; user?: { id?: string } }) | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as ReadSession;
-    return parsed?.access_token ? `Bearer ${parsed.access_token}` : null;
+    return JSON.parse(raw);
   } catch {
     return null;
+  }
+}
+
+function readClientAuthHeader(): string | null {
+  const s = readClientSession();
+  return s?.access_token ? `Bearer ${s.access_token}` : null;
+}
+
+/**
+ * If the session is missing or within 30s of expiry, try a proactive refresh
+ * BEFORE hitting the server-fn. Prevents most 401s from ever reaching the
+ * user, so retry logic below is only needed for race conditions.
+ */
+async function refreshIfExpiringSoon(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const s = readClientSession();
+  if (!s?.refresh_token) return;
+  const expMs = (s.expires_at ?? 0) * 1000;
+  const skewMs = 30_000;
+  if (expMs && expMs - Date.now() > skewMs) return;
+  try {
+    const { live } = await import("./live");
+    await live.auth.refresh();
+  } catch {
+    /* swallow — server phase will produce the canonical 401 */
   }
 }
 
