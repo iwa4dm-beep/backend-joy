@@ -6,16 +6,23 @@ import { useAuth } from "@/lib/pluto/auth-context";
 import { describeError, isLive } from "@/lib/pluto/live";
 import { ErrorBanner } from "@/components/pluto/ErrorBanner";
 
+type AuthSearch = { redirect?: string; reason?: "session_expired" | "sign_out" };
+
 export const Route = createFileRoute("/auth")({
   ssr: false,
+  validateSearch: (s: Record<string, unknown>): AuthSearch => ({
+    redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    reason: s.reason === "session_expired" || s.reason === "sign_out" ? s.reason : undefined,
+  }),
   head: () => ({ meta: [{ title: "Sign in — Pluto BaaS" }] }),
   component: AuthPage,
 });
 
 function AuthPage() {
   const navigate = useNavigate();
+  const search = Route.useSearch();
   const { session, signIn, signUp, loading } = useAuth();
-  const [mode, setMode] = useState<"signin" | "signup">("signup");
+  const [mode, setMode] = useState<"signin" | "signup">(search.reason === "session_expired" ? "signin" : "signup");
   const [email, setEmail] = useState("admin@timescard.cloud");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -23,8 +30,11 @@ function AuthPage() {
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
-    if (!loading && session) navigate({ to: "/dashboard" });
-  }, [loading, session, navigate]);
+    if (!loading && session) {
+      const to = search.redirect && search.redirect.startsWith("/") ? search.redirect : "/dashboard";
+      navigate({ to });
+    }
+  }, [loading, session, navigate, search.redirect]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
