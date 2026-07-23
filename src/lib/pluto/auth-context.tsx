@@ -47,8 +47,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onStorage = (e: StorageEvent) => {
       if (e.key === "pluto.session.v1") setSession(liveSessionToPluto());
     };
-    const onRefreshed = () => setSession(liveSessionToPluto());
-    const onSignedOut = () => setSession(null);
+    const onRefreshed = () => {
+      // eslint-disable-next-line no-console
+      console.info("[pluto-auth] session refreshed", { at: new Date().toISOString() });
+      setSession(liveSessionToPluto());
+    };
+    const onSignedOut = (e: Event) => {
+      const detail = (e as CustomEvent<{ reason?: string }>).detail;
+      // eslint-disable-next-line no-console
+      console.warn("[pluto-auth] signed-out event", {
+        at: new Date().toISOString(),
+        reason: detail?.reason ?? "manual",
+        route: typeof window !== "undefined" ? window.location.pathname : undefined,
+      });
+      setSession(null);
+      // If the session died due to refresh_failed on a protected page,
+      // send the user straight to /auth with a friendly banner.
+      if (detail?.reason === "refresh_failed" && typeof window !== "undefined") {
+        const path = window.location.pathname;
+        if (path.startsWith("/dashboard")) {
+          const qs = new URLSearchParams({ redirect: path, reason: "session_expired" });
+          window.location.replace(`/auth?${qs.toString()}`);
+        }
+      }
+    };
     window.addEventListener("storage", onStorage);
     window.addEventListener("pluto:auth:refreshed", onRefreshed as EventListener);
     window.addEventListener("pluto:auth:signed-out", onSignedOut as EventListener);

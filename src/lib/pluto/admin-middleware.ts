@@ -28,15 +28,39 @@ type ReadSession = {
   refresh_token?: string;
 } | null;
 
-function readClientAuthHeader(): string | null {
+function readClientSession(): (ReadSession & { expires_at?: number; user?: { id?: string } }) | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as ReadSession;
-    return parsed?.access_token ? `Bearer ${parsed.access_token}` : null;
+    return JSON.parse(raw);
   } catch {
     return null;
+  }
+}
+
+function readClientAuthHeader(): string | null {
+  const s = readClientSession();
+  return s?.access_token ? `Bearer ${s.access_token}` : null;
+}
+
+/**
+ * If the session is missing or within 30s of expiry, try a proactive refresh
+ * BEFORE hitting the server-fn. Prevents most 401s from ever reaching the
+ * user, so retry logic below is only needed for race conditions.
+ */
+async function refreshIfExpiringSoon(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const s = readClientSession();
+  if (!s?.refresh_token) return;
+  const expMs = (s.expires_at ?? 0) * 1000;
+  const skewMs = 30_000;
+  if (expMs && expMs - Date.now() > skewMs) return;
+  try {
+    const { live } = await import("./live");
+    await live.auth.refresh();
+  } catch {
+    /* swallow — server phase will produce the canonical 401 */
   }
 }
 
@@ -94,6 +118,18 @@ async function verifyAdminToken(authHeader: string): Promise<VerifiedAdmin> {
     });
   }
   if (res.status === 401) {
+    let route: string | undefined;
+    try {
+      const mod = await import("@tanstack/react-start/server");
+      route = new URL(mod.getRequest().url).pathname;
+    } catch { /* not in request context */ }
+    const tokenPrefix = authHeader.replace(/^Bearer\s+/i, "").slice(0, 8);
+    // eslint-disable-next-line no-console
+    console.warn("[pluto-auth] verify.401 (session expired)", {
+      at: new Date().toISOString(),
+      route,
+      tokenPrefix: `${tokenPrefix}…`,
+    });
     throw authError(401, {
       error: "unauthorized",
       message: "Session expired",
@@ -197,15 +233,52 @@ function debugAuth(stage: string, info: Record<string, unknown>): void {
 
 export const requirePlutoAdmin = createMiddleware({ type: "function" })
   .client(async ({ next }) => {
-    const authHeader = readClientAuthHeader();
+    // Proactively refresh a near-expiry token so most 401s never happen.
+    await refreshIfExpiringSoon();
+    let authHeader = readClientAuthHeader();
+    const sess = readClientSession();
     debugAuth("client.phase", {
       hasWindow: typeof window !== "undefined",
       headerFound: !!authHeader,
+      userId: sess?.user?.id ?? null,
+      expiresIn: sess?.expires_at ? sess.expires_at * 1000 - Date.now() : null,
+      route: typeof window !== "undefined" ? window.location.pathname : undefined,
       header: authHeader ?? "(empty)",
     });
-    return next({
-      sendContext: { __plutoAuthHeader: authHeader ?? "" },
-    });
+    try {
+      const result = await next({
+        sendContext: { __plutoAuthHeader: authHeader ?? "" },
+      });
+      return result;
+    } catch (err) {
+      // Server phase surfaced a 401 — attempt a single refresh + retry so a
+      // token that expired mid-flight doesn't force the user to re-sign-in.
+      const isAuthErr = err instanceof Error && /PlutoAuthError_401|"status":\s*401/.test(err.message + " " + err.name);
+      if (!isAuthErr || typeof window === "undefined") {
+        // eslint-disable-next-line no-console
+        if (isAuthErr) console.warn("[pluto-auth] client.401 (no-window, cannot retry)", {
+          route: undefined, userId: sess?.user?.id ?? null,
+        });
+        throw err;
+      }
+      try {
+        const { live } = await import("./live");
+        const ok = await live.auth.refresh().then(() => true).catch(() => false);
+        // eslint-disable-next-line no-console
+        console.warn("[pluto-auth] client.401 → refresh+retry", {
+          at: new Date().toISOString(),
+          route: window.location.pathname,
+          userId: sess?.user?.id ?? null,
+          refreshed: ok,
+        });
+        if (!ok) throw err;
+        authHeader = readClientAuthHeader();
+        if (!authHeader) throw err;
+        return await next({ sendContext: { __plutoAuthHeader: authHeader } });
+      } catch {
+        throw err;
+      }
+    }
   })
   .server(async ({ next, context }) => {
     let header = (context as { __plutoAuthHeader?: string }).__plutoAuthHeader ?? "";
@@ -229,6 +302,16 @@ export const requirePlutoAdmin = createMiddleware({ type: "function" })
       finalHeader: header || "(empty)",
     });
     if (!header || !/^Bearer\s+\S+/i.test(header)) {
+      let route: string | undefined;
+      try {
+        const mod = await import("@tanstack/react-start/server");
+        route = new URL(mod.getRequest().url).pathname;
+      } catch { /* not in request context */ }
+      // eslint-disable-next-line no-console
+      console.warn("[pluto-auth] server.401", {
+        at: new Date().toISOString(),
+        source, recovered, route,
+      });
       throw authError(401, {
         error: "unauthorized",
         message: "Sign in required",

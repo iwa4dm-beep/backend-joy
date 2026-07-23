@@ -6,16 +6,23 @@ import { useAuth } from "@/lib/pluto/auth-context";
 import { describeError, isLive } from "@/lib/pluto/live";
 import { ErrorBanner } from "@/components/pluto/ErrorBanner";
 
+type AuthSearch = { redirect?: string; reason?: "session_expired" | "sign_out" };
+
 export const Route = createFileRoute("/auth")({
   ssr: false,
+  validateSearch: (s: Record<string, unknown>): AuthSearch => ({
+    redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    reason: s.reason === "session_expired" || s.reason === "sign_out" ? s.reason : undefined,
+  }),
   head: () => ({ meta: [{ title: "Sign in — Pluto BaaS" }] }),
   component: AuthPage,
 });
 
 function AuthPage() {
   const navigate = useNavigate();
+  const search = Route.useSearch();
   const { session, signIn, signUp, loading } = useAuth();
-  const [mode, setMode] = useState<"signin" | "signup">("signup");
+  const [mode, setMode] = useState<"signin" | "signup">(search.reason === "session_expired" ? "signin" : "signup");
   const [email, setEmail] = useState("admin@timescard.cloud");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -23,8 +30,11 @@ function AuthPage() {
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
-    if (!loading && session) navigate({ to: "/dashboard" });
-  }, [loading, session, navigate]);
+    if (!loading && session) {
+      const to = search.redirect && search.redirect.startsWith("/") ? search.redirect : "/dashboard";
+      navigate({ to });
+    }
+  }, [loading, session, navigate, search.redirect]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -61,6 +71,12 @@ function AuthPage() {
         </div>
 
         <div className="rounded-lg border border-border bg-card p-6">
+          {search.reason === "session_expired" && !session && (
+            <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              <strong>Session expired.</strong> নিরাপত্তার কারণে আপনি sign-out হয়ে গেছেন — আবার sign in করুন।
+              {search.redirect ? <> এরপর আপনাকে <code className="rounded bg-background/40 px-1">{search.redirect}</code>-এ ফিরিয়ে নেওয়া হবে।</> : null}
+            </div>
+          )}
           <h1 className="text-lg font-semibold">Admin authentication</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {mode === "signup" ? "প্রথমে root admin account তৈরি করুন।" : "আপনার Pluto instance-এ লগ-ইন করুন।"}
